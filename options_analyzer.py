@@ -72,7 +72,8 @@ def interpret_score(score):
 # Display Call Option Info
 st.subheader("Call Option Analysis")
 if not calls.empty:
-    st.dataframe(calls[['contractSymbol', 'lastPrice', 'delta', 'gamma', 'theta', 'vega']])
+    call_cols = [col for col in ['contractSymbol', 'lastPrice', 'delta', 'gamma', 'theta', 'vega'] if col in calls.columns]
+    st.dataframe(calls[call_cols])
     call_score = score_greeks(calls.iloc[0], "call")
     call_signal = interpret_score(call_score)
     st.success(f"Call Signal: {call_signal}")
@@ -82,7 +83,8 @@ else:
 # Display Put Option Info
 st.subheader("Put Option Analysis")
 if not puts.empty:
-    st.dataframe(puts[['contractSymbol', 'lastPrice', 'delta', 'gamma', 'theta', 'vega']])
+    put_cols = [col for col in ['contractSymbol', 'lastPrice', 'delta', 'gamma', 'theta', 'vega'] if col in puts.columns]
+    st.dataframe(puts[put_cols])
     put_score = score_greeks(puts.iloc[0], "put")
     put_signal = interpret_score(put_score)
     st.success(f"Put Signal: {put_signal}")
