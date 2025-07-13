@@ -10,6 +10,9 @@ st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
 st.title("📈 Options Greeks Buy Signal Analyzer (Enhanced)")
 
 # --- User Inputs ---
+if st.button("🔄 Refresh Now"):
+    st.experimental_rerun()
+
 ticker = st.text_input("Enter Ticker Symbol (e.g., IWM):", value="IWM")
 
 # Fetch expiry dates
