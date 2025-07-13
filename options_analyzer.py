@@ -164,7 +164,8 @@ fig.add_trace(go.Scatter(x=data.index, y=data['EMA9'], mode='lines', name='EMA 9
 fig.add_trace(go.Scatter(x=data.index, y=data['EMA21'], mode='lines', name='EMA 21'))
 fig.add_trace(go.Scatter(x=data.index, y=data['VWAP'], mode='lines', name='VWAP'))
 fig.update_layout(title=f"{ticker} Price Chart", xaxis_title="Date", yaxis_title="Price")
-st.plotly_chart(fig, use_container_width=True)
+fig.write_image("price_chart.png", width=800, height=400, scale=2)  # Save as image using kaleido
+st.image("price_chart.png", caption="Price Chart with EMA, RSI, VWAP", use_column_width=True)  # Display image
 
 # Add current date and time
 current_time = datetime.now().strftime("%I:%M %p +01 on %B %d, %Y")
