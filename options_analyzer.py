@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
+from datetime import datetime
 
 st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
 st.title("📈 Options Greeks Buy Signal Analyzer (Enhanced with Technicals)")
@@ -149,7 +150,9 @@ for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
 # Show sorted signal table
 if results:
     ranked = pd.DataFrame(results).sort_values(by='score', ascending=False)
-    st.dataframe(ranked.reset_index(drop=True))
+    # Add buy signal based on score threshold (e.g., 50)
+    ranked['Buy Signal'] = ranked['score'].apply(lambda x: 'buy' if x >= 50 else 'no')
+    st.dataframe(ranked[['contract', 'strike', 'type', 'price', 'volume', 'openInterest', 'score', 'Buy Signal']].reset_index(drop=True))
 else:
     st.warning("No options data available for scoring.")
 
@@ -163,4 +166,6 @@ fig.add_trace(go.Scatter(x=data.index, y=data['VWAP'], mode='lines', name='VWAP'
 fig.update_layout(title=f"{ticker} Price Chart", xaxis_title="Date", yaxis_title="Price")
 st.plotly_chart(fig, use_container_width=True)
 
-st.write(f"**Latest RSI:** {rsi:.2f} | **EMA9 > EMA21:** {ema_condition} | **Price > VWAP:** {vwap_condition}")
+# Add current date and time
+current_time = datetime.now().strftime("%I:%M %p +01 on %B %d, %Y")
+st.write(f"**Latest RSI:** {rsi:.2f} | **EMA9 > EMA21:** {ema_condition} | **Price > VWAP:** {vwap_condition} | **Analysis Date:** {current_time}")
