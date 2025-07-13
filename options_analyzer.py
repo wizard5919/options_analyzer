@@ -79,6 +79,11 @@ except Exception as e:
     data['RSI'] = 50  # Neutral RSI
     data['VWAP'] = data['Close']
 
+# Validate data for charting
+if data.empty or data[['Close', 'EMA9', 'EMA21', 'VWAP']].isna().all().any():
+    st.error("Insufficient or invalid data for charting. Please check the ticker or data period.")
+    st.stop()
+
 # FIX: Properly extract scalar values and handle missing keys
 latest = {}
 for col in ['Close', 'EMA9', 'EMA21', 'RSI', 'VWAP']:
@@ -164,7 +169,13 @@ fig.add_trace(go.Scatter(x=data.index, y=data['EMA9'], mode='lines', name='EMA 9
 fig.add_trace(go.Scatter(x=data.index, y=data['EMA21'], mode='lines', name='EMA 21'))
 fig.add_trace(go.Scatter(x=data.index, y=data['VWAP'], mode='lines', name='VWAP'))
 fig.update_layout(title=f"{ticker} Price Chart", xaxis_title="Date", yaxis_title="Price")
-st.plotly_chart(fig, use_container_width=True)
+
+# Debug: Check if data is available
+st.write("Debug: Chart Data Availability", data[['Close', 'EMA9', 'EMA21', 'VWAP']].tail())
+try:
+    st.plotly_chart(fig, use_container_width=True)
+except Exception as e:
+    st.error(f"Error rendering chart: {e}")
 
 # Add current date and time
 current_time = datetime.now().strftime("%I:%M %p +01 on %B %d, %Y")
