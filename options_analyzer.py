@@ -28,13 +28,19 @@ else:
     st.warning("No expiry dates available. Please check the ticker.")
     st.stop()
 
-try:
-    option_chain = yf.Ticker(ticker).option_chain(expiry)
-    calls_df = option_chain.calls.copy()
-    puts_df = option_chain.puts.copy()
-except Exception as e:
-    st.error(f"Failed to load option chain: {e}")
-    st.stop()
+# FIX: Ensure serializable output by converting to dict and reconstructing DataFrames
+@st.cache_data(show_spinner=False)
+def get_option_chain(ticker, expiry):
+    stock = yf.Ticker(ticker)
+    chain = stock.option_chain(expiry)
+    # Convert to serializable dict format
+    calls_dict = chain.calls.to_dict(orient='list')
+    puts_dict = chain.puts.to_dict(orient='list')
+    return calls_dict, puts_dict
+
+calls_dict, puts_dict = get_option_chain(ticker, expiry)
+calls_df = pd.DataFrame(calls_dict)
+puts_df = pd.DataFrame(puts_dict)
 
 st.subheader("Top Signals Across All Strikes")
 
@@ -50,17 +56,24 @@ ema_condition = latest['EMA9'] > latest['EMA21']
 vwap_condition = latest['Close'] > latest['VWAP']
 rsi = latest['RSI']
 
+# FIX: Handle NaN values in Greek calculations
+def safe_get_value(row, key, default=0):
+    value = row.get(key, default)
+    return default if pd.isna(value) else value
+
 # Combined scoring
 results = []
 for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
     for _, row in df.iterrows():
         score = 0
-        delta = row.get('delta', 0) or 0
-        gamma = row.get('gamma', 0) or 0
-        theta = row.get('theta', 0) or 0
-        vega = row.get('vega', 0) or 0
-        vol = row.get('volume', 0) or 0
-        oi = row.get('openInterest', 0) or 0
+        
+        # Safely extract values with NaN handling
+        delta = safe_get_value(row, 'delta')
+        gamma = safe_get_value(row, 'gamma')
+        theta = safe_get_value(row, 'theta')
+        vega = safe_get_value(row, 'vega')
+        vol = safe_get_value(row, 'volume')
+        oi = safe_get_value(row, 'openInterest')
 
         if option_type == 'call':
             if delta >= 0.6: score += 30
@@ -80,10 +93,10 @@ for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
         if vol > 100 and oi > 200: score += 10
 
         results.append({
-            'contract': row['contractSymbol'],
-            'strike': row['strike'],
+            'contract': row.get('contractSymbol', 'N/A'),
+            'strike': row.get('strike', 0),
             'type': option_type,
-            'price': row['lastPrice'],
+            'price': row.get('lastPrice', 0),
             'volume': vol,
             'openInterest': oi,
             'score': score
