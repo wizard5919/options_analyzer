@@ -1,10 +1,13 @@
-# 📊 Streamlit App to Analyze Options Greeks and Provide Buy Signals
+# 📊 Streamlit App to Analyze Options Greeks and Provide Buy Signals (Enhanced Version)
+
 import yfinance as yf
 import pandas as pd
 import streamlit as st
+import numpy as np
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
-st.title("📈 Options Greeks Buy Signal Analyzer")
+st.title("📈 Options Greeks Buy Signal Analyzer (Enhanced)")
 
 # --- User Inputs ---
 ticker = st.text_input("Enter Ticker Symbol (e.g., IWM):", value="IWM")
@@ -37,36 +40,41 @@ strike = st.selectbox("Select Strike Price:", all_strikes)
 calls = calls_df[calls_df['strike'] == strike]
 puts = puts_df[puts_df['strike'] == strike]
 
-# Analysis Function
-def analyze_greeks(option_row, option_type="call"):
-    if option_row.empty:
-        return "❌ No data for analysis"
-    
-    # Get Greek values, checking if column exists
-    delta = option_row.iloc[0]['delta'] if 'delta' in option_row.columns else 0
-    gamma = option_row.iloc[0]['gamma'] if 'gamma' in option_row.columns else 0
-    theta = option_row.iloc[0]['theta'] if 'theta' in option_row.columns else 0
-    vega = option_row.iloc[0]['vega'] if 'vega' in option_row.columns else 0
+# Scoring Function
+def score_greeks(option_row, option_type="call"):
+    delta = option_row.get('delta', 0) or 0
+    gamma = option_row.get('gamma', 0) or 0
+    theta = option_row.get('theta', 0) or 0
+    vega = option_row.get('vega', 0) or 0
 
+    score = 0
     if option_type == "call":
-        if delta >= 0.6 and gamma >= 0.1 and theta <= 0.03:
-            return "📈 Call Buy Signal"
+        if delta >= 0.6: score += 30
+        if gamma >= 0.1: score += 30
+        if theta <= 0.03: score += 20
+        if vega >= 0.1: score += 20
     elif option_type == "put":
-        if delta <= -0.6 and gamma >= 0.1 and theta <= 0.03:
-            return "📉 Put Buy Signal"
+        if delta <= -0.6: score += 30
+        if gamma >= 0.1: score += 30
+        if theta <= 0.03: score += 20
+        if vega >= 0.1: score += 20
 
-    return "❌ No Buy Signal"
+    return score
+
+def interpret_score(score):
+    if score >= 90:
+        return f"🔥 Strong Buy Signal ({score})"
+    elif score >= 60:
+        return f"✅ Moderate Buy Signal ({score})"
+    else:
+        return f"❌ No Buy Signal ({score})"
 
 # Display Call Option Info
 st.subheader("Call Option Analysis")
 if not calls.empty:
-    # Select columns to display
-    display_cols_calls = ['contractSymbol', 'lastPrice']
-    for col in ['delta', 'gamma', 'theta', 'vega']:
-        if col in calls.columns:
-            display_cols_calls.append(col)
-    st.dataframe(calls[display_cols_calls])
-    call_signal = analyze_greeks(calls, "call")
+    st.dataframe(calls[['contractSymbol', 'lastPrice', 'delta', 'gamma', 'theta', 'vega']])
+    call_score = score_greeks(calls.iloc[0], "call")
+    call_signal = interpret_score(call_score)
     st.success(f"Call Signal: {call_signal}")
 else:
     st.error("No call data available for selected strike.")
@@ -74,13 +82,22 @@ else:
 # Display Put Option Info
 st.subheader("Put Option Analysis")
 if not puts.empty:
-    # Select columns to display
-    display_cols_puts = ['contractSymbol', 'lastPrice']
-    for col in ['delta', 'gamma', 'theta', 'vega']:
-        if col in puts.columns:
-            display_cols_puts.append(col)
-    st.dataframe(puts[display_cols_puts])
-    put_signal = analyze_greeks(puts, "put")
+    st.dataframe(puts[['contractSymbol', 'lastPrice', 'delta', 'gamma', 'theta', 'vega']])
+    put_score = score_greeks(puts.iloc[0], "put")
+    put_signal = interpret_score(put_score)
     st.success(f"Put Signal: {put_signal}")
 else:
     st.error("No put data available for selected strike.")
+
+# Price Chart (Optional Technical Confirmation)
+st.subheader("📊 Price Chart with EMA")
+data = yf.download(ticker, period="1mo", interval="1d")
+data['EMA9'] = data['Close'].ewm(span=9).mean()
+data['EMA21'] = data['Close'].ewm(span=21).mean()
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close'))
+fig.add_trace(go.Scatter(x=data.index, y=data['EMA9'], mode='lines', name='EMA 9'))
+fig.add_trace(go.Scatter(x=data.index, y=data['EMA21'], mode='lines', name='EMA 21'))
+fig.update_layout(title=f"{ticker} Price Chart", xaxis_title="Date", yaxis_title="Price")
+st.plotly_chart(fig, use_container_width=True)
