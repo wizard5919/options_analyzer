@@ -44,12 +44,31 @@ puts_df = pd.DataFrame(puts_dict)
 
 st.subheader("Top Signals Across All Strikes")
 
-# Load stock data and calculate technicals
+# Load stock data
 data = yf.download(ticker, period="2mo", interval="1d")
-data['EMA9'] = EMAIndicator(close=data['Close'], window=9).ema_indicator()
-data['EMA21'] = EMAIndicator(close=data['Close'], window=21).ema_indicator()
-data['RSI'] = RSIIndicator(close=data['Close'], window=14).rsi()
+if data.empty:
+    st.error("No data available for this ticker. Please try a different symbol.")
+    st.stop()
+
+# FIX: Replace problematic TA library calculations with pandas native methods
+# Calculate EMAs using pandas native EWMA
+data['EMA9'] = data['Close'].ewm(span=9, adjust=False).mean()
+data['EMA21'] = data['Close'].ewm(span=21, adjust=False).mean()
+
+# Calculate RSI manually
+delta = data['Close'].diff()
+gain = delta.where(delta > 0, 0)
+loss = -delta.where(delta < 0, 0)
+avg_gain = gain.rolling(window=14).mean()
+avg_loss = loss.rolling(window=14).mean()
+rs = avg_gain / avg_loss
+data['RSI'] = 100 - (100 / (1 + rs))
+
+# Calculate VWAP
 data['VWAP'] = (data['Volume'] * (data['High'] + data['Low'] + data['Close']) / 3).cumsum() / data['Volume'].cumsum()
+
+# Handle NaN values
+data = data.fillna(method='ffill').fillna(method='bfill')
 
 latest = data.iloc[-1]
 ema_condition = latest['EMA9'] > latest['EMA21']
@@ -59,7 +78,9 @@ rsi = latest['RSI']
 # FIX: Handle NaN values in Greek calculations
 def safe_get_value(row, key, default=0):
     value = row.get(key, default)
-    return default if pd.isna(value) else value
+    if pd.isna(value) or value is None:
+        return default
+    return value
 
 # Combined scoring
 results = []
