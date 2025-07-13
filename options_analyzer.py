@@ -28,7 +28,6 @@ else:
     st.warning("No expiry dates available. Please check the ticker.")
     st.stop()
 
-@st.cache_data(show_spinner=False)
 def get_option_chain(ticker, expiry):
     stock = yf.Ticker(ticker)
     return stock.option_chain(expiry)
