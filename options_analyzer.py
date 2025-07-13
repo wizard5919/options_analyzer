@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 from datetime import datetime
 
 st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
@@ -163,19 +164,17 @@ else:
 
 # Price Chart
 st.subheader("📊 Price Chart with EMA, RSI, VWAP")
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close'))
-fig.add_trace(go.Scatter(x=data.index, y=data['EMA9'], mode='lines', name='EMA 9'))
-fig.add_trace(go.Scatter(x=data.index, y=data['EMA21'], mode='lines', name='EMA 21'))
-fig.add_trace(go.Scatter(x=data.index, y=data['VWAP'], mode='lines', name='VWAP'))
-fig.update_layout(title=f"{ticker} Price Chart", xaxis_title="Date", yaxis_title="Price")
-
-# Debug: Check if data is available
-st.write("Debug: Chart Data Availability", data[['Close', 'EMA9', 'EMA21', 'VWAP']].tail())
-try:
-    st.plotly_chart(fig, use_container_width=True)
-except Exception as e:
-    st.error(f"Error rendering chart: {e}")
+plt.figure(figsize=(10, 6))
+plt.plot(data.index, data['Close'], label='Close', color='blue')
+plt.plot(data.index, data['EMA9'], label='EMA 9', color='cyan')
+plt.plot(data.index, data['EMA21'], label='EMA 21', color='red')
+plt.plot(data.index, data['VWAP'], label='VWAP', color='green')
+plt.title(f"{ticker} Price Chart")
+plt.xlabel("Date")
+plt.ylabel("Price")
+plt.legend()
+plt.xticks(rotation=45)
+st.pyplot(plt)
 
 # Add current date and time
 current_time = datetime.now().strftime("%I:%M %p +01 on %B %d, %Y")
