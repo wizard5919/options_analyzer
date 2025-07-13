@@ -28,11 +28,13 @@ else:
     st.warning("No expiry dates available. Please check the ticker.")
     st.stop()
 
-def get_option_chain(ticker, expiry):
-    stock = yf.Ticker(ticker)
-    return stock.option_chain(expiry)
-
-calls_df, puts_df = get_option_chain(ticker, expiry)
+try:
+    option_chain = yf.Ticker(ticker).option_chain(expiry)
+    calls_df = option_chain.calls.copy()
+    puts_df = option_chain.puts.copy()
+except Exception as e:
+    st.error(f"Failed to load option chain: {e}")
+    st.stop()
 
 st.subheader("Top Signals Across All Strikes")
 
