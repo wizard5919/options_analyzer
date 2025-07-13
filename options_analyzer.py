@@ -60,7 +60,10 @@ try:
     avg_gain = gain.rolling(window=14, min_periods=1).mean()
     avg_loss = loss.rolling(window=14, min_periods=1).mean()
     rs = avg_gain / avg_loss
-    data['RSI'] = 100 - (100 / (1 + rs))
+    # Handle division by zero
+    with np.errstate(divide='ignore', invalid='ignore'):
+        data['RSI'] = 100 - (100 / (1 + rs))
+        data['RSI'] = data['RSI'].fillna(50)  # Fill NaN with neutral 50
     
     # Calculate VWAP
     data['VWAP'] = (data['Volume'] * (data['High'] + data['Low'] + data['Close']) / 3).cumsum() / data['Volume'].cumsum()
@@ -79,21 +82,27 @@ except Exception as e:
 latest = {}
 for col in ['Close', 'EMA9', 'EMA21', 'RSI', 'VWAP']:
     try:
-        latest[col] = data[col].iloc[-1] if col in data.columns else data['Close'].iloc[-1]
+        # Ensure we get a scalar value, not a Series
+        value = data[col].iloc[-1] if col in data.columns else data['Close'].iloc[-1]
+        # Convert to native Python float if it's a pandas object
+        latest[col] = float(value) if hasattr(value, 'item') else value
     except:
-        latest[col] = data['Close'].iloc[-1]  # Fallback to Close price
+        latest[col] = float(data['Close'].iloc[-1])  # Fallback to Close price
 
-# Get conditions safely
-ema_condition = latest.get('EMA9', 0) > latest.get('EMA21', 0)
-vwap_condition = latest.get('Close', 0) > latest.get('VWAP', 0)
-rsi = latest.get('RSI', 50)  # Default to neutral 50 if missing
+# FIX: Convert conditions to native Python booleans
+ema_condition = bool(latest.get('EMA9', 0) > latest.get('EMA21', 0))
+vwap_condition = bool(latest.get('Close', 0) > latest.get('VWAP', 0))
+rsi = float(latest.get('RSI', 50))  # Default to neutral 50 if missing
 
 # FIX: Handle NaN values in Greek calculations
 def safe_get_value(row, key, default=0):
     value = row.get(key, default)
     if pd.isna(value) or value is None:
         return default
-    return float(value)  # Ensure numeric type
+    try:
+        return float(value)  # Ensure numeric type
+    except:
+        return default
 
 # Combined scoring
 results = []
@@ -122,6 +131,7 @@ for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
             if vega >= 0.1: score += 20
             if rsi > 70: score += 10
 
+        # Use native Python booleans in conditions
         if ema_condition: score += 5
         if vwap_condition: score += 5
         if vol > 100 and oi > 200: score += 10
