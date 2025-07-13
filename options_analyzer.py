@@ -5,9 +5,6 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
-from ta.volatility import BollingerBands
-from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator
 
 st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
 st.title("📈 Options Greeks Buy Signal Analyzer (Enhanced with Technicals)")
@@ -50,7 +47,6 @@ if data.empty:
     st.error("No data available for this ticker. Please try a different symbol.")
     st.stop()
 
-# FIX: Replace problematic TA library calculations with pandas native methods
 # Calculate EMAs using pandas native EWMA
 data['EMA9'] = data['Close'].ewm(span=9, adjust=False).mean()
 data['EMA21'] = data['Close'].ewm(span=21, adjust=False).mean()
@@ -70,7 +66,11 @@ data['VWAP'] = (data['Volume'] * (data['High'] + data['Low'] + data['Close']) / 
 # Handle NaN values
 data = data.fillna(method='ffill').fillna(method='bfill')
 
-latest = data.iloc[-1]
+# FIX: Properly extract scalar values from the Series
+# Get the last row as a dictionary
+latest = data.iloc[-1].to_dict()
+
+# Now access values as scalars from the dictionary
 ema_condition = latest['EMA9'] > latest['EMA21']
 vwap_condition = latest['Close'] > latest['VWAP']
 rsi = latest['RSI']
