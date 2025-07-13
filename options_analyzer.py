@@ -9,11 +9,11 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
 st.title("📈 Options Greeks Buy Signal Analyzer (Enhanced)")
 
-# --- User Inputs ---
-if st.button("🔄 Refresh Now"):
-    st.experimental_rerun()
+# --- Manual Refresh (Safe Version) ---
+refresh_clicked = st.button("🔄 Refresh App")
 
-ticker = st.text_input("Enter Ticker Symbol (e.g., IWM):", value="IWM")
+# --- User Inputs ---
+ticker = st.text_input("Enter Ticker Symbol (e.g., IWM):", value="IWM", key="ticker" if not refresh_clicked else "ticker_refreshed")
 
 # Fetch expiry dates
 def get_expiries(ticker):
