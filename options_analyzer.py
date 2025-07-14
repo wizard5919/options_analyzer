@@ -17,28 +17,38 @@ def get_stock_data(ticker):
     start = end - datetime.timedelta(days=10)
     data = yf.download(ticker, start=start, end=end, interval="5m")
     
-    # Ensure the data is a DataFrame
-    if isinstance(data, pd.Series):
-        data = data.to_frame(name='Close')  # Convert Series to DataFrame with a named column
-    elif data.empty:
-        raise ValueError("No data returned for the given ticker.")
+    # Ensure we have a proper DataFrame with all required columns
+    if not isinstance(data, pd.DataFrame):
+        data = data.to_frame()
+    
+    # Ensure we have all required columns
+    required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    for col in required_cols:
+        if col not in data.columns:
+            data[col] = np.nan
     
     # Drop any rows with NaN values
     data.dropna(inplace=True)
     return data
 
 def compute_indicators(df):
-    # Ensure columns are Series (1D) and convert to float
-    df['Close'] = df['Close'].astype(float)
-    df['High'] = df['High'].astype(float)
-    df['Low'] = df['Low'].astype(float)
-    df['Volume'] = df['Volume'].astype(float)
-
+    # Convert all columns to float explicitly
+    for col in ['Close', 'High', 'Low', 'Volume']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Drop any remaining NaN values after conversion
+    df.dropna(inplace=True)
+    
     # Compute technical indicators
     df['EMA_9'] = EMAIndicator(close=df['Close'], window=9).ema_indicator()
     df['EMA_20'] = EMAIndicator(close=df['Close'], window=20).ema_indicator()
     df['RSI'] = RSIIndicator(close=df['Close'], window=14).rsi()
-    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+    
+    # Calculate VWAP
+    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VWAP'] = (typical_price * df['Volume']).cumsum() / df['Volume'].cumsum()
+    
+    # Calculate average volume
     df['avg_vol'] = df['Volume'].rolling(window=20).mean()
     
     # Drop rows with NaN values after indicator computation
@@ -77,28 +87,44 @@ def classify_moneyness(row, spot):
 
 def generate_signal(option, side, stock_df):
     latest = stock_df.iloc[-1]
+    
+    # Convert all values to float explicitly
+    try:
+        delta = float(option['delta'])
+        gamma = float(option['gamma'])
+        theta = float(option['theta'])
+        close = float(latest['Close'])
+        ema_9 = float(latest['EMA_9'])
+        ema_20 = float(latest['EMA_20'])
+        rsi = float(latest['RSI'])
+        vwap = float(latest['VWAP'])
+        volume = float(latest['Volume'])
+        avg_vol = float(latest['avg_vol'])
+    except (ValueError, KeyError) as e:
+        st.warning(f"Error converting values for signal generation: {e}")
+        return False
 
     try:
         if side == "call":
             if (
-                option['delta'] >= 0.6
-                and option['gamma'] >= 0.08
-                and option['theta'] <= 0.05
-                and float(latest['Close']) > float(latest['EMA_9']) > float(latest['EMA_20'])
-                and float(latest['RSI']) > 50
-                and float(latest['Close']) > float(latest['VWAP'])
-                and float(latest['Volume']) > 1.5 * float(latest['avg_vol'])
+                delta >= 0.6
+                and gamma >= 0.08
+                and theta <= 0.05
+                and close > ema_9 > ema_20
+                and rsi > 50
+                and close > vwap
+                and volume > 1.5 * avg_vol
             ):
                 return True
         elif side == "put":
             if (
-                option['delta'] <= -0.6
-                and option['gamma'] >= 0.08
-                and option['theta'] <= 0.05
-                and float(latest['Close']) < float(latest['EMA_9']) < float(latest['EMA_20'])
-                and float(latest['RSI']) < 50
-                and float(latest['Close']) < float(latest['VWAP'])
-                and float(latest['Volume']) > 1.5 * float(latest['avg_vol'])
+                delta <= -0.6
+                and gamma >= 0.08
+                and theta <= 0.05
+                and close < ema_9 < ema_20
+                and rsi < 50
+                and close < vwap
+                and volume > 1.5 * avg_vol
             ):
                 return True
     except Exception as e:
@@ -133,6 +159,11 @@ if ticker:
 
         stock = yf.Ticker(ticker)
         all_expiries = stock.options
+        
+        if not all_expiries:
+            st.warning("No options expiries available for this ticker.")
+            st.stop()
+
         expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"])
 
         today = datetime.date.today()
@@ -151,8 +182,8 @@ if ticker:
             st.warning("No options data available for the selected expiries.")
             st.stop()
 
+        spot = float(df['Close'].iloc[-1])
         strike_range = st.slider("Select Strike Range Around Spot Price:", -10, 10, (-5, 5))
-        spot = df['Close'].iloc[-1]
         min_strike = spot + strike_range[0]
         max_strike = spot + strike_range[1]
 
@@ -188,5 +219,5 @@ if ticker:
             st.info("No PUT signals matched the criteria.")
 
     except Exception as e:
-        st.error(f"Failed to fetch or analyze data: {e}")
+        st.error(f"Failed to fetch or analyze data: {str(e)}")
         st.stop()
