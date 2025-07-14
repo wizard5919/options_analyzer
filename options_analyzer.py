@@ -26,17 +26,16 @@ from plotly.subplots import make_subplots
 
 # Suppress future warnings
 
+# Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
- st.set_page_config(
+st.set_page_config( # <--- This line should start at column 1 (no leading spaces)
     page_title="Real-Time Options Greeks Analyzer",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 # =============================
-
 # CONFIGURATION & CONSTANTS
-
 # =============================
 
 
