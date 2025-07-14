@@ -13,7 +13,7 @@ from ta.trend import EMAIndicator
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 st.set_page_config(
-    page_title="Options Greeks Buy Signal Analyzer", 
+    page_title="Options Greeks Buy Signal Analyzer",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -23,11 +23,13 @@ st.set_page_config(
 # =============================
 
 CONFIG = {
-    'MAX_RETRIES': 3,
-    'RETRY_DELAY': 1,
+    'MAX_RETRIES': 5,  # Increased retries
+    'RETRY_DELAY': 5,  # Initial delay in seconds
+    'BACKOFF_FACTOR': 2,  # Exponential backoff factor
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
-    'CACHE_TTL': 300,  # 5 minutes
+    'CACHE_TTL': 600,  # Increased to 10 minutes
+    'MAX_EXPIRIES': 3,  # Limit initial expiries to fetch
 }
 
 SIGNAL_THRESHOLDS = {
@@ -52,15 +54,17 @@ SIGNAL_THRESHOLDS = {
 # =============================
 
 def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
-    """Safely call API functions with retry logic"""
+    """Safely call API functions with exponential backoff retry logic"""
     for attempt in range(max_retries):
         try:
             return func(*args, **kwargs)
         except Exception as e:
+            if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
+                st.warning(f"Rate limit hit. Retrying after {CONFIG['RETRY_DELAY'] * (CONFIG['BACKOFF_FACTOR'] ** attempt)} seconds...")
             if attempt == max_retries - 1:
                 st.error(f"API call failed after {max_retries} attempts: {str(e)}")
                 return None
-            time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
+            time.sleep(CONFIG['RETRY_DELAY'] * (CONFIG['BACKOFF_FACTOR'] ** attempt))
     return None
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
@@ -70,17 +74,17 @@ def get_stock_data(ticker: str, days: int = 10) -> pd.DataFrame:
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=days)
         
-        # Use auto_adjust=True to suppress warnings
-        data = yf.download(
-            ticker, 
-            start=start, 
-            end=end, 
+        data = safe_api_call(
+            yf.download,
+            ticker,
+            start=start,
+            end=end,
             interval="5m",
             auto_adjust=True,
             progress=False
         )
-
-        if data.empty:
+        
+        if data is None or data.empty:
             st.warning(f"No data found for ticker {ticker}")
             return pd.DataFrame()
 
@@ -88,7 +92,7 @@ def get_stock_data(ticker: str, days: int = 10) -> pd.DataFrame:
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.droplevel(1)
         
-        # Ensure we have required columns
+        # Ensure required columns
         required_cols = ['Close', 'High', 'Low', 'Volume']
         missing_cols = [col for col in required_cols if col not in data.columns]
         if missing_cols:
@@ -98,15 +102,12 @@ def get_stock_data(ticker: str, days: int = 10) -> pd.DataFrame:
         # Clean and validate data
         data = data.dropna(how='all')
         
-        # Convert to numeric and handle any nested structures
         for col in required_cols:
             if col in data.columns:
-                # Handle nested data structures
                 if hasattr(data[col].iloc[0], '__len__') and not isinstance(data[col].iloc[0], str):
                     data[col] = data[col].apply(lambda x: x[0] if hasattr(x, '__len__') and len(x) > 0 else x)
                 data[col] = pd.to_numeric(data[col], errors='coerce')
 
-        # Remove rows with NaN in essential columns
         data = data.dropna(subset=required_cols)
         
         if len(data) < CONFIG['MIN_DATA_POINTS']:
@@ -125,35 +126,27 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return df
     
     try:
-        # Make a copy to avoid modifying original
         df = df.copy()
-        
-        # Validate required columns exist
         required_cols = ['Close', 'High', 'Low', 'Volume']
         for col in required_cols:
             if col not in df.columns:
                 st.error(f"Missing required column: {col}")
                 return pd.DataFrame()
         
-        # Ensure data types are correct
         for col in required_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # Remove any remaining NaN values
         df = df.dropna(subset=required_cols)
         
         if df.empty:
             return df
         
-        # Extract series for calculations
         close = df['Close'].astype(float)
         high = df['High'].astype(float)
         low = df['Low'].astype(float)
         volume = df['Volume'].astype(float)
 
-        # Calculate indicators with minimum data requirements
         try:
-            # EMA indicators
             if len(close) >= 9:
                 ema_9 = EMAIndicator(close=close, window=9)
                 df['EMA_9'] = ema_9.ema_indicator()
@@ -166,22 +159,18 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 df['EMA_20'] = np.nan
                 
-            # RSI
             if len(close) >= 14:
                 rsi = RSIIndicator(close=close, window=14)
                 df['RSI'] = rsi.rsi()
             else:
                 df['RSI'] = np.nan
 
-            # VWAP
             typical_price = (high + low + close) / 3
             vwap_cumsum = (volume * typical_price).cumsum()
             volume_cumsum = volume.cumsum()
             
-            # Avoid division by zero
             df['VWAP'] = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
             
-            # Average Volume
             window_size = min(20, len(volume))
             if window_size > 1:
                 df['avg_vol'] = volume.rolling(window=window_size, min_periods=1).mean()
@@ -203,14 +192,19 @@ def get_options_expiries(ticker: str) -> List[str]:
     """Get options expiries with error handling"""
     try:
         stock = yf.Ticker(ticker)
-        expiries = stock.options
-        return list(expiries) if expiries else []
+        expiries = safe_api_call(stock.options)
+        if not expiries:
+            st.warning(f"No options expiries found for {ticker}")
+            return []
+        return list(expiries)[:CONFIG['MAX_EXPIRIES']]  # Limit number of expiries
     except Exception as e:
-        st.error(f"Error fetching expiries: {str(e)}")
+        st.error(f"Error fetching expiries for {ticker}: {str(e)}")
+        if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
+            st.info("Rate limit reached. Please wait 5-10 minutes or try a different ticker.")
         return []
 
 def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch options data with comprehensive error handling"""
+    """Fetch options data with rate limit handling"""
     all_calls = pd.DataFrame()
     all_puts = pd.DataFrame()
     failed_expiries = []
@@ -227,13 +221,10 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
             calls = chain.calls.copy()
             puts = chain.puts.copy()
             
-            # Add expiry information
             calls['expiry'] = expiry
             puts['expiry'] = expiry
             
-            # Validate required columns exist
-            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest']
-            
+            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest', 'delta', 'gamma', 'theta']
             for df_name, df in [('calls', calls), ('puts', puts)]:
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 if missing_cols:
@@ -271,7 +262,6 @@ def validate_option_data(option: pd.Series) -> bool:
         if field not in option or pd.isna(option[field]):
             return False
     
-    # Check for reasonable values
     if option['lastPrice'] <= 0:
         return False
     
@@ -288,12 +278,10 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
     latest = stock_df.iloc[-1]
     
     try:
-        # Extract option Greeks
         delta = float(option['delta'])
         gamma = float(option['gamma'])
         theta = float(option['theta'])
         
-        # Extract stock data
         close = float(latest['Close'])
         ema_9 = float(latest['EMA_9']) if not pd.isna(latest['EMA_9']) else None
         ema_20 = float(latest['EMA_20']) if not pd.isna(latest['EMA_20']) else None
@@ -302,12 +290,9 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
         volume = float(latest['Volume'])
         avg_vol = float(latest['avg_vol']) if not pd.isna(latest['avg_vol']) else volume
         
-        # Get thresholds for the side
         thresholds = SIGNAL_THRESHOLDS[side]
         
-        # Check conditions based on side
         conditions = []
-        
         if side == "call":
             conditions = [
                 (delta >= thresholds['delta_min'], f"Delta >= {thresholds['delta_min']}", delta),
@@ -318,18 +303,17 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
                 (vwap is not None and close > vwap, "Price > VWAP", f"{close:.2f} > {vwap:.2f}" if vwap else "N/A"),
                 (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']}x avg", f"{volume:.0f} > {avg_vol:.0f}")
             ]
-        else:  # put
+        else:
             conditions = [
                 (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']}", delta),
                 (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']}", gamma),
                 (theta <= thresholds['theta_max'], f"Theta <= {thresholds['theta_max']}", theta),
-                (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
+                (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"${close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']}", rsi),
                 (vwap is not None and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
                 (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']}x avg", f"{volume:.0f} > {avg_vol:.0f}")
             ]
         
-        # Check all conditions
         passed_conditions = [desc for passed, desc, val in conditions if passed]
         failed_conditions = [f"{desc} (got {val})" for passed, desc, val in conditions if not passed]
         
@@ -350,9 +334,9 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
 # =============================
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced robust version** with comprehensive error handling, detailed analysis, and real-time refresh capabilities.")
+st.markdown("**Enhanced robust version** with rate limit handling, comprehensive error management, and real-time refresh capabilities.")
 
-# Initialize session state for refresh functionality
+# Initialize session state
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0
 if 'last_auto_refresh' not in st.session_state:
@@ -362,22 +346,19 @@ if 'last_auto_refresh' not in st.session_state:
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # Auto-refresh settings
     st.subheader("🔄 Auto-Refresh Settings")
     enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
     
     if enable_auto_refresh:
         refresh_interval = st.selectbox(
             "Refresh Interval",
-            options=[30, 60, 120, 300],
-            index=1,
+            options=[60, 120, 300, 600],  # Increased minimum interval
+            index=2,
             format_func=lambda x: f"{x} seconds"
         )
         st.info(f"Data will refresh every {refresh_interval} seconds")
     
-    # Signal thresholds
     st.subheader("Signal Thresholds")
-    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -392,7 +373,6 @@ with st.sidebar:
         SIGNAL_THRESHOLDS['put']['gamma_min'] = st.slider("Min Gamma ", 0.01, 0.2, 0.08, 0.01)
         SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
     
-    # Common thresholds
     st.write("**Common**")
     SIGNAL_THRESHOLDS['call']['theta_max'] = SIGNAL_THRESHOLDS['put']['theta_max'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
     SIGNAL_THRESHOLDS['call']['volume_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_multiplier'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
@@ -401,7 +381,6 @@ with st.sidebar:
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
 if ticker:
-    # Real-time data refresh controls
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     
     with col1:
@@ -416,7 +395,6 @@ if ticker:
             st.success("Cache cleared!")
     
     with col4:
-        # Show refresh status
         if enable_auto_refresh:
             current_time = time.time()
             time_elapsed = current_time - st.session_state.last_auto_refresh
@@ -441,54 +419,48 @@ if ticker:
     if manual_refresh:
         st.cache_data.clear()
         st.session_state.last_auto_refresh = time.time()
+        st.session_state.refresh_counter += 1
         st.rerun()
     
-    # Show last update timestamp and refresh count
     col1, col2 = st.columns(2)
     with col1:
         st.caption(f"📅 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     with col2:
         st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 
-    # Create tabs for better organization
     tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
     
     with tab1:
         try:
             with st.spinner("Fetching and analyzing data..."):
-                # Get stock data
                 df = get_stock_data(ticker)
                 
                 if df.empty:
-                    st.error("Unable to fetch stock data. Please check the ticker symbol.")
+                    st.error("Unable to fetch stock data. Please check the ticker symbol or try again later.")
                     st.stop()
                 
-                # Compute indicators
                 df = compute_indicators(df)
                 
                 if df.empty:
                     st.error("Unable to compute technical indicators.")
                     st.stop()
                 
-                # Display current stock info
                 current_price = df.iloc[-1]['Close']
                 st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**")
                 
-                # Get options expiries
                 expiries = get_options_expiries(ticker)
                 
                 if not expiries:
-                    st.error("No options expiries available for this ticker.")
+                    st.error("No options expiries available for this ticker. Try waiting 5-10 minutes or using a different ticker.")
                     st.stop()
                 
-                # Expiry selection
                 expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"])
                 
                 today = datetime.date.today()
                 if expiry_mode == "0DTE Only":
                     expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
                 else:
-                    expiries_to_use = expiries[:5]  # Get more expiries for better analysis
+                    expiries_to_use = expiries[:CONFIG['MAX_EXPIRIES']]
                 
                 if not expiries_to_use:
                     st.warning("No options expiries available for the selected mode.")
@@ -496,29 +468,24 @@ if ticker:
                 
                 st.info(f"Analyzing {len(expiries_to_use)} expiries: {', '.join(expiries_to_use)}")
                 
-                # Fetch options data
                 calls, puts = fetch_options_data(ticker, expiries_to_use)
                 
                 if calls.empty and puts.empty:
-                    st.error("No options data available.")
+                    st.error("No options data available. Try waiting 5-10 minutes or adjusting filters.")
                     st.stop()
                 
-                # Strike range filter
                 strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-10, 10), 1)
                 min_strike = current_price + strike_range[0]
                 max_strike = current_price + strike_range[1]
                 
-                # Filter options by strike
                 calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)].copy()
                 puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)].copy()
                 
-                # Add moneyness classification
                 if not calls_filtered.empty:
                     calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 if not puts_filtered.empty:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 
-                # Moneyness filter
                 m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "ATM", "OTM"], default=["ITM", "ATM", "OTM"])
                 
                 if not calls_filtered.empty:
@@ -526,7 +493,6 @@ if ticker:
                 if not puts_filtered.empty:
                     puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
                 
-                # Generate signals
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -542,10 +508,8 @@ if ticker:
                         
                         if call_signals:
                             signals_df = pd.DataFrame(call_signals)
-                            # Sort by signal score
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
-                            # Display key columns
                             display_cols = ['contractSymbol', 'strike', 'lastPrice', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
@@ -554,7 +518,6 @@ if ticker:
                                 use_container_width=True,
                                 hide_index=True
                             )
-                            
                             st.success(f"Found {len(call_signals)} call signals!")
                         else:
                             st.info("No call signals found matching criteria.")
@@ -574,10 +537,8 @@ if ticker:
                         
                         if put_signals:
                             signals_df = pd.DataFrame(put_signals)
-                            # Sort by signal score
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
-                            # Display key columns
                             display_cols = ['contractSymbol', 'strike', 'lastPrice', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
@@ -586,7 +547,6 @@ if ticker:
                                 use_container_width=True,
                                 hide_index=True
                             )
-                            
                             st.success(f"Found {len(put_signals)} put signals!")
                         else:
                             st.info("No put signals found matching criteria.")
@@ -595,14 +555,14 @@ if ticker:
                 
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
-            st.error("Please refresh the page and try again.")
+            if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
+                st.info("Rate limit reached. Please wait 5-10 minutes, clear cache, or try a different ticker.")
+            st.error("Please refresh the page or try again later.")
     
     with tab2:
-        # Stock data visualization
         if 'df' in locals() and not df.empty:
             st.subheader("📊 Stock Data & Indicators")
             
-            # Display latest values
             latest = df.iloc[-1]
             
             col1, col2, col3, col4 = st.columns(4)
@@ -631,7 +591,6 @@ if ticker:
                 else:
                     st.metric("RSI", "N/A")
             
-            # Display recent data
             st.subheader("Recent Data")
             display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'Volume']].round(2)
             st.dataframe(display_df, use_container_width=True)
@@ -639,7 +598,6 @@ if ticker:
     with tab3:
         st.subheader("🔍 Analysis Details")
         
-        # Auto-refresh status
         if enable_auto_refresh:
             st.info(f"🔄 Auto-refresh enabled: Every {refresh_interval} seconds")
         else:
@@ -661,12 +619,11 @@ if ticker:
 else:
     st.info("Please enter a stock ticker to begin analysis.")
     
-    # Display help information
     with st.expander("ℹ️ How to use this app"):
         st.markdown("""
         **Steps to analyze options:**
         1. Enter a stock ticker (e.g., SPY, QQQ, AAPL)
-        2. Configure auto-refresh settings in the sidebar (optional)
+        2. Configure auto-refresh settings in the sidebar (optional, use longer intervals to avoid rate limits)
         3. Select expiration filter (0DTE for same-day, or near-term)
         4. Adjust strike range around current price
         5. Filter by moneyness (ITM, ATM, OTM)
@@ -686,4 +643,10 @@ else:
         - **Auto-refresh:** Automatically updates data at set intervals
         - **Manual refresh:** Click "Refresh Now" to update immediately
         - **Clear cache:** Force fresh data retrieval
+        
+        **Troubleshooting Rate Limits:**
+        - If you see "Too Many Requests," wait 5-10 minutes before refreshing.
+        - Disable auto-refresh or increase the interval.
+        - Clear cache to reset data fetching.
+        - Try a different ticker if the issue persists.
         """)
