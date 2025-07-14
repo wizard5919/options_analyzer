@@ -654,50 +654,96 @@ if ticker:
     # Create tabs for better organization
     tab1, tab2, tab3, tab4 = st.tabs(["💰 Profit Opportunities", "📊 Signals", "📈 Real-Time Chart", "⚙️ Details"])
     
-    with tab1:
-        if show_profit_analysis:
-            try:
-                with st.spinner("Analyzing profit opportunities..."):
-                    # Get stock data
-                    df = get_stock_data(ticker)
-                    
-                    if df.empty:
-                        st.error("Unable to fetch stock data.")
-                        st.stop()
-                    
-                    # Compute indicators
-                    df = compute_indicators(df)
-                    current_price = df.iloc[-1]['Close']
-                    
-                    # Get options data
-                    expiries = get_options_expiries(ticker)
-                    if not expiries:
-                        st.error("No options expiries available.")
-                        st.stop()
-                    
-                    # Use 0DTE and next expiry for profit analysis
-                    today = datetime.date.today()
-                    dte_expiries = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
-                    if not dte_expiries:
-                        dte_expiries = expiries[:2]
-                    
-                    calls, puts = fetch_options_data(ticker, dte_expiries)
-                    
-                    if calls.empty and puts.empty:
-                        st.error("No options data available.")
-                        st.stop()
-                    
-                    # Filter by strike range
-                    strike_range = 20  # +/- $20 from current price
-                    min_strike = current_price - strike_range
-                    max_strike = current_price + strike_range
-                    
-                    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
-                    puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
-                    
-                    # Get top profit opportunities
-                    opportunities = get_top_profit_opportunities(calls_filtered, puts)
-                    # Display profit opportunities
-                    st.subheader(f"💰 Top Profit Opportunities")
-                  
-
+   with tab1:
+    if show_profit_analysis:
+        try:
+            with st.spinner("Analyzing profit opportunities..."):
+                # Get stock data
+                df = get_stock_data(ticker)
+                
+                if df.empty:
+                    st.error("Unable to fetch stock data.")
+                    st.stop()
+                
+                # Compute indicators
+                df = compute_indicators(df)
+                current_price = df.iloc[-1]['Close']
+                
+                # Get options data
+                expiries = get_options_expiries(ticker)
+                if not expiries:
+                    st.error("No options expiries available.")
+                    st.stop()
+                
+                # Use 0DTE and next expiry for profit analysis
+                today = datetime.date.today()
+                dte_expiries = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
+                if not dte_expiries:
+                    dte_expiries = expiries[:2]
+                
+                calls, puts = fetch_options_data(ticker, dte_expiries)
+                
+                if calls.empty and puts.empty:
+                    st.error("No options data available.")
+                    st.stop()
+                
+                # Filter by strike range
+                strike_range = 20  # +/- $20 from current price
+                min_strike = current_price - strike_range
+                max_strike = current_price + strike_range
+                
+                calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
+                puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
+                
+                # Get top profit opportunities
+                opportunities = get_top_profit_opportunities(calls_filtered, puts_filtered, current_price)
+                
+                # Display profit opportunities
+                st.subheader(f"💰 Top Profit Opportunities")
+                
+                # Display Calls
+                st.write("**Top Call Options**")
+                if opportunities['top_calls']:
+                    calls_data = []
+                    for opp in opportunities['top_calls']:
+                        calls_data.append({
+                            'Contract': opp['contract'],
+                            'Strike': f"${opp['strike']:.2f}",
+                            'Premium': f"${opp['premium']:.2f}",
+                            'Moneyness': opp['moneyness'],
+                            'Delta': f"{opp['delta']:.3f}",
+                            'Gamma': f"{opp['gamma']:.3f}",
+                            'Theta': f"{opp['theta']:.3f}",
+                            'Profit (+3%)': f"${opp['profit_3pct']:.2f}",
+                            'Profit %': f"{opp['profit_pct_3pct']:.2f}%",
+                            'Breakeven Move': f"{opp['breakeven_move']:.2f}%",
+                            'Max Loss': f"${opp['max_loss']:.2f}"
+                        })
+                    st.dataframe(pd.DataFrame(calls_data), use_container_width=True)
+                else:
+                    st.info("No call opportunities meet the criteria.")
+                
+                # Display Puts
+                st.write("**Top Put Options**")
+                if opportunities['top_puts']:
+                    puts_data = []
+                    for opp in opportunities['top_puts']:
+                        puts_data.append({
+                            'Contract': opp['contract'],
+                            'Strike': f"${opp['strike']:.2f}",
+                            'Premium': f"${opp['premium']:.2f}",
+                            'Moneyness': opp['moneyness'],
+                            'Delta': f"{opp['delta']:.3f}",
+                            'Gamma': f"{opp['gamma']:.3f}",
+                            'Theta': f"{opp['theta']:.3f}",
+                            'Profit (-3%)': f"${opp['profit_3pct']:.2f}",
+                            'Profit %': f"{opp['profit_pct_3pct']:.2f}%",
+                            'Breakeven Move': f"{opp['breakeven_move']:.2f}%",
+                            'Max Loss': f"${opp['max_loss']:.2f}"
+                        })
+                    st.dataframe(pd.DataFrame(puts_data), use_container_width=True)
+                else:
+                    st.info("No put opportunities meet the criteria.")
+                
+        except Exception as e:
+            st.error(f"Error analyzing profit opportunities: {str(e)}")
