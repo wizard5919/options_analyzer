@@ -21,11 +21,16 @@ def get_stock_data(ticker):
     return data
 
 def compute_indicators(df):
-    df['EMA_9'] = EMAIndicator(df['Close'], window=9).ema_indicator()
-    df['EMA_20'] = EMAIndicator(df['Close'], window=20).ema_indicator()
-    df['RSI'] = RSIIndicator(df['Close'], window=14).rsi()
-    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
-    df['avg_vol'] = df['Volume'].rolling(window=20).mean()
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
+    volume = df['Volume']
+
+    df['EMA_9'] = EMAIndicator(close, window=9).ema_indicator()
+    df['EMA_20'] = EMAIndicator(close, window=20).ema_indicator()
+    df['RSI'] = RSIIndicator(close, window=14).rsi()
+    df['VWAP'] = (volume * (high + low + close) / 3).cumsum() / volume.cumsum()
+    df['avg_vol'] = volume.rolling(window=20).mean()
     return df
 
 def fetch_options_data(ticker, expiry):
