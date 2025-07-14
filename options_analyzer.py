@@ -15,19 +15,19 @@ st.set_page_config(page_title="Options Greeks Buy Signal Analyzer", layout="wide
 def get_stock_data(ticker):
     """
     Fetches historical stock data for a given ticker.
-    Increases the data fetching period to ensure enough data for indicators.
+    Changed to fetch daily data over 1 year for more robust indicator calculations.
     """
-    end = datetime.datetime.now()
-    # Fetch 60 days of 5-minute interval data for more robust indicator calculations
-    start = end - datetime.timedelta(days=60) 
-    data = yf.download(ticker, start=start, end=end, interval="5m")
+    # Fetch 1 year of daily interval data for more robust indicator calculations
+    # Using period instead of start/end for simplicity with yfinance
+    data = yf.download(ticker, period="1y", interval="1d")
     
     # IMPORTANT: Check if data is None or empty immediately after download
-    if data is None or data.empty:
-        st.error(f"No data downloaded for {ticker}. It might be an invalid ticker, or no data is available for the specified period/interval.")
+    if data is None or data.empty or data.index.empty:
+        st.error(f"No valid stock data downloaded for {ticker}. It might be an invalid ticker, or no data is available for the specified period/interval.")
         return pd.DataFrame()
 
     # Ensure data is a DataFrame and has required columns
+    # yfinance typically returns a DataFrame, but adding checks for robustness
     if not isinstance(data, pd.DataFrame):
         if isinstance(data, pd.Series): # If yf.download returns a Series, convert to DataFrame
             data = data.to_frame('Close')
@@ -39,9 +39,15 @@ def get_stock_data(ticker):
     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
     for col in required_cols:
         if col not in data.columns:
+            # For missing columns, fill with previous valid observation or 0 if no previous
             data[col] = np.nan
     
-    # Drop any rows with NaN values that might result from missing data points
+    # Fill any NaNs that might appear due to missing columns or data points
+    # Use ffill then bfill to handle NaNs at the beginning and end of the series
+    data.ffill(inplace=True)
+    data.bfill(inplace=True)
+
+    # Drop any rows that still have NaN values after filling, if any (should be rare now)
     data.dropna(inplace=True)
     return data
 
@@ -51,6 +57,7 @@ def compute_indicators(df):
     Includes checks for sufficient data before computation.
     """
     # Define the minimum number of rows needed for indicator calculations (based on max window size)
+    # Changed to 20 for daily data, as 5-min data would have many more points
     min_rows_needed = 20 
     
     # Convert relevant columns to float explicitly to ensure correct type for calculations
@@ -65,21 +72,18 @@ def compute_indicators(df):
         st.warning(f"Not enough data points ({len(df)}) after cleaning for indicator calculation. Need at least {min_rows_needed} rows.")
         return pd.DataFrame() # Return empty DataFrame if not enough data
     
-    # Create copies of Series to avoid SettingWithCopyWarning
-    close_series = df['Close'].squeeze().copy()
-    high_series = df['High'].squeeze().copy()
-    low_series = df['Low'].squeeze().copy()
-    volume_series = df['Volume'].squeeze().copy()
+    # Create copies of Series and explicitly cast to pd.Series to ensure correct type for ta library
+    close_series = pd.Series(df['Close'].squeeze().copy())
+    high_series = pd.Series(df['High'].squeeze().copy())
+    low_series = pd.Series(df['Low'].squeeze().copy())
+    volume_series = pd.Series(df['Volume'].squeeze().copy())
     
-    # IMPORTANT: Check if close_series is empty or too short AFTER extraction and copying
+    # IMPORTANT: Check if series is empty or too short AFTER extraction and copying
     # This prevents errors from ta.momentum/trend if the Series is not valid
     if close_series.empty or len(close_series) < min_rows_needed:
         st.warning(f"Close series is empty or too short ({len(close_series)}) for indicator calculation after extraction. Need at least {min_rows_needed} data points.")
         return pd.DataFrame()
 
-    # Debugging: Print length of close_series before TA calculations
-    st.write(f"DEBUG: Length of close_series before TA calculations: {len(close_series)}")
-    
     # EMA calculations
     df['EMA_9'] = EMAIndicator(close=close_series, window=9).ema_indicator()
     df['EMA_20'] = EMAIndicator(close=close_series, window=20).ema_indicator()
