@@ -17,14 +17,15 @@ def get_stock_data(ticker):
     end = datetime.datetime.now()
     start = end - datetime.timedelta(days=10)
     data = yf.download(ticker, start=start, end=end, interval="5m")
+    data = data.squeeze()  # Ensure 1D
     data.dropna(inplace=True)
     return data
 
 def compute_indicators(df):
-    df['Close'] = df['Close'].astype(float)
-    df['High'] = df['High'].astype(float)
-    df['Low'] = df['Low'].astype(float)
-    df['Volume'] = df['Volume'].astype(float)
+    df['Close'] = df['Close'].astype(float).squeeze()
+    df['High'] = df['High'].astype(float).squeeze()
+    df['Low'] = df['Low'].astype(float).squeeze()
+    df['Volume'] = df['Volume'].astype(float).squeeze()
 
     df['EMA_9'] = EMAIndicator(close=df['Close'], window=9).ema_indicator()
     df['EMA_20'] = EMAIndicator(close=df['Close'], window=20).ema_indicator()
