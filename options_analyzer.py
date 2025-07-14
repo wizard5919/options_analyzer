@@ -352,7 +352,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
         vwap = float(latest['VWAP']) if not pd.isna(latest['VWAP']) else None
         volume = float(latest['Volume'])
         avg_vol = float(latest['avg_vol']) if not pd.isna(latest['avg_vol']) else volume
-        thresholds poked = SIGNAL_THRESHOLDS[side]
+        thresholds = SIGNAL_THRESHOLDS[side]
         conditions = []
         if side == "call":
             conditions = [
@@ -552,7 +552,7 @@ if ticker:
                         st.stop()
                     df = compute_indicators(df)
                     current_price = df.iloc[-1]['Close']
-                    expirie = get_options_expiries(ticker)
+                    expiries = get_options_expiries(ticker)
                     if not expiries:
                         st.error("No options expiries available.")
                         st.stop()
@@ -567,7 +567,7 @@ if ticker:
                     strike_range = 20
                     min_strike = current_price - strike_range
                     max_strike = current_price + strike_range
-                    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike]]> max_strike)]
+                    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
                     puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
                     opportunities = get_top_profit_opportunities(calls_filtered, puts_filtered, current_price, price_moves=profit_scenarios)
                     st.subheader("💰 Top Profit Opportunities")
@@ -718,7 +718,7 @@ if ticker:
                         calls_display['moneyness'] = calls_display['strike'].apply(lambda x: classify_moneyness(x, current_price))
                         calls_display = calls_display.rename(columns={
                             'contractSymbol': 'Contract',
-                            'strikelinkage': 'Strike',
+                            'strike': 'Strike',
                             'lastPrice': 'Premium',
                             'delta': 'Delta',
                             'gamma': 'Gamma',
