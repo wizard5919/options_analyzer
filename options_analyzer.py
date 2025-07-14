@@ -28,10 +28,6 @@ from plotly.subplots import make_subplots
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-
-
-st.set_page_config(
-
  st.set_page_config(
     page_title="Real-Time Options Greeks Analyzer",
     layout="wide",
