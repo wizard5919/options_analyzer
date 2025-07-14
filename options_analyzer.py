@@ -1,181 +1,159 @@
-# 📊 Streamlit App to Analyze Options Greeks and Provide Buy Signals (Robust Version)
-
+import streamlit as st
 import yfinance as yf
 import pandas as pd
-import streamlit as st
 import numpy as np
-import plotly.graph_objects as go
+import datetime
 import matplotlib.pyplot as plt
-from datetime import datetime
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator
 
-st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
-st.title("📈 Options Greeks Buy Signal Analyzer (Enhanced with Technicals)")
+st.set_page_config(page_title="Options Greeks Buy Signal Analyzer", layout="wide")
 
-refresh_clicked = st.button("🔄 Refresh App")
-ticker = st.text_input("Enter Ticker Symbol (e.g., IWM):", value="IWM", key="ticker" if not refresh_clicked else "ticker_refreshed")
+# =============================
+# UTILITY FUNCTIONS
+# =============================
 
-def get_expiries(ticker):
-    try:
-        return yf.Ticker(ticker).options
-    except:
-        return []
+def get_stock_data(ticker):
+    end = datetime.datetime.now()
+    start = end - datetime.timedelta(days=10)
+    data = yf.download(ticker, start=start, end=end, interval="5m")
+    data.dropna(inplace=True)
+    return data
 
-expiries = get_expiries(ticker)
-if expiries:
-    expiry = st.selectbox("Select Expiry Date:", expiries)
-else:
-    st.warning("No expiry dates available. Please check the ticker.")
-    st.stop()
+def compute_indicators(df):
+    df['EMA_9'] = EMAIndicator(close=df['Close'], window=9).ema_indicator()
+    df['EMA_20'] = EMAIndicator(close=df['Close'], window=20).ema_indicator()
+    df['RSI'] = RSIIndicator(close=df['Close'], window=14).rsi()
+    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+    df['avg_vol'] = df['Volume'].rolling(window=20).mean()
+    return df
 
-# FIX: Ensure serializable output by converting to dict and reconstructing DataFrames
-@st.cache_data(show_spinner=False)
-def get_option_chain(ticker, expiry):
+def fetch_all_expiries_data(ticker, expiries):
     stock = yf.Ticker(ticker)
-    chain = stock.option_chain(expiry)
-    # Convert to serializable dict format
-    calls_dict = chain.calls.to_dict(orient='list')
-    puts_dict = chain.puts.to_dict(orient='list')
-    return calls_dict, puts_dict
+    all_calls = pd.DataFrame()
+    all_puts = pd.DataFrame()
+    for expiry in expiries:
+        try:
+            chain = stock.option_chain(expiry)
+            calls = chain.calls.copy()
+            puts = chain.puts.copy()
+            calls['expiry'] = expiry
+            puts['expiry'] = expiry
+            all_calls = pd.concat([all_calls, calls], ignore_index=True)
+            all_puts = pd.concat([all_puts, puts], ignore_index=True)
+        except:
+            continue
+    return all_calls, all_puts
 
-calls_dict, puts_dict = get_option_chain(ticker, expiry)
-calls_df = pd.DataFrame(calls_dict)
-puts_df = pd.DataFrame(puts_dict)
+def classify_moneyness(row, spot):
+    if row['strike'] < spot:
+        return 'ITM'
+    elif row['strike'] == spot:
+        return 'ATM'
+    else:
+        return 'OTM'
 
-st.subheader("Top Signals Across All Strikes")
+# =============================
+# SIGNAL LOGIC
+# =============================
 
-# Load stock data
-data = yf.download(ticker, period="2mo", interval="1d")
-if data.empty:
-    st.error("No data available for this ticker. Please try a different symbol.")
-    st.stop()
+def generate_signal(option, side, stock_df):
+    latest = stock_df.iloc[-1]
 
-# FIX: Handle technical indicator calculations with try-except
-try:
-    # Calculate EMAs using pandas native EWMA
-    data['EMA9'] = data['Close'].ewm(span=9, adjust=False).mean()
-    data['EMA21'] = data['Close'].ewm(span=21, adjust=False).mean()
-    
-    # Calculate RSI manually
-    delta = data['Close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=14, min_periods=1).mean()
-    avg_loss = loss.rolling(window=14, min_periods=1).mean()
-    rs = avg_gain / avg_loss
-    # Handle division by zero
-    with np.errstate(divide='ignore', invalid='ignore'):
-        data['RSI'] = 100 - (100 / (1 + rs))
-        data['RSI'] = data['RSI'].fillna(50)  # Fill NaN with neutral 50
-    
-    # Calculate VWAP
-    data['VWAP'] = (data['Volume'] * (data['High'] + data['Low'] + data['Close']) / 3).cumsum() / data['Volume'].cumsum()
-    
-    # Handle NaN values
-    data = data.fillna(method='ffill').fillna(method='bfill')
-except Exception as e:
-    st.error(f"Error calculating technical indicators: {e}")
-    # Create placeholder columns if calculations fail
-    data['EMA9'] = data['Close']
-    data['EMA21'] = data['Close']
-    data['RSI'] = 50  # Neutral RSI
-    data['VWAP'] = data['Close']
-
-# Validate data for charting
-if data.empty or data[['Close', 'EMA9', 'EMA21', 'VWAP']].isna().all().any():
-    st.error("Insufficient or invalid data for charting. Please check the ticker or data period.")
-    st.stop()
-
-# FIX: Properly extract scalar values and handle missing keys
-latest = {}
-for col in ['Close', 'EMA9', 'EMA21', 'RSI', 'VWAP']:
     try:
-        # Ensure we get a scalar value, not a Series
-        value = data[col].iloc[-1] if col in data.columns else data['Close'].iloc[-1]
-        # Convert to native Python float if it's a pandas object
-        latest[col] = float(value) if hasattr(value, 'item') else value
+        if side == "call":
+            if (
+                option['delta'] >= 0.6
+                and option['gamma'] >= 0.08
+                and option['theta'] <= 0.05
+                and float(latest['Close']) > float(latest['EMA_9']) > float(latest['EMA_20'])
+                and float(latest['RSI']) > 50
+                and float(latest['Close']) > float(latest['VWAP'])
+                and float(latest['Volume']) > 1.5 * float(latest['avg_vol'])
+            ):
+                return True
+        elif side == "put":
+            if (
+                option['delta'] <= -0.6
+                and option['gamma'] >= 0.08
+                and option['theta'] <= 0.05
+                and float(latest['Close']) < float(latest['EMA_9']) < float(latest['EMA_20'])
+                and float(latest['RSI']) < 50
+                and float(latest['Close']) < float(latest['VWAP'])
+                and float(latest['Volume']) > 1.5 * float(latest['avg_vol'])
+            ):
+                return True
     except:
-        latest[col] = float(data['Close'].iloc[-1])  # Fallback to Close price
+        return False
 
-# FIX: Convert conditions to native Python booleans
-ema_condition = bool(latest.get('EMA9', 0) > latest.get('EMA21', 0))
-vwap_condition = bool(latest.get('Close', 0) > latest.get('VWAP', 0))
-rsi = float(latest.get('RSI', 50))  # Default to neutral 50 if missing
+    return False
 
-# FIX: Handle NaN values in Greek calculations
-def safe_get_value(row, key, default=0):
-    value = row.get(key, default)
-    if pd.isna(value) or value is None:
-        return default
+# =============================
+# STREAMLIT INTERFACE
+# =============================
+
+st.title("📈 Options Greeks Buy Signal Analyzer")
+st.markdown("This app uses **Greeks + technical indicators** to find smart entries for Calls and Puts.")
+
+ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+
+if ticker:
     try:
-        return float(value)  # Ensure numeric type
-    except:
-        return default
+        st.write("Fetching stock and options data...")
+        df = get_stock_data(ticker)
+        df = compute_indicators(df)
 
-# Combined scoring
-results = []
-for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
-    for _, row in df.iterrows():
-        score = 0
-        
-        # Safely extract values with NaN handling
-        delta = safe_get_value(row, 'delta')
-        gamma = safe_get_value(row, 'gamma')
-        theta = safe_get_value(row, 'theta')
-        vega = safe_get_value(row, 'vega')
-        vol = safe_get_value(row, 'volume', 0)
-        oi = safe_get_value(row, 'openInterest', 0)
+        stock = yf.Ticker(ticker)
+        all_expiries = stock.options
+        expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"])
 
-        if option_type == 'call':
-            if delta >= 0.6: score += 30
-            if gamma >= 0.1: score += 30
-            if theta <= 0.03: score += 20
-            if vega >= 0.1: score += 20
-            if rsi < 30: score += 10
+        today = datetime.date.today()
+        if expiry_mode == "0DTE Only":
+            expiries_to_use = [e for e in all_expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
         else:
-            if delta <= -0.6: score += 30
-            if gamma >= 0.1: score += 30
-            if theta <= 0.03: score += 20
-            if vega >= 0.1: score += 20
-            if rsi > 70: score += 10
+            expiries_to_use = all_expiries[:3]  # Use first 3 expiries
 
-        # Use native Python booleans in conditions
-        if ema_condition: score += 5
-        if vwap_condition: score += 5
-        if vol > 100 and oi > 200: score += 10
+        if not expiries_to_use:
+            st.warning("No options expiries available for the selected mode.")
+            st.stop()
 
-        results.append({
-            'contract': row.get('contractSymbol', 'N/A'),
-            'strike': row.get('strike', 0),
-            'type': option_type,
-            'price': safe_get_value(row, 'lastPrice', 0),
-            'volume': vol,
-            'openInterest': oi,
-            'score': score
-        })
+        calls, puts = fetch_all_expiries_data(ticker, expiries_to_use)
 
-# Show sorted signal table
-if results:
-    ranked = pd.DataFrame(results).sort_values(by='score', ascending=False)
-    # Add buy signal based on score threshold (e.g., 50)
-    ranked['Buy Signal'] = ranked['score'].apply(lambda x: 'buy' if x >= 50 else 'no')
-    st.dataframe(ranked[['contract', 'strike', 'type', 'price', 'volume', 'openInterest', 'score', 'Buy Signal']].reset_index(drop=True))
-else:
-    st.warning("No options data available for scoring.")
+        strike_range = st.slider("Select Strike Range Around Spot Price:", -10, 10, (-5, 5))
+        spot = df.iloc[-1]['Close']
+        min_strike = spot + strike_range[0]
+        max_strike = spot + strike_range[1]
 
-# Price Chart
-st.subheader("📊 Price Chart with EMA, RSI, VWAP")
-plt.figure(figsize=(10, 6))
-plt.plot(data.index, data['Close'], label='Close', color='blue')
-plt.plot(data.index, data['EMA9'], label='EMA 9', color='cyan')
-plt.plot(data.index, data['EMA21'], label='EMA 21', color='red')
-plt.plot(data.index, data['VWAP'], label='VWAP', color='green')
-plt.title(f"{ticker} Price Chart")
-plt.xlabel("Date")
-plt.ylabel("Price")
-plt.legend()
-plt.xticks(rotation=45)
-st.pyplot(plt)
+        calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)].copy()
+        puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)].copy()
 
-# Add current date and time
-current_time = datetime.now().strftime("%I:%M %p +01 on %B %d, %Y")
-st.write(f"**Latest RSI:** {rsi:.2f} | **EMA9 > EMA21:** {ema_condition} | **Price > VWAP:** {vwap_condition} | **Analysis Date:** {current_time}")
+        calls_filtered['moneyness'] = calls_filtered.apply(lambda row: classify_moneyness(row, spot), axis=1)
+        puts_filtered['moneyness'] = puts_filtered.apply(lambda row: classify_moneyness(row, spot), axis=1)
+
+        m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "ATM", "OTM"], default=["ITM", "ATM", "OTM"])
+
+        calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
+        puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
+
+        st.subheader("📊 Call Option Signals")
+        call_signals = []
+        for _, row in calls_filtered.iterrows():
+            if generate_signal(row, "call", df):
+                call_signals.append(row)
+        if call_signals:
+            st.dataframe(pd.DataFrame(call_signals).reset_index(drop=True))
+        else:
+            st.info("No CALL signals matched the criteria.")
+
+        st.subheader("📉 Put Option Signals")
+        put_signals = []
+        for _, row in puts_filtered.iterrows():
+            if generate_signal(row, "put", df):
+                put_signals.append(row)
+        if put_signals:
+            st.dataframe(pd.DataFrame(put_signals).reset_index(drop=True))
+        else:
+            st.info("No PUT signals matched the criteria.")
+
+    except Exception as e:
+        st.error(f"Failed to fetch or analyze data: {e}")
