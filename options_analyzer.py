@@ -21,6 +21,11 @@ def get_stock_data(ticker):
     return data
 
 def compute_indicators(df):
+    df['Close'] = df['Close'].astype(float)
+    df['High'] = df['High'].astype(float)
+    df['Low'] = df['Low'].astype(float)
+    df['Volume'] = df['Volume'].astype(float)
+
     df['EMA_9'] = EMAIndicator(close=df['Close'], window=9).ema_indicator()
     df['EMA_20'] = EMAIndicator(close=df['Close'], window=20).ema_indicator()
     df['RSI'] = RSIIndicator(close=df['Close'], window=14).rsi()
