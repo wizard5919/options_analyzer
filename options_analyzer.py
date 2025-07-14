@@ -17,21 +17,33 @@ def get_stock_data(ticker):
     end = datetime.datetime.now()
     start = end - datetime.timedelta(days=10)
     data = yf.download(ticker, start=start, end=end, interval="5m")
-    data = data.squeeze()  # Ensure 1D
+    
+    # Ensure the data is a DataFrame and handle cases where only one column is returned
+    if isinstance(data, pd.Series):
+        data = data.to_frame()
+    elif data.empty:
+        raise ValueError("No data returned for the given ticker.")
+    
+    # Drop any rows with NaN values
     data.dropna(inplace=True)
     return data
 
 def compute_indicators(df):
-    df['Close'] = df['Close'].astype(float).squeeze()
-    df['High'] = df['High'].astype(float).squeeze()
-    df['Low'] = df['Low'].astype(float).squeeze()
-    df['Volume'] = df['Volume'].astype(float).squeeze()
+    # Ensure the columns are Series (1D) by selecting them directly
+    df['Close'] = df['Close'].astype(float)
+    df['High'] = df['High'].astype(float)
+    df['Low'] = df['Low'].astype(float)
+    df['Volume'] = df['Volume'].astype(float)
 
+    # Compute technical indicators
     df['EMA_9'] = EMAIndicator(close=df['Close'], window=9).ema_indicator()
     df['EMA_20'] = EMAIndicator(close=df['Close'], window=20).ema_indicator()
     df['RSI'] = RSIIndicator(close=df['Close'], window=14).rsi()
     df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
     df['avg_vol'] = df['Volume'].rolling(window=20).mean()
+    
+    # Drop rows with NaN values after indicator computation
+    df.dropna(inplace=True)
     return df
 
 def fetch_all_expiries_data(ticker, expiries):
@@ -47,7 +59,8 @@ def fetch_all_expiries_data(ticker, expiries):
             puts['expiry'] = expiry
             all_calls = pd.concat([all_calls, calls], ignore_index=True)
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
-        except:
+        except Exception as e:
+            st.warning(f"Failed to fetch options data for expiry {expiry}: {e}")
             continue
     return all_calls, all_puts
 
@@ -89,7 +102,8 @@ def generate_signal(option, side, stock_df):
                 and float(latest['Volume']) > 1.5 * float(latest['avg_vol'])
             ):
                 return True
-    except:
+    except Exception as e:
+        st.warning(f"Error generating signal for {side}: {e}")
         return False
 
     return False
@@ -109,6 +123,10 @@ if ticker:
         df = get_stock_data(ticker)
         df = compute_indicators(df)
 
+        if df.empty:
+            st.error("No valid stock data available for the given ticker.")
+            st.stop()
+
         stock = yf.Ticker(ticker)
         all_expiries = stock.options
         expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"])
@@ -125,8 +143,12 @@ if ticker:
 
         calls, puts = fetch_all_expiries_data(ticker, expiries_to_use)
 
+        if calls.empty and puts.empty:
+            st.warning("No options data available for the selected expiries.")
+            st.stop()
+
         strike_range = st.slider("Select Strike Range Around Spot Price:", -10, 10, (-5, 5))
-        spot = df.iloc[-1]['Close']
+        spot = df['Close'].iloc[-1]
         min_strike = spot + strike_range[0]
         max_strike = spot + strike_range[1]
 
@@ -163,3 +185,4 @@ if ticker:
 
     except Exception as e:
         st.error(f"Failed to fetch or analyze data: {e}")
+        st.stop()
