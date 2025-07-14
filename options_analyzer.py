@@ -13,37 +13,61 @@ st.set_page_config(page_title="Options Greeks Buy Signal Analyzer", layout="wide
 # =============================
 
 def get_stock_data(ticker):
+    """
+    Fetches historical stock data for a given ticker.
+    Increases the data fetching period to ensure enough data for indicators.
+    """
     end = datetime.datetime.now()
-    start = end - datetime.timedelta(days=10)
+    # Fetch 60 days of 5-minute interval data for more robust indicator calculations
+    start = end - datetime.timedelta(days=60) 
     data = yf.download(ticker, start=start, end=end, interval="5m")
     
-    # Ensure we have a proper DataFrame with all required columns
+    # Ensure data is a DataFrame and has required columns
     if not isinstance(data, pd.DataFrame):
-        data = data.to_frame('Close')
+        if isinstance(data, pd.Series): # If yf.download returns a Series, convert to DataFrame
+            data = data.to_frame('Close')
+        else: # Handle unexpected data types
+            st.error("Failed to download stock data in expected format.")
+            return pd.DataFrame() 
     
-    # Ensure we have all required columns
+    # Ensure all required columns are present; fill with NaN if missing
     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
     for col in required_cols:
         if col not in data.columns:
-            if col == 'Close' and len(data.columns) == 1:
-                data = data.rename(columns={data.columns[0]: 'Close'})
-            else:
-                data[col] = np.nan
+            data[col] = np.nan
     
-    # Drop any rows with NaN values
+    # Drop any rows with NaN values that might result from missing data points
     data.dropna(inplace=True)
     return data
 
 def compute_indicators(df):
-    # Convert all columns to float explicitly and ensure they're Series
+    """
+    Computes technical indicators (EMA, RSI, VWAP, Avg Volume) for the stock data.
+    Includes checks for sufficient data before computation.
+    """
+    # Define the minimum number of rows needed for indicator calculations (based on max window size)
+    min_rows_needed = 20 
+    if len(df) < min_rows_needed:
+        st.warning(f"Not enough data points ({len(df)}) for indicator calculation. Need at least {min_rows_needed} rows.")
+        return pd.DataFrame() # Return empty DataFrame if not enough data
+
+    # Convert relevant columns to float explicitly to ensure correct type for calculations
     for col in ['Close', 'High', 'Low', 'Volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
     
-    # Drop any remaining NaN values after conversion
+    # Drop any remaining NaN values after type conversion
     df.dropna(inplace=True)
+
+    # Re-check length after dropping NaNs, as more rows might have been removed
+    if len(df) < min_rows_needed:
+        st.warning(f"Not enough data points ({len(df)}) after cleaning for indicator calculation. Need at least {min_rows_needed} rows.")
+        return pd.DataFrame() # Return empty DataFrame if not enough data
     
-    # Compute technical indicators - ensure we're passing Series
-    close_series = df['Close'].squeeze()  # Convert to Series if it's a DataFrame column
+    # Create copies of Series to avoid SettingWithCopyWarning
+    close_series = df['Close'].squeeze().copy()
+    high_series = df['High'].squeeze().copy()
+    low_series = df['Low'].squeeze().copy()
+    volume_series = df['Volume'].squeeze().copy()
     
     # EMA calculations
     df['EMA_9'] = EMAIndicator(close=close_series, window=9).ema_indicator()
@@ -52,18 +76,25 @@ def compute_indicators(df):
     # RSI calculation
     df['RSI'] = RSIIndicator(close=close_series, window=14).rsi()
     
-    # Calculate VWAP
-    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-    df['VWAP'] = (typical_price * df['Volume']).cumsum() / df['Volume'].cumsum()
+    # Calculate VWAP (Volume Weighted Average Price)
+    typical_price = (high_series + low_series + close_series) / 3
+    cumulative_volume = volume_series.cumsum()
+    # Handle potential division by zero if cumulative_volume is zero
+    df['VWAP'] = (typical_price * volume_series).cumsum() / cumulative_volume
+    # Replace infinite values (from division by zero) with NaN
+    df['VWAP'].replace([np.inf, -np.inf], np.nan, inplace=True) 
+
+    # Calculate average volume over a 20-period window
+    df['avg_vol'] = volume_series.rolling(window=20).mean()
     
-    # Calculate average volume
-    df['avg_vol'] = df['Volume'].rolling(window=20).mean()
-    
-    # Drop rows with NaN values after indicator computation
+    # Drop rows with NaN values that might result from indicator computation (e.g., initial periods)
     df.dropna(inplace=True)
     return df
 
 def fetch_all_expiries_data(ticker, expiries):
+    """
+    Fetches call and put options data for a given ticker across specified expiries.
+    """
     stock = yf.Ticker(ticker)
     all_calls = pd.DataFrame()
     all_puts = pd.DataFrame()
@@ -82,6 +113,9 @@ def fetch_all_expiries_data(ticker, expiries):
     return all_calls, all_puts
 
 def classify_moneyness(row, spot):
+    """
+    Classifies an option as In-The-Money (ITM), At-The-Money (ATM), or Out-The-Money (OTM).
+    """
     if row['strike'] < spot:
         return 'ITM'
     elif row['strike'] == spot:
@@ -94,9 +128,16 @@ def classify_moneyness(row, spot):
 # =============================
 
 def generate_signal(option, side, stock_df):
+    """
+    Generates a buy signal for an option based on Greeks and technical indicators.
+    """
+    if stock_df.empty:
+        st.warning("Stock data is empty for signal generation. Cannot generate signal.")
+        return False
+
     latest = stock_df.iloc[-1]
     
-    # Convert all values to float explicitly
+    # Safely convert option Greeks and latest stock data to float
     try:
         delta = float(option['delta'])
         gamma = float(option['gamma'])
@@ -109,7 +150,7 @@ def generate_signal(option, side, stock_df):
         volume = float(latest['Volume'])
         avg_vol = float(latest['avg_vol'])
     except (ValueError, KeyError) as e:
-        st.warning(f"Error converting values for signal generation: {e}")
+        st.warning(f"Error converting values for signal generation: {e}. Skipping option.")
         return False
 
     try:
@@ -118,25 +159,25 @@ def generate_signal(option, side, stock_df):
                 delta >= 0.6
                 and gamma >= 0.08
                 and theta <= 0.05
-                and close > ema_9 > ema_20
-                and rsi > 50
-                and close > vwap
-                and volume > 1.5 * avg_vol
+                and close > ema_9 > ema_20 # Bullish EMA crossover
+                and rsi > 50 # RSI indicating upward momentum
+                and close > vwap # Price above VWAP
+                and volume > 1.5 * avg_vol # High volume
             ):
                 return True
         elif side == "put":
             if (
-                delta <= -0.6
+                delta <= -0.6 # Negative delta for puts
                 and gamma >= 0.08
                 and theta <= 0.05
-                and close < ema_9 < ema_20
-                and rsi < 50
-                and close < vwap
-                and volume > 1.5 * avg_vol
+                and close < ema_9 < ema_20 # Bearish EMA crossover
+                and rsi < 50 # RSI indicating downward momentum
+                and close < vwap # Price below VWAP
+                and volume > 1.5 * avg_vol # High volume
             ):
                 return True
     except Exception as e:
-        st.warning(f"Error generating signal for {side}: {e}")
+        st.warning(f"An error occurred during signal evaluation for {side} option: {e}")
         return False
 
     return False
@@ -156,13 +197,13 @@ if ticker:
         df = get_stock_data(ticker)
         
         if df.empty:
-            st.error("No valid stock data available for the given ticker.")
+            st.error("No valid stock data available for the given ticker or insufficient data for analysis. Please try a different ticker or check connectivity.")
             st.stop()
 
         df = compute_indicators(df)
         
         if df.empty:
-            st.error("No valid data after computing indicators.")
+            st.error("No valid data after computing indicators. This might be due to insufficient data points after cleaning or calculation.")
             st.stop()
 
         stock = yf.Ticker(ticker)
@@ -176,31 +217,39 @@ if ticker:
 
         today = datetime.date.today()
         if expiry_mode == "0DTE Only":
+            # Filter for expiries that match today's date
             expiries_to_use = [e for e in all_expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
         else:
-            expiries_to_use = all_expiries[:3]  # Use first 3 expiries
+            # Use the first 3 available expiries for "Near-Term"
+            expiries_to_use = all_expiries[:3] 
 
         if not expiries_to_use:
-            st.warning("No options expiries available for the selected mode.")
+            st.warning("No options expiries available for the selected mode. Please adjust your filter.")
             st.stop()
 
         calls, puts = fetch_all_expiries_data(ticker, expiries_to_use)
 
         if calls.empty and puts.empty:
-            st.warning("No options data available for the selected expiries.")
+            st.warning("No options data available for the selected expiries. This might be due to data fetching issues.")
             st.stop()
 
+        # Get the latest spot price from the fetched stock data
         spot = float(df['Close'].iloc[-1])
+        
+        # Allow user to select a strike price range around the spot price
         strike_range = st.slider("Select Strike Range Around Spot Price:", -10, 10, (-5, 5))
         min_strike = spot + strike_range[0]
         max_strike = spot + strike_range[1]
 
+        # Filter calls and puts based on the selected strike range
         calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)].copy()
         puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)].copy()
 
+        # Classify moneyness for filtered options
         calls_filtered['moneyness'] = calls_filtered.apply(lambda row: classify_moneyness(row, spot), axis=1)
         puts_filtered['moneyness'] = puts_filtered.apply(lambda row: classify_moneyness(row, spot), axis=1)
 
+        # Allow user to filter by moneyness (ITM, ATM, OTM)
         m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "ATM", "OTM"], default=["ITM", "ATM", "OTM"])
 
         calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
@@ -214,7 +263,7 @@ if ticker:
         if call_signals:
             st.dataframe(pd.DataFrame(call_signals).reset_index(drop=True))
         else:
-            st.info("No CALL signals matched the criteria.")
+            st.info("No CALL signals matched the criteria for the selected filters.")
 
         st.subheader("📉 Put Option Signals")
         put_signals = []
@@ -224,8 +273,8 @@ if ticker:
         if put_signals:
             st.dataframe(pd.DataFrame(put_signals).reset_index(drop=True))
         else:
-            st.info("No PUT signals matched the criteria.")
+            st.info("No PUT signals matched the criteria for the selected filters.")
 
     except Exception as e:
-        st.error(f"Failed to fetch or analyze data: {str(e)}")
+        st.error(f"An unexpected error occurred during data fetching or analysis: {str(e)}. Please check the ticker symbol, your internet connection, or try again later.")
         st.stop()
