@@ -43,14 +43,15 @@ def get_stock_data(ticker):
     for col in required_cols:
         data[col] = pd.to_numeric(data[col], errors='coerce')
     
-    # Fill any NaNs that might appear due to missing columns or data points
+    # Drop rows where essential columns are entirely NaN
+    data.dropna(subset=required_cols, inplace=True)
+
+    # Fill any remaining NaNs that might appear due to sporadic missing points
     # Use ffill then bfill to handle NaNs at the beginning and end of the series
     data.ffill(inplace=True)
     data.bfill(inplace=True)
 
-    # Drop any rows that still have NaN values after filling, if any
-    data.dropna(inplace=True)
-    
+    # Final check for empty DataFrame after all cleaning
     if data.empty:
         st.error(f"Stock data for {ticker} became empty after cleaning. Cannot proceed with indicator calculations.")
     return data
@@ -63,9 +64,17 @@ def compute_indicators(df):
     # Define the minimum number of rows needed for indicator calculations (based on max window size)
     min_rows_needed = 20 # For EMA20 and Avg Vol 20
     
+    # Initialize indicator columns to NaN to ensure they always exist
+    df['EMA_9'] = np.nan
+    df['EMA_20'] = np.nan
+    df['RSI'] = np.nan
+    df['VWAP'] = np.nan
+    df['avg_vol'] = np.nan
+
     if len(df) < min_rows_needed:
-        st.warning(f"Not enough data points ({len(df)}) for indicator calculation. Need at least {min_rows_needed} rows. Skipping indicator computation.")
-        return pd.DataFrame() # Return empty DataFrame if not enough data
+        st.warning(f"Not enough data points ({len(df)}) for full indicator calculation. Need at least {min_rows_needed} rows. Indicators will be NaN for initial periods or entirely if data is too short.")
+        # Return df with NaN indicators if data is too short
+        return df 
 
     # Create explicit Pandas Series for TA library inputs to avoid dimensionality issues
     close_series = pd.Series(df['Close'].copy())
@@ -73,36 +82,33 @@ def compute_indicators(df):
     low_series = pd.Series(df['Low'].copy())
     volume_series = pd.Series(df['Volume'].copy())
     
-    # Check if series are valid before passing to TA functions
-    if close_series.empty or len(close_series) < min_rows_needed:
-        st.warning(f"Close series is empty or too short ({len(close_series)}) for indicator calculation after extraction. Need at least {min_rows_needed} data points.")
-        return pd.DataFrame()
-    if volume_series.empty or len(volume_series) < min_rows_needed:
-        st.warning(f"Volume series is empty or too short ({len(volume_series)}) for indicator calculation after extraction. Need at least {min_rows_needed} data points.")
-        return pd.DataFrame()
-
-    # EMA calculations using ta library
-    df['EMA_9'] = EMAIndicator(close=close_series, window=9, fillna=False).ema_indicator()
-    df['EMA_20'] = EMAIndicator(close=close_series, window=20, fillna=False).ema_indicator()
+    # Check if series are valid and long enough before passing to TA functions
+    if not close_series.empty and len(close_series) >= 9: # Min window for EMA_9
+        df['EMA_9'] = EMAIndicator(close=close_series, window=9, fillna=False).ema_indicator()
+    if not close_series.empty and len(close_series) >= 20: # Min window for EMA_20
+        df['EMA_20'] = EMAIndicator(close=close_series, window=20, fillna=False).ema_indicator()
     
-    # RSI calculation using ta library
-    df['RSI'] = RSIIndicator(close=close_series, window=14, fillna=False).rsi()
+    if not close_series.empty and len(close_series) >= 14: # Min window for RSI
+        df['RSI'] = RSIIndicator(close=close_series, window=14, fillna=False).rsi()
     
     # Calculate VWAP (Volume Weighted Average Price)
-    # Ensure typical_price calculation is robust
-    typical_price = (high_series + low_series + close_series) / 3
-    cumulative_volume = volume_series.cumsum()
-    
-    # Handle potential division by zero in VWAP
-    with np.errstate(divide='ignore', invalid='ignore'):
-        df['VWAP'] = (typical_price * volume_series).cumsum() / cumulative_volume
-        df['VWAP'].replace([np.inf, -np.inf], np.nan, inplace=True) 
+    # Ensure typical_price calculation is robust and volume_series is not empty
+    if not volume_series.empty and not typical_price.empty:
+        typical_price = (high_series + low_series + close_series) / 3
+        cumulative_volume = volume_series.cumsum()
+        
+        # Handle potential division by zero in VWAP
+        with np.errstate(divide='ignore', invalid='ignore'):
+            df['VWAP'] = (typical_price * volume_series).cumsum() / cumulative_volume
+            df['VWAP'].replace([np.inf, -np.inf], np.nan, inplace=True) 
 
     # Calculate average volume over a 20-period window
-    df['avg_vol'] = volume_series.rolling(window=20, min_periods=1).mean() # min_periods for initial values
+    if not volume_series.empty and len(volume_series) >= 20:
+        df['avg_vol'] = volume_series.rolling(window=20, min_periods=1).mean() # min_periods for initial values
     
     # Drop rows with NaN values that might result from indicator computation (e.g., initial periods)
-    df.dropna(inplace=True)
+    # Only drop rows where ALL indicators are NaN, or where critical indicators are NaN
+    df.dropna(subset=['EMA_9', 'EMA_20', 'RSI', 'VWAP', 'avg_vol'], inplace=True)
 
     if df.empty:
         st.error("DataFrame became empty after computing indicators and dropping NaNs. This can happen if there's insufficient data.")
@@ -149,7 +155,6 @@ def generate_signal(option, side, stock_df):
     Generates a buy signal for an option based on Greeks and technical indicators.
     """
     if stock_df.empty:
-        # st.warning("Stock data is empty for signal generation. Cannot generate signal.")
         return False
 
     # Ensure stock_df has enough rows for latest to be valid
@@ -160,9 +165,9 @@ def generate_signal(option, side, stock_df):
     
     # Safely convert option Greeks and latest stock data to float
     try:
-        delta = float(option.get('delta', 0))
-        gamma = float(option.get('gamma', 0))
-        theta = float(option.get('theta', 0))
+        delta = float(option.get('delta', np.nan))
+        gamma = float(option.get('gamma', np.nan))
+        theta = float(option.get('theta', np.nan))
         
         # Ensure latest values exist before attempting conversion
         close = float(latest.get('Close', np.nan))
@@ -173,13 +178,11 @@ def generate_signal(option, side, stock_df):
         volume = float(latest.get('Volume', np.nan))
         avg_vol = float(latest.get('avg_vol', np.nan))
 
-        # If any essential technical indicator is NaN, cannot generate signal
-        if any(pd.isna([close, ema_9, ema_20, rsi, vwap, volume, avg_vol])):
-            # st.warning("Missing technical indicator data for signal generation. Skipping option.")
+        # If any essential Greek or technical indicator is NaN, cannot generate signal
+        if any(pd.isna([delta, gamma, theta, close, ema_9, ema_20, rsi, vwap, volume, avg_vol])):
             return False
 
     except (ValueError, KeyError, TypeError) as e:
-        # st.warning(f"Error converting values for signal generation: {e}. Skipping option.")
         return False
 
     try:
@@ -206,7 +209,6 @@ def generate_signal(option, side, stock_df):
             ):
                 return True
     except Exception as e:
-        # st.warning(f"An error occurred during signal evaluation for {side} option: {e}")
         return False
 
     return False
