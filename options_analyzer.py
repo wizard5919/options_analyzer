@@ -214,7 +214,7 @@ def get_options_expiries(ticker: str) -> List[str]:
         return list(expiries) if expiries else []
     except Exception as e:
         error_msg = str(e)
-        if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
+        if "Too Many Requests" in  "rate limit" in error_msg.lower():
             st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
             st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
         else:
@@ -222,7 +222,7 @@ def get_options_expiries(ticker: str) -> List[str]:
         return []
 
 def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch options data with comprehensive error handling"""
+    """Fetch options data with comprehensive error handling and delays"""
     all_calls = pd.DataFrame()
     all_puts = pd.DataFrame()
     failed_expiries = []
@@ -254,6 +254,9 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
             
             all_calls = pd.concat([all_calls, calls], ignore_index=True)
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
+            
+            # Add delay after successful fetch
+            time.sleep(1)  # 1-second delay between each expiry fetch
             
         except Exception as e:
             error_msg = str(e)
@@ -409,6 +412,8 @@ with st.sidebar:
             format_func=lambda x: f"{x} seconds"
         )
         st.info(f"Data will refresh every {refresh_interval} seconds (minimum enforced)")
+        if refresh_interval < 300:
+            st.warning("Frequent auto-refreshes may lead to Yahoo Finance rate limiting. Consider increasing the refresh interval.")
     else:
         refresh_interval = None
     
@@ -467,12 +472,10 @@ if ticker:
     if enable_auto_refresh:
         current_time = time.time()
         time_elapsed = current_time - st.session_state.last_auto_refresh
-        
         if time_elapsed >= refresh_interval:
             st.session_state.last_auto_refresh = current_time
             st.session_state.refresh_counter += 1
-            st.cache_data.clear()
-            st.rerun()
+            st.rerun()  # No need to clear cache here
     
     # Manual refresh
     if manual_refresh:
