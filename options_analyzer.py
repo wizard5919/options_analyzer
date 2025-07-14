@@ -22,12 +22,17 @@ def get_stock_data(ticker):
     start = end - datetime.timedelta(days=60) 
     data = yf.download(ticker, start=start, end=end, interval="5m")
     
+    # IMPORTANT: Check if data is None or empty immediately after download
+    if data is None or data.empty:
+        st.error(f"No data downloaded for {ticker}. It might be an invalid ticker, or no data is available for the specified period/interval.")
+        return pd.DataFrame()
+
     # Ensure data is a DataFrame and has required columns
     if not isinstance(data, pd.DataFrame):
         if isinstance(data, pd.Series): # If yf.download returns a Series, convert to DataFrame
             data = data.to_frame('Close')
-        else: # Handle unexpected data types
-            st.error("Failed to download stock data in expected format.")
+        else: # Handle unexpected data types, e.g., if data is not DataFrame or Series
+            st.error("Downloaded stock data is not in a recognized DataFrame or Series format.")
             return pd.DataFrame() 
     
     # Ensure all required columns are present; fill with NaN if missing
@@ -69,6 +74,12 @@ def compute_indicators(df):
     low_series = df['Low'].squeeze().copy()
     volume_series = df['Volume'].squeeze().copy()
     
+    # IMPORTANT: Check if close_series is empty or too short AFTER extraction and copying
+    # This prevents errors from ta.momentum/trend if the Series is not valid
+    if close_series.empty or len(close_series) < min_rows_needed:
+        st.warning(f"Close series is empty or too short ({len(close_series)}) for indicator calculation after extraction. Need at least {min_rows_needed} data points.")
+        return pd.DataFrame()
+
     # EMA calculations
     df['EMA_9'] = EMAIndicator(close=close_series, window=9).ema_indicator()
     df['EMA_20'] = EMAIndicator(close=close_series, window=20).ema_indicator()
