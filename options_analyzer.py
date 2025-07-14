@@ -699,4 +699,4 @@ if ticker:
                     opportunities = get_top_profit_opportunities(calls_filtered, puts_filtered, current_price)
                     
                     # Display profit opportunities
-                    st.subhe
+                    st.subheader(f"💰 Top Profit Opportunities")
