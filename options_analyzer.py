@@ -21,14 +21,14 @@ def get_stock_data(ticker):
     return data
 
 def compute_indicators(df):
-    close = df['Close']
-    high = df['High']
-    low = df['Low']
-    volume = df['Volume']
+    close = df['Close'].astype(float).squeeze()
+    high = df['High'].astype(float).squeeze()
+    low = df['Low'].astype(float).squeeze()
+    volume = df['Volume'].astype(float).squeeze()
 
-    df['EMA_9'] = EMAIndicator(close, window=9).ema_indicator()
-    df['EMA_20'] = EMAIndicator(close, window=20).ema_indicator()
-    df['RSI'] = RSIIndicator(close, window=14).rsi()
+    df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
+    df['EMA_20'] = EMAIndicator(close=close, window=20).ema_indicator()
+    df['RSI'] = RSIIndicator(close=close, window=14).rsi()
     df['VWAP'] = (volume * (high + low + close) / 3).cumsum() / volume.cumsum()
     df['avg_vol'] = volume.rolling(window=20).mean()
     return df
@@ -48,7 +48,7 @@ def fetch_options_data(ticker, expiry):
 
 def generate_signal(option, side, stock_df):
     latest = stock_df.iloc[-1]
-    
+
     if side == "call":
         if (
             option['delta'] >= 0.6
