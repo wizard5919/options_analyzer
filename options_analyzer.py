@@ -28,6 +28,7 @@ CONFIG = {
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
     'CACHE_TTL': 300,  # 5 minutes
+    'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
 }
 
 SIGNAL_THRESHOLDS = {
@@ -57,6 +58,12 @@ def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception as e:
+            error_msg = str(e)
+            # Check for rate limit
+            if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
+                st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
+                st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+                return None
             if attempt == max_retries - 1:
                 st.error(f"API call failed after {max_retries} attempts: {str(e)}")
                 return None
@@ -200,13 +207,18 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_options_expiries(ticker: str) -> List[str]:
-    """Get options expiries with error handling"""
+    """Get options expiries with error handling and rate limit detection"""
     try:
         stock = yf.Ticker(ticker)
         expiries = stock.options
         return list(expiries) if expiries else []
     except Exception as e:
-        st.error(f"Error fetching expiries: {str(e)}")
+        error_msg = str(e)
+        if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
+            st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
+            st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+        else:
+            st.error(f"Error fetching expiries: {error_msg}")
         return []
 
 def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -244,7 +256,12 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
             
         except Exception as e:
-            st.warning(f"Failed to fetch options for {expiry}: {str(e)}")
+            error_msg = str(e)
+            if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
+                st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
+                st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+                break
+            st.warning(f"Failed to fetch options for {expiry}: {error_msg}")
             failed_expiries.append(expiry)
             continue
     
@@ -358,6 +375,23 @@ if 'refresh_counter' not in st.session_state:
 if 'last_auto_refresh' not in st.session_state:
     st.session_state.last_auto_refresh = time.time()
 
+# Rate limit check
+if 'rate_limited_until' in st.session_state:
+    if time.time() < st.session_state['rate_limited_until']:
+        remaining = int(st.session_state['rate_limited_until'] - time.time())
+        st.warning(f"Yahoo Finance API rate limited. Please wait {remaining} seconds before retrying.")
+        # Show help
+        with st.expander("ℹ️ About Rate Limiting"):
+            st.markdown("""
+            Yahoo Finance may restrict how often data can be retrieved. If you see a "rate limited" warning, please:
+            - Wait a few minutes before refreshing again
+            - Avoid setting auto-refresh intervals lower than 1 minute
+            - Use the app with one ticker at a time to reduce load
+            """)
+        st.stop()
+    else:
+        del st.session_state['rate_limited_until']
+
 # Sidebar for configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
@@ -367,13 +401,16 @@ with st.sidebar:
     enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
     
     if enable_auto_refresh:
+        min_interval = 60  # set a sensible floor
         refresh_interval = st.selectbox(
             "Refresh Interval",
-            options=[30, 60, 120, 300],
-            index=1,
+            options=[60, 120, 300],
+            index=0,
             format_func=lambda x: f"{x} seconds"
         )
-        st.info(f"Data will refresh every {refresh_interval} seconds")
+        st.info(f"Data will refresh every {refresh_interval} seconds (minimum enforced)")
+    else:
+        refresh_interval = None
     
     # Signal thresholds
     st.subheader("Signal Thresholds")
@@ -425,7 +462,7 @@ if ticker:
                 st.info(f"⏱️ {remaining}s")
             else:
                 st.success("🔄 Refreshing...")
-    
+
     # Auto-refresh logic
     if enable_auto_refresh:
         current_time = time.time()
@@ -478,7 +515,7 @@ if ticker:
                 expiries = get_options_expiries(ticker)
                 
                 if not expiries:
-                    st.error("No options expiries available for this ticker.")
+                    st.error("No options expiries available for this ticker. If you recently refreshed, please wait due to Yahoo Finance rate limits.")
                     st.stop()
                 
                 # Expiry selection
@@ -658,6 +695,15 @@ if ticker:
         st.write("**System Configuration:**")
         st.json(CONFIG)
 
+    # Help on rate limits at the bottom for visibility
+    with st.expander("ℹ️ About Rate Limiting"):
+        st.markdown("""
+        Yahoo Finance may restrict how often data can be retrieved. If you see a "rate limited" warning, please:
+        - Wait a few minutes before refreshing again
+        - Avoid setting auto-refresh intervals lower than 1 minute
+        - Use the app with one ticker at a time to reduce load
+        """)
+
 else:
     st.info("Please enter a stock ticker to begin analysis.")
     
@@ -686,4 +732,10 @@ else:
         - **Auto-refresh:** Automatically updates data at set intervals
         - **Manual refresh:** Click "Refresh Now" to update immediately
         - **Clear cache:** Force fresh data retrieval
+
+        **Rate Limiting:**
+        - Yahoo Finance may restrict how often data can be retrieved. If you see a "rate limited" warning, please:
+            - Wait a few minutes before refreshing again
+            - Avoid setting auto-refresh intervals lower than 1 minute
+            - Use the app with one ticker at a time to reduce load
         """)
