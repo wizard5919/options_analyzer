@@ -32,12 +32,27 @@ def get_stock_data(ticker):
     return data
 
 def compute_indicators(df):
-    df['EMA_9'] = EMAIndicator(close=df['Close'], window=9).ema_indicator()
-    df['EMA_20'] = EMAIndicator(close=df['Close'], window=20).ema_indicator()
-    df['RSI'] = RSIIndicator(close=df['Close'], window=14).rsi()
-    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-    df['VWAP'] = (df['Volume'] * typical_price).cumsum() / df['Volume'].cumsum()
-    df['avg_vol'] = df['Volume'].rolling(window=20).mean()
+    # Flatten any nested or 2D values to 1D
+    for col in ['Close', 'High', 'Low', 'Volume']:
+        if isinstance(df[col].iloc[0], (np.ndarray, list)):
+            df[col] = df[col].apply(lambda x: x[0] if isinstance(x, (list, np.ndarray)) else x)
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df.dropna(subset=['Close', 'High', 'Low', 'Volume'], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
+    volume = df['Volume']
+
+    df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
+    df['EMA_20'] = EMAIndicator(close=close, window=20).ema_indicator()
+    df['RSI'] = RSIIndicator(close=close, window=14).rsi()
+
+    typical_price = (high + low + close) / 3
+    df['VWAP'] = (volume * typical_price).cumsum() / volume.cumsum()
+    df['avg_vol'] = volume.rolling(window=20).mean()
     return df
 
 def fetch_all_expiries_data(ticker, expiries):
