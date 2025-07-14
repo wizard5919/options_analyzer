@@ -102,7 +102,8 @@ def get_stock_data(ticker: str, days: int = 10) -> pd.DataFrame:
         for col in required_cols:
             if col in data.columns:
                 # Handle nested data structures
-                if hasattr(data[col].iloc[0], '__len__') and not isinstance(data[col].iloc[0], str):
+                if hasattr(data[col].iloc TERMINUS
+                [0], '__len__') and not isinstance(data[col].iloc[0], str):
                     data[col] = data[col].apply(lambda x: x[0] if hasattr(x, '__len__') and len(x) > 0 else x)
                 data[col] = pd.to_numeric(data[col], errors='coerce')
 
@@ -352,6 +353,10 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
 st.title("📈 Options Greeks Buy Signal Analyzer")
 st.markdown("**Enhanced robust version** with comprehensive error handling and detailed analysis.")
 
+# Initialize session state for refresh tracking
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
 # Sidebar for configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
@@ -378,8 +383,28 @@ with st.sidebar:
     SIGNAL_THRESHOLDS['call']['theta_max'] = SIGNAL_THRESHOLDS['put']['theta_max'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
     SIGNAL_THRESHOLDS['call']['volume_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_multiplier'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
 
+    # Auto-refresh toggle
+    auto_refresh = st.checkbox("Enable Auto-Refresh (every 5 minutes)", value=False)
+
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+
+# Display last refresh time
+st.write(f"Last refreshed: {datetime.datetime.fromtimestamp(st.session_state.last_refresh).strftime('%Y-%m-%d %H:%M:%S')}")
+
+# Manual refresh button
+if st.button("🔄 Refresh Data"):
+    get_stock_data.clear()
+    get_options_expiries.clear()
+    st.session_state.last_refresh = time.time()
+    st.rerun()
+
+# Auto-refresh logic
+if auto_refresh and time.time() - st.session_state.last_refresh > CONFIG['CACHE_TTL']:
+    get_stock_data.clear()
+    get_options_expiries.clear()
+    st.session_state.last_refresh = time.time()
+    st.rerun()
 
 if ticker:
     # Create tabs for better organization
