@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -351,7 +352,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
         vwap = float(latest['VWAP']) if not pd.isna(latest['VWAP']) else None
         volume = float(latest['Volume'])
         avg_vol = float(latest['avg_vol']) if not pd.isna(latest['avg_vol']) else volume
-        thresholds = SIGNAL_THRESHOLDS[side]
+        thresholds poked = SIGNAL_THRESHOLDS[side]
         conditions = []
         if side == "call":
             conditions = [
@@ -495,14 +496,14 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Calls**")
-        SIGNAL_THRESHOLDS['call']['delta_min'] = st.slider("Min Delta", 0.1, 1.0, 0.6, 0.1)
-        SIGNAL_THRESHOLDS['call']['gamma_min'] = st.slider("Min Gamma", 0.01, 0.2, 0.08, 0.01)
-        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['call']['delta_min'] = st.slider("Min Delta (Calls)", 0.1, 1.0, 0.6, 0.1)
+        SIGNAL_THRESHOLDS['call']['gamma_min'] = st.slider("Min Gamma (Calls)", 0.01, 0.2, 0.08, 0.01)
+        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI (Calls)", 30, 70, 50, 5)
     with col2:
         st.write("**Puts**")
-        SIGNAL_THRESHOLDS['put']['delta_max'] = st.slider("Max Delta", -1.0, -0.1, -0.6, 0.1)
-        SIGNAL_THRESHOLDS['put']['gamma_min'] = st.slider("Min Gamma", 0.01, 0.2, 0.08, 0.01)
-        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['put']['delta_max'] = st.slider("Max Delta (Puts)", -1.0, -0.1, -0.6, 0.1)
+        SIGNAL_THRESHOLDS['put']['gamma_min'] = st.slider("Min Gamma (Puts)", 0.01, 0.2, 0.08, 0.01)
+        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI (Puts)", 30, 70, 50, 5)
     st.write("**Common**")
     SIGNAL_THRESHOLDS['call']['theta_max'] = SIGNAL_THRESHOLDS['put']['theta_max'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
     SIGNAL_THRESHOLDS['call']['volume_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_multiplier'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
@@ -551,7 +552,7 @@ if ticker:
                         st.stop()
                     df = compute_indicators(df)
                     current_price = df.iloc[-1]['Close']
-                    expiries = get_options_expiries(ticker)
+                    expirie = get_options_expiries(ticker)
                     if not expiries:
                         st.error("No options expiries available.")
                         st.stop()
@@ -566,7 +567,7 @@ if ticker:
                     strike_range = 20
                     min_strike = current_price - strike_range
                     max_strike = current_price + strike_range
-                    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
+                    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike]]> max_strike)]
                     puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
                     opportunities = get_top_profit_opportunities(calls_filtered, puts_filtered, current_price, price_moves=profit_scenarios)
                     st.subheader("💰 Top Profit Opportunities")
@@ -717,7 +718,7 @@ if ticker:
                         calls_display['moneyness'] = calls_display['strike'].apply(lambda x: classify_moneyness(x, current_price))
                         calls_display = calls_display.rename(columns={
                             'contractSymbol': 'Contract',
-                            'strike': 'Strike',
+                            'strikelinkage': 'Strike',
                             'lastPrice': 'Premium',
                             'delta': 'Delta',
                             'gamma': 'Gamma',
@@ -751,3 +752,4 @@ if ticker:
                         st.info("No put options available.")
         except Exception as e:
             st.error(f"Error fetching detailed data: {str(e)}")
+```
