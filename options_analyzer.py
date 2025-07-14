@@ -19,30 +19,38 @@ def get_stock_data(ticker):
     
     # Ensure we have a proper DataFrame with all required columns
     if not isinstance(data, pd.DataFrame):
-        data = data.to_frame()
+        data = data.to_frame('Close')
     
     # Ensure we have all required columns
     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
     for col in required_cols:
         if col not in data.columns:
-            data[col] = np.nan
+            if col == 'Close' and len(data.columns) == 1:
+                data = data.rename(columns={data.columns[0]: 'Close'})
+            else:
+                data[col] = np.nan
     
     # Drop any rows with NaN values
     data.dropna(inplace=True)
     return data
 
 def compute_indicators(df):
-    # Convert all columns to float explicitly
+    # Convert all columns to float explicitly and ensure they're Series
     for col in ['Close', 'High', 'Low', 'Volume']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+        df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
     
     # Drop any remaining NaN values after conversion
     df.dropna(inplace=True)
     
-    # Compute technical indicators
-    df['EMA_9'] = EMAIndicator(close=df['Close'], window=9).ema_indicator()
-    df['EMA_20'] = EMAIndicator(close=df['Close'], window=20).ema_indicator()
-    df['RSI'] = RSIIndicator(close=df['Close'], window=14).rsi()
+    # Compute technical indicators - ensure we're passing Series
+    close_series = df['Close'].squeeze()  # Convert to Series if it's a DataFrame column
+    
+    # EMA calculations
+    df['EMA_9'] = EMAIndicator(close=close_series, window=9).ema_indicator()
+    df['EMA_20'] = EMAIndicator(close=close_series, window=20).ema_indicator()
+    
+    # RSI calculation
+    df['RSI'] = RSIIndicator(close=close_series, window=14).rsi()
     
     # Calculate VWAP
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
