@@ -58,7 +58,7 @@ def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
             return func(*args, **kwargs)
         except Exception as e:
             if "Too Many Requests" in str(e):
-                st.error("API rate limit hit. Please wait a few minutes before trying again or increase the refresh interval.")
+                st.error("API rate limit hit. Please wait a few minutes before trying again or increase the auto-refresh interval.")
                 return None # Immediately stop if rate limited
             if attempt == max_retries - 1:
                 st.error(f"API call failed after {max_retries} attempts: {str(e)}")
@@ -642,7 +642,7 @@ if ticker:
                         for _, row in valid_puts.iterrows():
                             signal_result = generate_signal(row, "put", df)
                             if signal_result['signal']:
-                                signal_data = row[['contractSymbol', 'strike', 'lastPrice', 'delta', 'gamma', 'theta', 'impliedVolatility', 'volume', 'openInterest', 'expiry', 'moneyness']].to_dict()
+                                signal_data = row[['contractSymbol', 'lastPrice', 'strike', 'delta', 'gamma', 'theta', 'impliedVolatility', 'volume', 'openInterest', 'expiry', 'moneyness']].to_dict()
                                 signal_data['signal_score'] = signal_result['score']
                                 put_signals_list.append(signal_data)
 
@@ -662,7 +662,8 @@ if ticker:
             st.error(f"An unexpected error occurred during analysis: {str(e)}")
             st.error("Please try refreshing the page or checking the ticker symbol.")
 
-    ---
+    # FIX: Wrap the horizontal rule in st.markdown()
+    st.markdown("---") # This was the problematic line
 
     with tab2:
         # Stock data visualization
@@ -709,7 +710,8 @@ if ticker:
         else:
             st.info("No stock data available to display in this tab.")
 
-    ---
+    # FIX: Wrap the horizontal rule in st.markdown()
+    st.markdown("---") # This was the problematic line
 
     with tab3:
         st.subheader("🔍 Analysis Details & Debugging Information")
@@ -733,7 +735,9 @@ if ticker:
 
             if 'calls_filtered' in locals() and not calls_filtered.empty:
                 st.write("#### Sample Call Option Signal Evaluation (First found valid call):")
-                sample_call = calls_filtered[calls_filtered.apply(validate_option_data, axis=1)].iloc[0] if not calls_filtered[calls_filtered.apply(validate_option_data, axis=1)].empty else None
+                # Ensure sample_call is not empty before trying to access iloc[0]
+                valid_calls_for_sample = calls_filtered[calls_filtered.apply(validate_option_data, axis=1)]
+                sample_call = valid_calls_for_sample.iloc[0] if not valid_calls_for_sample.empty else None
                 if sample_call is not None:
                     result = generate_signal(sample_call, "call", df)
                     st.json(result)
@@ -742,7 +746,9 @@ if ticker:
 
             if 'puts_filtered' in locals() and not puts_filtered.empty:
                 st.write("#### Sample Put Option Signal Evaluation (First found valid put):")
-                sample_put = puts_filtered[puts_filtered.apply(validate_option_data, axis=1)].iloc[0] if not puts_filtered[puts_filtered.apply(validate_option_data, axis=1)].empty else None
+                # Ensure sample_put is not empty before trying to access iloc[0]
+                valid_puts_for_sample = puts_filtered[puts_filtered.apply(validate_option_data, axis=1)]
+                sample_put = valid_puts_for_sample.iloc[0] if not valid_puts_for_sample.empty else None
                 if sample_put is not None:
                     result = generate_signal(sample_put, "put", df)
                     st.json(result)
