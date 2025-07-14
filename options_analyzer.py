@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -752,4 +752,4 @@ if ticker:
                         st.info("No put options available.")
         except Exception as e:
             st.error(f"Error fetching detailed data: {str(e)}")
-```
+
