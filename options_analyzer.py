@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import datetime
-import matplotlib.pyplot as plt
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 
@@ -18,9 +17,9 @@ def get_stock_data(ticker):
     start = end - datetime.timedelta(days=10)
     data = yf.download(ticker, start=start, end=end, interval="5m")
     
-    # Ensure the data is a DataFrame and handle cases where only one column is returned
+    # Ensure the data is a DataFrame
     if isinstance(data, pd.Series):
-        data = data.to_frame()
+        data = data.to_frame(name='Close')  # Convert Series to DataFrame with a named column
     elif data.empty:
         raise ValueError("No data returned for the given ticker.")
     
@@ -29,7 +28,7 @@ def get_stock_data(ticker):
     return data
 
 def compute_indicators(df):
-    # Ensure the columns are Series (1D) by selecting them directly
+    # Ensure columns are Series (1D) and convert to float
     df['Close'] = df['Close'].astype(float)
     df['High'] = df['High'].astype(float)
     df['Low'] = df['Low'].astype(float)
@@ -121,10 +120,15 @@ if ticker:
     try:
         st.write("Fetching stock and options data...")
         df = get_stock_data(ticker)
-        df = compute_indicators(df)
-
+        
         if df.empty:
             st.error("No valid stock data available for the given ticker.")
+            st.stop()
+
+        df = compute_indicators(df)
+        
+        if df.empty:
+            st.error("No valid data after computing indicators.")
             st.stop()
 
         stock = yf.Ticker(ticker)
