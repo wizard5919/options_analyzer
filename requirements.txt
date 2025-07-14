@@ -1,6 +1,7 @@
+streamlit>=1.46.1
 yfinance>=0.2.40
 pandas>=2.0.0
-streamlit>=1.46.1
 numpy>=1.25.0
 plotly>=5.15.0
 matplotlib>=3.7.0
+ta>=0.11.0
