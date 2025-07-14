@@ -32,12 +32,11 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 st.set_page_config(
 
-   st.set_page_config(
+ st.set_page_config(
     page_title="Real-Time Options Greeks Analyzer",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 # =============================
 
 # CONFIGURATION & CONSTANTS
