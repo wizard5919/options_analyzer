@@ -699,5 +699,5 @@ if ticker:
                     opportunities = get_top_profit_opportunities(calls_filtered, puts)
                     # Display profit opportunities
                     st.subheader(f"💰 Top Profit Opportunities")
-                    st.write(opportunities)  # or customize your display logic
+                  
 
