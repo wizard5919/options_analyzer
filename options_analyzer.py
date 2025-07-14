@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -27,7 +28,7 @@ CONFIG = {
     'RETRY_DELAY': 1,
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
-    'CACHE_TTL': 300,  # 5 minutes
+    'CACHE_TTL':  300,  # 5 minutes
 }
 
 SIGNAL_THRESHOLDS = {
@@ -45,8 +46,6 @@ SIGNAL_THRESHOLDS = {
         'rsi_max': 50,
         'volume_multiplier': 1.5
     }
-}
-
 # =============================
 # UTILITY FUNCTIONS
 # =============================
@@ -102,8 +101,7 @@ def get_stock_data(ticker: str, days: int = 10) -> pd.DataFrame:
         for col in required_cols:
             if col in data.columns:
                 # Handle nested data structures
-                if hasattr(data[col].iloc TERMINUS
-                [0], '__len__') and not isinstance(data[col].iloc[0], str):
+                if hasattr(data[col].iloc[0], '__len__') and not isinstance(data[col].iloc[0], str):
                     data[col] = data[col].apply(lambda x: x[0] if hasattr(x, '__len__') and len(x) > 0 else x)
                 data[col] = pd.to_numeric(data[col], errors='coerce')
 
@@ -312,7 +310,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
         if side == "call":
             conditions = [
                 (delta >= thresholds['delta_min'], f"Delta >= {thresholds['delta_min']}", delta),
-                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']}", gamma),
+                (義gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']}", gamma),
                 (theta <= thresholds['theta_max'], f"Theta <= {thresholds['theta_max']}", theta),
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']}", rsi),
@@ -632,3 +630,4 @@ else:
         - VWAP for intraday sentiment
         - Volume analysis for confirmation
         """)
+```
