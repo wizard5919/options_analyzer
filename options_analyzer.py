@@ -7,117 +7,137 @@ import numpy as np
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 from datetime import datetime
+import time
 
 st.set_page_config(page_title="Options Greek Signal Analyzer", layout="wide")
 st.title("📈 Options Greeks Buy Signal Analyzer (Enhanced with Technicals)")
 
+# Initialize session state for refresh
+if 'refresh_key' not in st.session_state:
+    st.session_state.refresh_key = 0
+
 refresh_clicked = st.button("🔄 Refresh App")
-ticker = st.text_input("Enter Ticker Symbol (e.g., IWM):", value="IWM", key="ticker" if not refresh_clicked else "ticker_refreshed")
+if refresh_clicked:
+    st.session_state.refresh_key += 1
+
+ticker = st.text_input("Enter Ticker Symbol (e.g., IWM):", value="IWM", key=f"ticker_{st.session_state.refresh_key}")
+
+# Retry logic for yfinance
+def fetch_with_retry(func, max_attempts=3, delay=2):
+    for attempt in range(max_attempts):
+        try:
+            return func()
+        except Exception as e:
+            if attempt == max_attempts - 1:
+                st.error(f"Failed to fetch data after {max_attempts} attempts: {e}")
+                return None
+            time.sleep(delay)
 
 def get_expiries(ticker):
-    try:
+    def fetch():
         return yf.Ticker(ticker).options
-    except:
-        return []
+    return fetch_with_retry(fetch) or []
 
 expiries = get_expiries(ticker)
-if expiries:
-    expiry = st.selectbox("Select Expiry Date:", expiries)
-else:
+if not expiries:
     st.warning("No expiry dates available. Please check the ticker.")
     st.stop()
 
-# FIX: Ensure serializable output by converting to dict and reconstructing DataFrames
+expiry = st.selectbox("Select Expiry Date:", expiries)
+
+# Cache option chain data
 @st.cache_data(show_spinner=False)
-def get_option_chain(ticker, expiry):
+def get_option_chain(ticker, expiry, _refresh_key):
     stock = yf.Ticker(ticker)
     chain = stock.option_chain(expiry)
-    # Convert to serializable dict format
-    calls_dict = chain.calls.to_dict(orient='list')
-    puts_dict = chain.puts.to_dict(orient='list')
-    return calls_dict, puts_dict
+    return chain.calls, chain.puts
 
-calls_dict, puts_dict = get_option_chain(ticker, expiry)
-calls_df = pd.DataFrame(calls_dict)
-puts_df = pd.DataFrame(puts_dict)
+calls_df, puts_df = get_option_chain(ticker, expiry, st.session_state.refresh_key)
 
 st.subheader("Top Signals Across All Strikes")
 
-# Load stock data
-data = yf.download(ticker, period="2mo", interval="1d")
-if data.empty:
+# Fetch stock data with retry
+def fetch_stock_data(ticker):
+    def fetch():
+        return yf.download(ticker, period="2mo", interval="1d", auto_adjust=True)
+    return fetch_with_retry(fetch)
+
+data = fetch_stock_data(ticker)
+if data is None or data.empty:
     st.error("No data available for this ticker. Please try a different symbol.")
     st.stop()
 
-# FIX: Handle technical indicator calculations with try-except
+# Calculate technical indicators
 try:
-    # Calculate EMAs using pandas native EWMA
+    # EMAs
     data['EMA9'] = data['Close'].ewm(span=9, adjust=False).mean()
     data['EMA21'] = data['Close'].ewm(span=21, adjust=False).mean()
     
-    # Calculate RSI manually
+    # RSI
     delta = data['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     avg_gain = gain.rolling(window=14, min_periods=1).mean()
     avg_loss = loss.rolling(window=14, min_periods=1).mean()
     rs = avg_gain / avg_loss
-    # Handle division by zero
     with np.errstate(divide='ignore', invalid='ignore'):
         data['RSI'] = 100 - (100 / (1 + rs))
-        data['RSI'] = data['RSI'].fillna(50)  # Fill NaN with neutral 50
+        data['RSI'] = data['RSI'].fillna(50)
     
-    # Calculate VWAP
+    # VWAP
     data['VWAP'] = (data['Volume'] * (data['High'] + data['Low'] + data['Close']) / 3).cumsum() / data['Volume'].cumsum()
     
-    # Handle NaN values
-    data = data.fillna(method='ffill').fillna(method='bfill')
+    # MACD
+    data['EMA12'] = data['Close'].ewm(span=12, adjust=False).mean()
+    data['EMA26'] = data['Close'].ewm(span=26, adjust=False).mean()
+    data['MACD'] = data['EMA12'] - data['EMA26']
+    data['Signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
+    
+    # Fill missing values
+    data = data.ffill().bfill()
 except Exception as e:
     st.error(f"Error calculating technical indicators: {e}")
-    # Create placeholder columns if calculations fail
     data['EMA9'] = data['Close']
     data['EMA21'] = data['Close']
-    data['RSI'] = 50  # Neutral RSI
+    data['RSI'] = 50
     data['VWAP'] = data['Close']
+    data['MACD'] = 0
+    data['Signal'] = 0
 
 # Validate data for charting
-if data.empty or data[['Close', 'EMA9', 'EMA21', 'VWAP']].isna().all().any():
+if data[['Close', 'EMA9', 'EMA21', 'VWAP', 'MACD', 'Signal']].isna().all().any():
     st.error("Insufficient or invalid data for charting. Please check the ticker or data period.")
     st.stop()
 
-# FIX: Properly extract scalar values and handle missing keys
-latest = {}
-for col in ['Close', 'EMA9', 'EMA21', 'RSI', 'VWAP']:
-    try:
-        # Ensure we get a scalar value, not a Series
-        value = data[col].iloc[-1] if col in data.columns else data['Close'].iloc[-1]
-        # Convert to native Python float if it's a pandas object
-        latest[col] = float(value) if hasattr(value, 'item') else value
-    except:
-        latest[col] = float(data['Close'].iloc[-1])  # Fallback to Close price
+# Get real-time price
+def get_real_time_price(ticker):
+    def fetch():
+        return yf.Ticker(ticker).info.get('regularMarketPrice', None)
+    return fetch_with_retry(fetch)
 
-# FIX: Convert conditions to native Python booleans
-ema_condition = bool(latest.get('EMA9', 0) > latest.get('EMA21', 0))
-vwap_condition = bool(latest.get('Close', 0) > latest.get('VWAP', 0))
-rsi = float(latest.get('RSI', 50))  # Default to neutral 50 if missing
+current_price = get_real_time_price(ticker)
+if current_price:
+    st.write(f"**Current Price:** ${current_price:.2f}")
 
-# FIX: Handle NaN values in Greek calculations
+# Extract latest values
+latest = data.iloc[-1]
+ema_condition = latest['EMA9'] > latest['EMA21']
+vwap_condition = latest['Close'] > latest['VWAP']
+rsi = float(latest['RSI'])
+macd_bullish = latest['MACD'] > latest['Signal']
+
+# Handle NaN values in Greek calculations
 def safe_get_value(row, key, default=0):
     value = row.get(key, default)
-    if pd.isna(value) or value is None:
-        return default
-    try:
-        return float(value)  # Ensure numeric type
-    except:
-        return default
+    return float(value) if not pd.isna(value) and value is not None else default
 
-# Combined scoring
+# Enhanced scoring with market alignment
 results = []
 for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
     for _, row in df.iterrows():
         score = 0
         
-        # Safely extract values with NaN handling
+        # Extract Greeks
         delta = safe_get_value(row, 'delta')
         gamma = safe_get_value(row, 'gamma')
         theta = safe_get_value(row, 'theta')
@@ -125,20 +145,22 @@ for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
         vol = safe_get_value(row, 'volume', 0)
         oi = safe_get_value(row, 'openInterest', 0)
 
+        # Scoring logic
         if option_type == 'call':
             if delta >= 0.6: score += 30
             if gamma >= 0.1: score += 30
             if theta <= 0.03: score += 20
             if vega >= 0.1: score += 20
             if rsi < 30: score += 10
+            if macd_bullish: score += 15
         else:
             if delta <= -0.6: score += 30
             if gamma >= 0.1: score += 30
             if theta <= 0.03: score += 20
             if vega >= 0.1: score += 20
             if rsi > 70: score += 10
+            if not macd_bullish: score += 15
 
-        # Use native Python booleans in conditions
         if ema_condition: score += 5
         if vwap_condition: score += 5
         if vol > 100 and oi > 200: score += 10
@@ -150,32 +172,49 @@ for df, option_type in [(calls_df, 'call'), (puts_df, 'put')]:
             'price': safe_get_value(row, 'lastPrice', 0),
             'volume': vol,
             'openInterest': oi,
-            'score': score
+            'score': score,
+            'delta': delta,
+            'gamma': gamma,
+            'theta': theta,
+            'vega': vega
         })
 
-# Show sorted signal table
+# Display results
 if results:
     ranked = pd.DataFrame(results).sort_values(by='score', ascending=False)
-    # Add buy signal based on score threshold (e.g., 50)
     ranked['Buy Signal'] = ranked['score'].apply(lambda x: 'buy' if x >= 50 else 'no')
-    st.dataframe(ranked[['contract', 'strike', 'type', 'price', 'volume', 'openInterest', 'score', 'Buy Signal']].reset_index(drop=True))
+    st.dataframe(ranked[['contract', 'strike', 'type', 'price', 'volume', 'openInterest', 'delta', 'gamma', 'theta', 'vega', 'score', 'Buy Signal']].reset_index(drop=True))
 else:
     st.warning("No options data available for scoring.")
 
-# Price Chart
-st.subheader("📊 Price Chart with EMA, RSI, VWAP")
-plt.figure(figsize=(10, 6))
-plt.plot(data.index, data['Close'], label='Close', color='blue')
-plt.plot(data.index, data['EMA9'], label='EMA 9', color='cyan')
-plt.plot(data.index, data['EMA21'], label='EMA 21', color='red')
-plt.plot(data.index, data['VWAP'], label='VWAP', color='green')
-plt.title(f"{ticker} Price Chart")
-plt.xlabel("Date")
-plt.ylabel("Price")
-plt.legend()
-plt.xticks(rotation=45)
-st.pyplot(plt)
+# Price Chart with MACD
+st.subheader("📊 Price Chart with EMA, RSI, VWAP, and MACD")
+fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [3, 1, 1]})
+# Price and indicators
+ax1.plot(data.index, data['Close'], label='Close', color='blue')
+ax1.plot(data.index, data['EMA9'], label='EMA 9', color='cyan')
+ax1.plot(data.index, data['EMA21'], label='EMA 21', color='red')
+ax1.plot(data.index, data['VWAP'], label='VWAP', color='green')
+ax1.set_title(f"{ticker} Price Chart")
+ax1.set_ylabel("Price")
+ax1.legend()
+ax1.tick_params(axis='x', rotation=45)
 
-# Add current date and time
+# RSI
+ax2.plot(data.index, data['RSI'], label='RSI', color='purple')
+ax2.axhline(70, linestyle='--', color='red')
+ax2.axhline(30, linestyle='--', color='green')
+ax2.set_ylabel("RSI")
+ax2.legend()
+
+# MACD
+ax3.plot(data.index, data['MACD'], label='MACD', color='blue')
+ax3.plot(data.index, data['Signal'], label='Signal', color='orange')
+ax3.set_ylabel("MACD")
+ax3.legend()
+plt.tight_layout()
+st.pyplot(fig)
+
+# Display metrics
 current_time = datetime.now().strftime("%I:%M %p +01 on %B %d, %Y")
-st.write(f"**Latest RSI:** {rsi:.2f} | **EMA9 > EMA21:** {ema_condition} | **Price > VWAP:** {vwap_condition} | **Analysis Date:** {current_time}")
+st.write(f"**Latest RSI:** {rsi:.2f} | **EMA9 > EMA21:** {ema_condition} | **Price > VWAP:** {vwap_condition} | **MACD Bullish:** {macd_bullish} | **Analysis Date:** {current_time}")
