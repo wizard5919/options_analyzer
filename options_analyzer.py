@@ -696,6 +696,8 @@ if ticker:
                     puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
                     
                     # Get top profit opportunities
-                    opportunities = get_top_profit_opportunities(calls_filtered, puts
+                    opportunities = get_top_profit_opportunities(calls_filtered, puts)
                     # Display profit opportunities
                     st.subheader(f"💰 Top Profit Opportunities")
+                    st.write(opportunities)  # or customize your display logic
+
