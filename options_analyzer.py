@@ -350,30 +350,11 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
 # =============================
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced robust version** with comprehensive error handling, detailed analysis, and real-time refresh capabilities.")
-
-# Initialize session state for refresh functionality
-if 'refresh_counter' not in st.session_state:
-    st.session_state.refresh_counter = 0
-if 'last_auto_refresh' not in st.session_state:
-    st.session_state.last_auto_refresh = time.time()
+st.markdown("**Enhanced robust version** with comprehensive error handling and detailed analysis.")
 
 # Sidebar for configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
-    
-    # Auto-refresh settings
-    st.subheader("🔄 Auto-Refresh Settings")
-    enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
-    
-    if enable_auto_refresh:
-        refresh_interval = st.selectbox(
-            "Refresh Interval",
-            options=[30, 60, 120, 300],
-            index=1,
-            format_func=lambda x: f"{x} seconds"
-        )
-        st.info(f"Data will refresh every {refresh_interval} seconds")
     
     # Signal thresholds
     st.subheader("Signal Thresholds")
@@ -401,55 +382,6 @@ with st.sidebar:
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
 if ticker:
-    # Real-time data refresh controls
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-    
-    with col1:
-        st.subheader(f"📊 {ticker} Options Analysis")
-    
-    with col2:
-        manual_refresh = st.button("🔄 Refresh Now")
-    
-    with col3:
-        if st.button("🗑️ Clear Cache"):
-            st.cache_data.clear()
-            st.success("Cache cleared!")
-    
-    with col4:
-        # Show refresh status
-        if enable_auto_refresh:
-            current_time = time.time()
-            time_elapsed = current_time - st.session_state.last_auto_refresh
-            remaining = max(0, refresh_interval - int(time_elapsed))
-            if remaining > 0:
-                st.info(f"⏱️ {remaining}s")
-            else:
-                st.success("🔄 Refreshing...")
-    
-    # Auto-refresh logic
-    if enable_auto_refresh:
-        current_time = time.time()
-        time_elapsed = current_time - st.session_state.last_auto_refresh
-        
-        if time_elapsed >= refresh_interval:
-            st.session_state.last_auto_refresh = current_time
-            st.session_state.refresh_counter += 1
-            st.cache_data.clear()
-            st.rerun()
-    
-    # Manual refresh
-    if manual_refresh:
-        st.cache_data.clear()
-        st.session_state.last_auto_refresh = time.time()
-        st.rerun()
-    
-    # Show last update timestamp and refresh count
-    col1, col2 = st.columns(2)
-    with col1:
-        st.caption(f"📅 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    with col2:
-        st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
-
     # Create tabs for better organization
     tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
     
@@ -639,12 +571,6 @@ if ticker:
     with tab3:
         st.subheader("🔍 Analysis Details")
         
-        # Auto-refresh status
-        if enable_auto_refresh:
-            st.info(f"🔄 Auto-refresh enabled: Every {refresh_interval} seconds")
-        else:
-            st.info("🔄 Auto-refresh disabled")
-        
         if 'calls_filtered' in locals() and not calls_filtered.empty:
             st.write("**Sample Call Analysis:**")
             sample_call = calls_filtered.iloc[0]
@@ -666,11 +592,10 @@ else:
         st.markdown("""
         **Steps to analyze options:**
         1. Enter a stock ticker (e.g., SPY, QQQ, AAPL)
-        2. Configure auto-refresh settings in the sidebar (optional)
-        3. Select expiration filter (0DTE for same-day, or near-term)
-        4. Adjust strike range around current price
-        5. Filter by moneyness (ITM, ATM, OTM)
-        6. Review generated signals
+        2. Select expiration filter (0DTE for same-day, or near-term)
+        3. Adjust strike range around current price
+        4. Filter by moneyness (ITM, ATM, OTM)
+        5. Review generated signals
         
         **Signal Criteria:**
         - **Calls:** High delta, sufficient gamma, low theta, bullish technicals
@@ -681,9 +606,4 @@ else:
         - RSI for momentum
         - VWAP for intraday sentiment
         - Volume analysis for confirmation
-        
-        **Refresh Features:**
-        - **Auto-refresh:** Automatically updates data at set intervals
-        - **Manual refresh:** Click "Refresh Now" to update immediately
-        - **Clear cache:** Force fresh data retrieval
         """)
