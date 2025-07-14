@@ -52,10 +52,7 @@ def compute_indicators(df):
     """
     # Define the minimum number of rows needed for indicator calculations (based on max window size)
     min_rows_needed = 20 
-    if len(df) < min_rows_needed:
-        st.warning(f"Not enough data points ({len(df)}) for indicator calculation. Need at least {min_rows_needed} rows.")
-        return pd.DataFrame() # Return empty DataFrame if not enough data
-
+    
     # Convert relevant columns to float explicitly to ensure correct type for calculations
     for col in ['Close', 'High', 'Low', 'Volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
@@ -63,7 +60,7 @@ def compute_indicators(df):
     # Drop any remaining NaN values after type conversion
     df.dropna(inplace=True)
 
-    # Re-check length after dropping NaNs, as more rows might have been removed
+    # Check length after dropping NaNs, as more rows might have been removed
     if len(df) < min_rows_needed:
         st.warning(f"Not enough data points ({len(df)}) after cleaning for indicator calculation. Need at least {min_rows_needed} rows.")
         return pd.DataFrame() # Return empty DataFrame if not enough data
@@ -80,6 +77,9 @@ def compute_indicators(df):
         st.warning(f"Close series is empty or too short ({len(close_series)}) for indicator calculation after extraction. Need at least {min_rows_needed} data points.")
         return pd.DataFrame()
 
+    # Debugging: Print length of close_series before TA calculations
+    st.write(f"DEBUG: Length of close_series before TA calculations: {len(close_series)}")
+    
     # EMA calculations
     df['EMA_9'] = EMAIndicator(close=close_series, window=9).ema_indicator()
     df['EMA_20'] = EMAIndicator(close=close_series, window=20).ema_indicator()
