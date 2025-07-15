@@ -7,6 +7,7 @@ import warnings
 import requests
 import plotly.graph_objects as go
 from bs4 import BeautifulSoup
+from typing import Tuple
 try:
     from polygon import RESTClient
 except ImportError:
