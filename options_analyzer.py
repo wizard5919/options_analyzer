@@ -7,6 +7,7 @@ import time
 import warnings
 import pytz
 import math
+import threading
 from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
@@ -68,6 +69,38 @@ SIGNAL_THRESHOLDS = {
         'volume_vol_multiplier': 0.3
     }
 }
+
+# =============================
+# AUTO-REFRESH SYSTEM
+# =============================
+
+class AutoRefreshSystem:
+    def __init__(self):
+        self.running = False
+        self.thread = None
+        self.refresh_interval = 60  # Default interval
+        
+    def start(self, interval):
+        if self.running and interval == self.refresh_interval:
+            return  # Already running with same interval
+        
+        self.stop()  # Stop any existing thread
+        self.running = True
+        self.refresh_interval = interval
+        
+        def refresh_loop():
+            while self.running:
+                time.sleep(interval)
+                if self.running:  # Double-check after sleep
+                    st.rerun()
+        
+        self.thread = threading.Thread(target=refresh_loop, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
 
 # =============================
 # UTILITY FUNCTIONS
@@ -652,14 +685,13 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
 # STREAMLIT INTERFACE
 # =============================
 
-st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced for volatile markets** with improved signal detection during price moves")
-
 # Initialize session state for refresh functionality
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0
-if 'last_auto_refresh' not in st.session_state:
-    st.session_state.last_auto_refresh = time.time()
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = time.time()
+if 'refresh_system' not in st.session_state:
+    st.session_state.refresh_system = AutoRefreshSystem()
 
 # Rate limit check
 if 'rate_limited_until' in st.session_state:
@@ -678,6 +710,9 @@ if 'rate_limited_until' in st.session_state:
     else:
         del st.session_state['rate_limited_until']
 
+st.title("📈 Options Greeks Buy Signal Analyzer")
+st.markdown("**Enhanced for volatile markets** with improved signal detection during price moves")
+
 # Sidebar for configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
@@ -691,14 +726,15 @@ with st.sidebar:
         refresh_interval = st.selectbox(
             "Refresh Interval",
             options=[60, 120, 300],
-            index=0,
+            index=1,  # Default to 120 seconds
             format_func=lambda x: f"{x} seconds"
         )
-        st.info(f"Data will refresh every {refresh_interval} seconds (minimum enforced)")
-        if refresh_interval < 300:
-            st.warning("Frequent auto-refreshes may lead to Yahoo Finance rate limiting. Consider increasing the refresh interval.")
+        
+        # Start/update auto-refresh
+        st.session_state.refresh_system.start(refresh_interval)
+        st.info(f"Data will refresh every {refresh_interval} seconds")
     else:
-        refresh_interval = None
+        st.session_state.refresh_system.stop()
     
     # Signal thresholds
     st.subheader("Base Signal Thresholds")
@@ -757,6 +793,27 @@ with st.sidebar:
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
+# Create refresh status container
+refresh_status = st.empty()
+
+# Show refresh status
+if enable_auto_refresh:
+    # Create a placeholder for dynamic countdown
+    countdown_placeholder = refresh_status.empty()
+    
+    # Get current time
+    current_time = time.time()
+    elapsed = current_time - st.session_state.last_refresh
+    
+    # Calculate remaining time
+    if 'auto_refresh_interval' in st.session_state:
+        remaining = max(0, st.session_state.auto_refresh_interval - elapsed)
+        countdown_placeholder.info(f"⏱️ Next refresh in {int(remaining)} seconds")
+    else:
+        countdown_placeholder.info("🔄 Auto-refresh starting...")
+else:
+    refresh_status.empty()  # Clear refresh status
+
 if ticker:
     # Create four columns: for market status, current price, last updated, and refresh button
     col1, col2, col3, col4 = st.columns(4)
@@ -774,33 +831,23 @@ if ticker:
         st.metric("Current Price", f"${current_price:.2f}")
     
     with col3:
-        st.caption(f"📅 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        if 'last_refresh' in st.session_state:
+            last_update = datetime.datetime.fromtimestamp(st.session_state.last_refresh)
+            st.caption(f"📅 Last updated: {last_update.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            st.caption("📅 Last updated: Never")
     
     with col4:
-        st.write("")  # for alignment
-        st.write("")
-        manual_refresh = st.button("🔄 Refresh Now", key="manual_refresh")
+        manual_refresh = st.button("🔁 Refresh Now", key="manual_refresh")
     
-    # Auto-refresh and manual refresh logic
-    if enable_auto_refresh:
-        current_time = time.time()
-        time_elapsed = current_time - st.session_state.last_auto_refresh
-        remaining = max(0, refresh_interval - int(time_elapsed))
-        if remaining > 0:
-            st.info(f"⏱️ Next refresh in {remaining}s")
-        else:
-            st.success("🔄 Refreshing...")
-            st.session_state.last_auto_refresh = current_time
-            st.session_state.refresh_counter += 1
-            st.rerun()
-    
+    # Manual refresh logic
     if manual_refresh:
         st.cache_data.clear()
-        st.session_state.last_auto_refresh = time.time()
+        st.session_state.last_refresh = time.time()
         st.session_state.refresh_counter += 1
         st.rerun()
     
-    # Show refresh count
+    # Add refresh counter display
     st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 
     # Create tabs for better organization
@@ -1161,22 +1208,14 @@ else:
         5. Filter by moneyness (ITM, ATM, OTM)
         6. Review generated signals
         
-        **Key Improvements for Volatile Markets:**
-        - Enhanced volume average calculation
-        - More responsive thresholds during price moves
-        - New Near-The-Money (NTM) classification
-        - Special handling for early market conditions
-        - Volatility-based adjustments for Greeks thresholds
-        - Diagnostic information to understand signals
+        **Key Improvements:**
+        - **Seamless Auto-Refresh:** Data updates automatically at your chosen interval
+        - **Enhanced Volatility Handling:** Better signals during price moves
+        - **Near-The-Money (NTM) Classification:** More precise option categorization
+        - **Early Market Adjustments:** Thresholds adapt to premarket/early market conditions
         
         **Refresh Features:**
-        - **Auto-refresh:** Automatically updates data at set intervals
-        - **Manual refresh:** Click "Refresh Now" to update immediately
-        - **Clear cache:** Force fresh data retrieval
-
-        **Rate Limiting:**
-        - Yahoo Finance may restrict how often data can be retrieved. If you see a "rate limited" warning, please:
-            - Wait a few minutes before refreshing again
-            - Avoid setting auto-refresh intervals lower than 1 minute
-            - Use the app with one ticker at a time to reduce load
+        - **Auto-refresh:** Updates data automatically at set intervals
+        - **Manual refresh:** Click "Refresh Now" for immediate updates
+        - **Visual Countdown:** See exactly when next refresh will occur
         """)
