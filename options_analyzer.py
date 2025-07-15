@@ -10,13 +10,15 @@ from bs4 import BeautifulSoup
 from polygon import RESTClient
 from alpha_vantage.timeseries import TimeSeries
 import iexfinance as iex
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator
 
 # Suppress warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 st.set_page_config(page_title="Options Greeks Buy Signal Analyzer", layout="wide")
 
-# API Configuration
+# API Configuration (Replace with your actual keys)
 POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
 ALPHA_API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"
 IEX_API_KEY = "YOUR_IEX_CLOUD_API_KEY"
@@ -38,14 +40,16 @@ SIGNAL_THRESHOLDS = {
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data_polygon(ticker: str) -> pd.DataFrame:
     try:
-        data = polygon_client.get_aggs(ticker, 1, "minute", (datetime.datetime.now() - datetime.timedelta(days=10)).strftime('%Y-%m-%d'), datetime.datetime.now().strftime('%Y-%m-%d'))
+        end_time = datetime.datetime.now()
+        start_time = end_time - datetime.timedelta(days=10)
+        data = polygon_client.get_aggs(ticker, 1, "minute", start_time.strftime('%Y-%m-%d'), end_time.strftime('%Y-%m-%d'), limit=50000)
         df = pd.DataFrame(data)
         if df.empty:
             st.warning(f"No data from Polygon for {ticker}")
             return pd.DataFrame()
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df = df.rename(columns={'close': 'Close', 'high': 'High', 'low': 'Low', 'volume': 'Volume'})
-        return df
+        return df[['timestamp', 'Close', 'High', 'Low', 'Volume']]
     except Exception as e:
         st.error(f"Polygon error: {str(e)}")
         return pd.DataFrame()
@@ -66,7 +70,6 @@ def get_stock_data_alpha(ticker: str) -> pd.DataFrame:
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data_iex(ticker: str) -> pd.DataFrame:
     try:
-        from iexfinance.refdata import get_symbols
         data = iex.Stock(ticker, token=IEX_API_KEY).get_chart(range='1m', chartByDay=True)
         df = pd.DataFrame(data)
         if df.empty:
@@ -79,19 +82,16 @@ def get_stock_data_iex(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
+    if df.empty or 'Close' not in df.columns:
         return df
     df = df.copy()
     close = df['Close'].astype(float)
     if len(close) >= 9:
-        ema_9 = pd.Series(EMAIndicator(close=close, window=9).ema_indicator())
-        df['EMA_9'] = ema_9
+        df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
     if len(close) >= 20:
-        ema_20 = pd.Series(EMAIndicator(close=close, window=20).ema_indicator())
-        df['EMA_20'] = ema_20
+        df['EMA_20'] = EMAIndicator(close=close, window=20).ema_indicator()
     if len(close) >= 14:
-        rsi = pd.Series(RSIIndicator(close=close, window=14).rsi())
-        df['RSI'] = rsi
+        df['RSI'] = RSIIndicator(close=close, window=14).rsi()
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
     vwap = (typical_price * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['VWAP'] = vwap
@@ -101,25 +101,35 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_options_data_polygon(ticker: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     try:
-        calls = pd.DataFrame()
-        puts = pd.DataFrame()
+        calls = pd.DataFrame(columns=['strike_price', 'delta', 'gamma', 'theta', 'vega', 'last_price', 'volume', 'open_interest'])
+        puts = pd.DataFrame(columns=['strike_price', 'delta', 'gamma', 'theta', 'vega', 'last_price', 'volume', 'open_interest'])
         options = polygon_client.get_options_contracts(ticker, limit=1000)
         for opt in options:
-            if opt['contract_type'] == 'call':
-                calls = pd.concat([calls, pd.DataFrame([opt])])
-            elif opt['contract_type'] == 'put':
-                puts = pd.concat([puts, pd.DataFrame([opt])])
+            data = {
+                'strike_price': opt.get('strike_price', np.nan),
+                'delta': opt.get('greeks', {}).get('delta', np.nan),
+                'gamma': opt.get('greeks', {}).get('gamma', np.nan),
+                'theta': opt.get('greeks', {}).get('theta', np.nan),
+                'vega': opt.get('greeks', {}).get('vega', np.nan),
+                'last_price': opt.get('last_price', np.nan),
+                'volume': opt.get('volume', 0),
+                'open_interest': opt.get('open_interest', 0)
+            }
+            if opt.get('contract_type') == 'call':
+                calls = pd.concat([calls, pd.DataFrame([data])], ignore_index=True)
+            elif opt.get('contract_type') == 'put':
+                puts = pd.concat([puts, pd.DataFrame([data])], ignore_index=True)
         return calls, puts
     except Exception as e:
         st.error(f"Polygon options error: {str(e)}")
         return pd.DataFrame(), pd.DataFrame()
 
 def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dict:
-    if stock_df.empty or pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')) or pd.isna(option.get('vega')):
+    if stock_df.empty or any(pd.isna(option.get(greek)) for greek in ['delta', 'gamma', 'theta', 'vega']):
         return {'signal': False, 'reason': 'Insufficient data'}
     latest = stock_df.iloc[-1]
-    delta, gamma, theta, vega = float(option['delta']), float(option['gamma']), float(option['theta']), float(option['vega'])
-    close, ema_9, ema_20, rsi, vwap, volume, avg_vol = (float(latest.get(col, np.nan)) for col in ['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'Volume', 'avg_vol'])
+    delta, gamma, theta, vega = [float(option.get(g, np.nan)) for g in ['delta', 'gamma', 'theta', 'vega']]
+    close, ema_9, ema_20, rsi, vwap, volume, avg_vol = [float(latest.get(col, np.nan)) for col in ['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'Volume', 'avg_vol']]
     thresholds = SIGNAL_THRESHOLDS[side]
     conditions = [
         (delta >= thresholds['delta_min'] if side == 'call' else delta <= thresholds['delta_max'], f"Delta {'>=' if side == 'call' else '<='} {thresholds['delta_min' if side == 'call' else 'delta_max']}", delta),
@@ -146,7 +156,7 @@ def color_signal(val):
 
 # Interface
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced with Polygon.io, Alpha Vantage, and IEX Cloud for real-time and extended data.**")
+st.markdown(f"**Real-time analysis as of {datetime.datetime.now().strftime('%I:%M %p %z on %B %d, %Y')}. Enhanced with Polygon.io, Alpha Vantage, and IEX Cloud.**")
 
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0
@@ -173,9 +183,15 @@ with st.sidebar:
 ticker = st.text_input("Enter Ticker", value="QQQ").upper()
 if ticker:
     col1, col2, col3 = st.columns([3, 1, 1])
-    with col1: st.subheader(f"📊 {ticker} Analysis")
-    with col2: if st.button("🔄 Refresh"): st.rerun()
-    with col3: if st.button("🗑️ Clear Cache"): st.cache_data.clear(); st.success("Cache cleared!")
+    with col1:
+        st.subheader(f"📊 {ticker} Analysis")
+    with col2:
+        if st.button("🔄 Refresh"):
+            st.rerun()
+    with col3:
+        if st.button("🗑️ Clear Cache"):
+            st.cache_data.clear()
+            st.success("Cache cleared!")
 
     if enable_auto_refresh and time.time() - st.session_state.last_auto_refresh >= refresh_interval:
         st.session_state.last_auto_refresh = time.time()
@@ -188,12 +204,13 @@ if ticker:
     col1, col2 = st.columns([2, 1])
     with col1:
         st.subheader("📊 Signals Dashboard")
+        # Aggregate data from multiple sources
         df_poly = get_stock_data_polygon(ticker)
         df_alpha = get_stock_data_alpha(ticker)
         df_iex = get_stock_data_iex(ticker)
-        df = pd.concat([df_poly, df_alpha, df_iex]).drop_duplicates().sort_index()
+        df = pd.concat([df for df in [df_poly, df_alpha, df_iex] if not df.empty]).drop_duplicates(subset=['timestamp' if 'timestamp' in df.columns else 'date']).sort_index()
         if df.empty:
-            st.error("No stock data available.")
+            st.error("No stock data available from any source.")
         else:
             df = compute_indicators(df)
             current_price = df['Close'].iloc[-1]
@@ -203,39 +220,38 @@ if ticker:
             if calls.empty and puts.empty:
                 st.error("No options data available.")
             else:
-                strike_range = st.slider("Strike Range ($)", -50, 50, (-10, 10), 1)
-                min_strike, max_strike = current_price + strike_range[0], current_price + strike_range[1]
-                calls = calls[(calls['strike_price'] >= min_strike) & (calls['strike_price'] <= max_strike)]
-                puts = puts[(puts['strike_price'] >= min_strike) & (puts['strike_price'] <= max_strike)]
-
+                # Process all options without initial filtering to capture all opportunities
                 for side, df_options in [('call', calls), ('put', puts)]:
                     if not df_options.empty:
                         signals = [generate_signal(row, side, df) for _, row in df_options.iterrows()]
                         signal_df = pd.DataFrame(signals, index=df_options.index)
                         signal_df['signal'] = signal_df['signal']
-                        if signal_df['signal'].any():
-                            st.dataframe(signal_df[signal_df['signal']][['signal'] + [c[0] for c in signal_df['conditions'][0]]].style.applymap(color_signal, subset=['signal']), use_container_width=True)
-                            st.success(f"{sum(signal_df['signal'])} {side} signals found!")
+                        if not signal_df.empty:
+                            # Display all signals that meet criteria
+                            st.dataframe(signal_df[signal_df['signal']][['signal'] + [c[0] for c in signal_df['conditions'].iloc[0]]].style.applymap(color_signal, subset=['signal']), use_container_width=True)
+                            st.success(f"{sum(signal_df['signal'])} {side} signals found across all opportunities!")
                         else:
-                            st.info(f"No {side} signals.")
+                            st.info(f"No {side} signals generated.")
 
     with col2:
         st.subheader("📈 Visualizations")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close'))
-        fig.add_trace(go.Scatter(x=df.index, y=df['EMA_9'], name='EMA 9'))
-        fig.add_trace(go.Scatter(x=df.index, y=df['EMA_20'], name='EMA 20'))
-        fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], name='VWAP'))
-        st.plotly_chart(fig, use_container_width=True)
+        if not df.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close'))
+            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_9'], name='EMA 9'))
+            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_20'], name='EMA 20'))
+            fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], name='VWAP'))
+            st.plotly_chart(fig, use_container_width=True)
 
-        # Heatmap for signal strength
-        if 'signal_df' in locals():
-            heat_data = signal_df[['signal'] + [c[0] for c in signal_df['conditions'][0]]].mean()
-            fig_heat = go.Figure(data=go.Heatmap(z=heat_data.values, x=heat_data.index, colorscale='Viridis'))
-            st.plotly_chart(fig_heat, use_container_width=True)
+            # Heatmap for signal strength (if signals exist)
+            if 'signal_df' in locals() and not signal_df.empty:
+                heat_data = signal_df[['signal'] + [c[0] for c in signal_df['conditions'].iloc[0]]].mean()
+                fig_heat = go.Figure(data=go.Heatmap(z=heat_data.values, x=heat_data.index, colorscale='Viridis'))
+                st.plotly_chart(fig_heat, use_container_width=True)
 
     st.markdown(fetch_headlines(ticker))
-    st.button("📩 Feedback", on_click=lambda: st.success("Feedback noted!"))
+    if st.button("📩 Feedback"):
+        st.success("Feedback noted!")
 
 else:
     st.info("Enter a ticker to start.")
@@ -244,6 +260,6 @@ else:
         **Steps:**
         1. Enter a ticker (e.g., QQQ, SPY)
         2. Adjust thresholds in sidebar
-        3. Use filters for strikes
+        3. Review signals for all opportunities
         **Signals:** Based on Delta, Gamma, Theta, Vega, RSI, Volume
         """)
