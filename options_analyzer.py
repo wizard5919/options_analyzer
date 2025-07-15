@@ -44,23 +44,27 @@ CONFIG = {
 
 SIGNAL_THRESHOLDS = {
     'call': {
-        'delta_base': 0.6,
+        'delta_base': 0.5,  # Reduced from 0.6 to catch more signals
         'delta_vol_multiplier': 0.1,
-        'gamma_base': 0.08,
+        'gamma_base': 0.05,  # Reduced from 0.08 to catch more signals
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'volume_multiplier_base': 1.3,
+        'rsi_min': 50,  # ADDED MISSING THRESHOLD
+        'rsi_max': 50,  # ADDED MISSING THRESHOLD
+        'volume_multiplier_base': 1.0,  # Reduced from 1.3 to catch more signals
         'volume_vol_multiplier': 0.3
     },
     'put': {
-        'delta_base': -0.6,
+        'delta_base': -0.5,  # Reduced from -0.6 to catch more signals
         'delta_vol_multiplier': 0.1,
-        'gamma_base': 0.08,
+        'gamma_base': 0.05,  # Reduced from 0.08 to catch more signals
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'volume_multiplier_base': 1.3,
+        'rsi_min': 50,  # ADDED MISSING THRESHOLD
+        'rsi_max': 50,  # ADDED MISSING THRESHOLD
+        'volume_multiplier_base': 1.0,  # Reduced from 1.3 to catch more signals
         'volume_vol_multiplier': 0.3
     }
 }
@@ -703,20 +707,22 @@ with st.sidebar:
     
     with col1:
         st.write("**Calls**")
-        SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Base Delta", 0.1, 1.0, 0.6, 0.1)
-        SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Base Gamma", 0.01, 0.2, 0.08, 0.01)
+        SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Base Delta", 0.1, 1.0, 0.5, 0.1)
+        SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Base Gamma", 0.01, 0.2, 0.05, 0.01)
         SIGNAL_THRESHOLDS['call']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)  # ADDED
     
     with col2:
         st.write("**Puts**")
-        SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta ", -1.0, -0.1, -0.6, 0.1)
-        SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.08, 0.01)
+        SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta ", -1.0, -0.1, -0.5, 0.1)
+        SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
         SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)  # ADDED
     
     # Common thresholds
     st.write("**Common**")
     SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.3, 0.1)
+    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.0, 0.1)
     
     # Dynamic threshold parameters
     st.subheader("📈 Dynamic Threshold Parameters")
