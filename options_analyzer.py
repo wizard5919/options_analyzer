@@ -9,7 +9,11 @@ from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
-import pytz  # For timezone handling
+import pytz
+import re
+from scipy.stats import norm
+from math import log, sqrt, exp
+from datetime import datetime as dt
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -389,13 +393,27 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
             puts['expiry'] = expiry
             
             # Validate required columns exist
-            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest', 'delta', 'gamma', 'theta']
+            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
             
             for df_name, df in [('calls', calls), ('puts', puts)]:
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 if missing_cols:
                     st.warning(f"Missing columns in {df_name} for {expiry}: {missing_cols}")
-                    continue
+                    # Add placeholder Greeks so we can calculate them later
+                    if 'delta' not in df.columns:
+                        df['delta'] = np.nan
+                    if 'gamma' not in df.columns:
+                        df['gamma'] = np.nan
+                    if 'theta' not in df.columns:
+                        df['theta'] = np.nan
+                else:
+                    # Ensure Greeks are present
+                    if 'delta' not in df.columns:
+                        df['delta'] = np.nan
+                    if 'gamma' not in df.columns:
+                        df['gamma'] = np.nan
+                    if 'theta' not in df.columns:
+                        df['theta'] = np.nan
             
             all_calls = pd.concat([all_calls, calls], ignore_index=True)
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
@@ -436,9 +454,69 @@ def classify_moneyness(strike: float, spot: float) -> str:
         else:
             return 'OTM'
 
-def validate_option_data(option: pd.Series) -> bool:
+def black_scholes_greeks(S, K, T, r, sigma, option_type):
+    """Calculate option Greeks using Black-Scholes model"""
+    if T <= 0:
+        return 0, 0, 0
+    
+    d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
+    d2 = d1 - sigma * sqrt(T)
+    
+    if option_type == 'call':
+        delta = norm.cdf(d1)
+        gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
+        theta = - (S * norm.pdf(d1) * sigma) / (2 * sqrt(T)) - r * K * exp(-r * T) * norm.cdf(d2)
+    else:  # put
+        delta = norm.cdf(d1) - 1
+        gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
+        theta = - (S * norm.pdf(d1) * sigma) / (2 * sqrt(T)) + r * K * exp(-r * T) * norm.cdf(-d2)
+    
+    return delta, gamma, theta
+
+def calculate_greeks(option: pd.Series, spot_price: float, risk_free_rate: float = 0.01) -> Tuple[float, float, float]:
+    """Calculate Greeks if they're missing from the data"""
+    # Only calculate if we have implied volatility
+    if pd.isna(option.get('impliedVolatility')):
+        return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
+    
+    try:
+        # Parse expiration date from option symbol
+        symbol = option['contractSymbol']
+        expiry_match = re.search(r'\d{6}', symbol)
+        if not expiry_match:
+            return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
+        
+        expiry_str = expiry_match.group(0)
+        expiry_date = dt.strptime(expiry_str, '%y%m%d')
+        
+        # Calculate time to expiration in years
+        now = dt.now()
+        T = (expiry_date - now).total_seconds() / (365 * 24 * 3600)
+        
+        # Skip if expiration is in the past
+        if T <= 0:
+            return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
+        
+        # Get parameters
+        S = spot_price
+        K = option['strike']
+        sigma = option['impliedVolatility']
+        option_type = 'call' if option['contractSymbol'].startswith('C') else 'put'
+        
+        # Calculate Greeks
+        delta, gamma, theta = black_scholes_greeks(S, K, T, risk_free_rate, sigma, option_type)
+        
+        # Adjust theta to be positive for decay
+        theta = abs(theta) if theta < 0 else -theta
+        
+        return delta, gamma, theta
+        
+    except Exception:
+        return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
+
+def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     """Validate that option has required data for analysis"""
-    required_fields = ['delta', 'gamma', 'theta', 'strike', 'lastPrice', 'volume']
+    required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
     
     for field in required_fields:
         if field not in option or pd.isna(option[field]):
@@ -448,9 +526,20 @@ def validate_option_data(option: pd.Series) -> bool:
     if option['lastPrice'] <= 0:
         return False
     
+    # Calculate Greeks if missing
+    if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
+        delta, gamma, theta = calculate_greeks(option, spot_price)
+        option['delta'] = delta
+        option['gamma'] = gamma
+        option['theta'] = theta
+    
+    # Check Greeks are valid
+    if pd.isna(option['delta']) or pd.isna(option['gamma']) or pd.isna(option['theta']):
+        return False
+    
     return True
 
-def calculate_dynamic_thresholds(stock_data: pd.Series, side: str) -> Dict[str, float]:
+def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool) -> Dict[str, float]:
     """Calculate dynamic thresholds with enhanced volatility response"""
     thresholds = SIGNAL_THRESHOLDS[side].copy()
     
@@ -491,21 +580,35 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str) -> Dict[str, 
         thresholds['volume_multiplier'] *= 0.6  # Relax volume requirement
         thresholds['gamma_min'] *= 0.8  # Slightly relax gamma in early market
     
+    # Special handling for 0DTE options
+    if is_0dte:
+        # Relax thresholds for 0DTE options
+        thresholds['volume_multiplier'] *= 0.7  # Relax volume requirement
+        thresholds['gamma_min'] *= 0.7  # Relax gamma requirement
+        
+        if side == 'call':
+            thresholds['delta_min'] = max(0.4, thresholds['delta_min'])
+        else:
+            thresholds['delta_max'] = min(-0.4, thresholds['delta_max'])
+    
     return thresholds
 
-def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dict:
+def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
     """Generate trading signal with detailed analysis using dynamic thresholds"""
     if stock_df.empty:
         return {'signal': False, 'reason': 'No stock data available'}
     
-    if not validate_option_data(option):
+    # Get current price for validation
+    current_price = stock_df.iloc[-1]['Close']
+    
+    if not validate_option_data(option, current_price):
         return {'signal': False, 'reason': 'Insufficient option data'}
     
     latest = stock_df.iloc[-1]
     
     try:
         # Calculate DYNAMIC thresholds based on current market conditions
-        thresholds = calculate_dynamic_thresholds(latest, side)
+        thresholds = calculate_dynamic_thresholds(latest, side, is_0dte)
         
         # Extract option Greeks
         delta = float(option['delta'])
@@ -771,7 +874,7 @@ if ticker:
                 with col2:
                     st.caption(f"**Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | "
                               f"Γ ≥ {SIGNAL_THRESHOLDS['put']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THRESHOLDS['put']['volume_multiplier_base']:.1f}x")
+                              f"Vol > {SIGNAL_THREShOLDS['put']['volume_multiplier_base']:.1f}x")
                 
                 # Get options expiries
                 expiries = get_options_expiries(ticker)
@@ -801,6 +904,10 @@ if ticker:
                 if calls.empty and puts.empty:
                     st.error("No options data available.")
                     st.stop()
+                
+                # Identify 0DTE options
+                for df in [calls, puts]:
+                    df['is_0dte'] = df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
                 
                 # Strike range filter - narrowed to ±5
                 strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-5, 5), 1)
@@ -837,12 +944,14 @@ if ticker:
                     if not calls_filtered.empty:
                         call_signals = []
                         for _, row in calls_filtered.iterrows():
-                            signal_result = generate_signal(row, "call", df)
+                            is_0dte = row.get('is_0dte', False)
+                            signal_result = generate_signal(row, "call", df, is_0dte)
                             if signal_result['signal']:
                                 row_dict = row.to_dict()
                                 row_dict['signal_score'] = signal_result['score']
                                 row_dict['thresholds'] = signal_result['thresholds']
                                 row_dict['passed_conditions'] = signal_result['passed_conditions']
+                                row_dict['is_0dte'] = is_0dte
                                 call_signals.append(row_dict)
                         
                         if call_signals:
@@ -851,7 +960,7 @@ if ticker:
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
                             # Display key columns
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score', 'is_0dte']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
                             st.dataframe(
@@ -887,7 +996,8 @@ if ticker:
                             # Show why the top option didn't qualify
                             if not calls_filtered.empty:
                                 sample_call = calls_filtered.iloc[0]
-                                result = generate_signal(sample_call, "call", df)
+                                is_0dte = sample_call.get('is_0dte', False)
+                                result = generate_signal(sample_call, "call", df, is_0dte)
                                 if result and 'failed_conditions' in result:
                                     st.write("Top call option failed conditions:")
                                     for condition in result['failed_conditions']:
@@ -900,12 +1010,14 @@ if ticker:
                     if not puts_filtered.empty:
                         put_signals = []
                         for _, row in puts_filtered.iterrows():
-                            signal_result = generate_signal(row, "put", df)
+                            is_0dte = row.get('is_0dte', False)
+                            signal_result = generate_signal(row, "put", df, is_0dte)
                             if signal_result['signal']:
                                 row_dict = row.to_dict()
                                 row_dict['signal_score'] = signal_result['score']
                                 row_dict['thresholds'] = signal_result['thresholds']
                                 row_dict['passed_conditions'] = signal_result['passed_conditions']
+                                row_dict['is_0dte'] = is_0dte
                                 put_signals.append(row_dict)
                         
                         if put_signals:
@@ -914,7 +1026,7 @@ if ticker:
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
                             # Display key columns
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score', 'is_0dte']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
                             st.dataframe(
@@ -950,7 +1062,8 @@ if ticker:
                             # Show why the top option didn't qualify
                             if not puts_filtered.empty:
                                 sample_put = puts_filtered.iloc[0]
-                                result = generate_signal(sample_put, "put", df)
+                                is_0dte = sample_put.get('is_0dte', False)
+                                result = generate_signal(sample_put, "put", df, is_0dte)
                                 if result and 'failed_conditions' in result:
                                     st.write("Top put option failed conditions:")
                                     for condition in result['failed_conditions']:
@@ -1031,7 +1144,8 @@ if ticker:
             st.write("**Sample Call Analysis:**")
             sample_call = calls_filtered.iloc[0]
             if 'df' in locals():
-                result = generate_signal(sample_call, "call", df)
+                is_0dte = sample_call.get('is_0dte', False)
+                result = generate_signal(sample_call, "call", df, is_0dte)
                 st.json(result)
         
         st.write("**Current Signal Thresholds:**")
