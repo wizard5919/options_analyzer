@@ -303,78 +303,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     except Exception as e:
         st.error(f"Error in compute_indicators: {str(e)}")
         return pd.DataFrame()
-        
-        # Ensure data types are correct
-        for col in required_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Remove any remaining NaN values
-        df = df.dropna(subset=required_cols)
-        
-        if df.empty:
-            return df
-        
-        # Extract series for calculations
-        close = df['Close'].astype(float)
-        high = df['High'].astype(float)
-        low = df['Low'].astype(float)
-        volume = df['Volume'].astype(float)
-
-        # Calculate indicators with minimum data requirements
-        try:
-            # EMA indicators
-            if len(close) >= 9:
-                ema_9 = EMAIndicator(close=close, window=9)
-                df['EMA_9'] = ema_9.ema_indicator()
-            else:
-                df['EMA_9'] = np.nan
-                
-            if len(close) >= 20:
-                ema_20 = EMAIndicator(close=close, window=20)
-                df['EMA_20'] = ema_20.ema_indicator()
-            else:
-                df['EMA_20'] = np.nan
-                
-            # RSI
-            if len(close) >= 14:
-                rsi = RSIIndicator(close=close, window=14)
-                df['RSI'] = rsi.rsi()
-            else:
-                df['RSI'] = np.nan
-
-            # VWAP
-            typical_price = (high + low + close) / 3
-            vwap_cumsum = (volume * typical_price).cumsum()
-            volume_cumsum = volume.cumsum()
-            
-            # Avoid division by zero
-            df['VWAP'] = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
-            
-            # Average Volume
-            window_size = min(20, len(volume))
-            if window_size > 1:
-                df['avg_vol'] = volume.rolling(window=window_size, min_periods=1).mean()
-            else:
-                df['avg_vol'] = volume.mean()
-                
-            # ATR for volatility measurement
-            if len(close) >= 14:
-                atr = AverageTrueRange(high=high, low=low, close=close, window=14)
-                df['ATR'] = atr.average_true_range()
-                df['ATR_pct'] = df['ATR'] / close  # ATR as % of price
-            else:
-                df['ATR'] = np.nan
-                df['ATR_pct'] = np.nan
-                
-        except Exception as e:
-            st.error(f"Error computing indicators: {str(e)}")
-            return pd.DataFrame()
-        
-        return df
-        
-    except Exception as e:
-        st.error(f"Error in compute_indicators: {str(e)}")
-        return pd.DataFrame()
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_options_expiries(ticker: str) -> List[str]:
@@ -385,7 +313,7 @@ def get_options_expiries(ticker: str) -> List[str]:
         return list(expiries) if expiries else []
     except Exception as e:
         error_msg = str(e)
-        if "Too Many Requests" in  "rate limit" in error_msg.lower():
+        if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
             st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
             st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
         else:
@@ -680,7 +608,10 @@ with st.sidebar:
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
-col1, col2, col3 = st.columns(3)
+if ticker:
+    # Create four columns: for market status, current price, last updated, and refresh button
+    col1, col2, col3, col4 = st.columns(4)
+    
     with col1:
         if is_market_open():
             st.success("✅ Market is OPEN")
@@ -694,41 +625,34 @@ col1, col2, col3 = st.columns(3)
         st.metric("Current Price", f"${current_price:.2f}")
     
     with col3:
-        # Show last update timestamp
         st.caption(f"📅 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     with col4:
-        # Show refresh status
-        if enable_auto_refresh:
-            current_time = time.time()
-            time_elapsed = current_time - st.session_state.last_auto_refresh
-            remaining = max(0, refresh_interval - int(time_elapsed))
-            if remaining > 0:
-                st.info(f"⏱️ {remaining}s")
-            else:
-                st.success("🔄 Refreshing...")
-
-    # Auto-refresh logic
+        st.write("")  # for alignment
+        st.write("")
+        manual_refresh = st.button("🔄 Refresh Now", key="manual_refresh")
+    
+    # Auto-refresh and manual refresh logic
     if enable_auto_refresh:
         current_time = time.time()
         time_elapsed = current_time - st.session_state.last_auto_refresh
-        if time_elapsed >= refresh_interval:
+        remaining = max(0, refresh_interval - int(time_elapsed))
+        if remaining > 0:
+            st.info(f"⏱️ Next refresh in {remaining}s")
+        else:
+            st.success("🔄 Refreshing...")
             st.session_state.last_auto_refresh = current_time
             st.session_state.refresh_counter += 1
-            st.rerun()  # No need to clear cache here
+            st.rerun()
     
-    # Manual refresh
     if manual_refresh:
         st.cache_data.clear()
         st.session_state.last_auto_refresh = time.time()
+        st.session_state.refresh_counter += 1
         st.rerun()
     
-    # Show last update timestamp and refresh count
-    col1, col2 = st.columns(2)
-    with col1:
-        st.caption(f"📅 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    with col2:
-        st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
+    # Show refresh count
+    st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 
     # Create tabs for better organization
     tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
@@ -908,15 +832,16 @@ col1, col2, col3 = st.columns(3)
             st.error(f"An error occurred: {str(e)}")
             st.error("Please refresh the page and try again.")
     
-  with tab2:
-    if 'df' in locals() and not df.empty:
-        st.subheader("📊 Stock Data & Indicators")
-        
-        # Display market session info
-        if is_premarket():
-            st.info("🔔 Currently showing premarket data")
-        elif not is_market_open():
-            st.info("🔔 Showing after-hours data")
+    with tab2:
+        if 'df' in locals() and not df.empty:
+            st.subheader("📊 Stock Data & Indicators")
+            
+            # Display market session info
+            if is_premarket():
+                st.info("🔔 Currently showing premarket data")
+            elif not is_market_open():
+                st.info("🔔 Showing after-hours data")
+            
             # Display latest values
             latest = df.iloc[-1]
             
@@ -958,7 +883,7 @@ col1, col2, col3 = st.columns(3)
             display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'ATR_pct', 'Volume']].round(2)
             display_df['ATR_pct'] = display_df['ATR_pct'] * 100  # Convert to percentage
             st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%'}), use_container_width=True)
-        
+    
     with tab3:
         st.subheader("🔍 Analysis Details")
         
