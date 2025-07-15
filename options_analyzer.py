@@ -44,7 +44,7 @@ SIGNAL_THRESHOLDS = {
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'volume_multiplier_base': 1.5,
+        'volume_multiplier_base': 1.3,  # Changed from 1.5 to 1.3
         'volume_vol_multiplier': 0.3
     },
     'put': {
@@ -54,7 +54,7 @@ SIGNAL_THRESHOLDS = {
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'volume_multiplier_base': 1.5,
+        'volume_multiplier_base': 1.3,  # Changed from 1.5 to 1.3
         'volume_vol_multiplier': 0.3
     }
 }
@@ -87,6 +87,18 @@ def is_premarket() -> bool:
         return False
     
     return CONFIG['PREMARKET_START'] <= now_time < CONFIG['MARKET_OPEN']
+
+def is_early_market() -> bool:
+    """Check if we're in the first 30 minutes of market open"""
+    if not is_market_open():
+        return False
+    
+    eastern = pytz.timezone('US/Eastern')
+    now = datetime.datetime.now(eastern)
+    market_open_today = datetime.datetime.combine(now.date(), CONFIG['MARKET_OPEN'])
+    market_open_today = eastern.localize(market_open_today)
+    
+    return (now - market_open_today).total_seconds() < 1800  # First 30 minutes
 
 def get_current_price(ticker: str) -> float:
     """Get the most current price including premarket"""
@@ -438,6 +450,14 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str) -> Dict[str, 
         # Stronger downtrend allows higher RSI threshold
         thresholds['rsi_max'] = min(60, max(30, thresholds['rsi_base'] + (slope_pct * 500)))
     
+    # Apply early market adjustments
+    if is_premarket() or is_early_market():
+        if side == 'call':
+            thresholds['delta_min'] = 0.40  # Lower call delta threshold
+        else:
+            thresholds['delta_max'] = -0.40  # Higher put delta threshold
+        thresholds['volume_multiplier'] *= 0.7  # Relax volume requirement
+    
     return thresholds
 
 def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dict:
@@ -581,7 +601,7 @@ with st.sidebar:
     # Common thresholds
     st.write("**Common**")
     SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
+    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.3, 0.1)  # Changed default to 1.3
     
     # Dynamic threshold parameters
     st.subheader("📈 Dynamic Threshold Parameters")
@@ -699,7 +719,7 @@ if ticker:
                     st.stop()
                 
                 # Expiry selection
-                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"])
+                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=1)  # Default to all near-term
                 
                 today = datetime.date.today()
                 if expiry_mode == "0DTE Only":
@@ -720,8 +740,8 @@ if ticker:
                     st.error("No options data available.")
                     st.stop()
                 
-                # Strike range filter
-                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-10, 10), 1)
+                # Strike range filter - narrowed to ±5
+                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-5, 5), 1)
                 min_strike = current_price + strike_range[0]
                 max_strike = current_price + strike_range[1]
                 
@@ -937,12 +957,13 @@ else:
         5. Filter by moneyness (ITM, ATM, OTM)
         6. Review generated signals
         
-        **Dynamic Threshold Features:**
-        - Greeks thresholds adjust based on market volatility (ATR%)
-        - Delta requirements expand during high volatility
-        - Gamma requirements increase with market turbulence
-        - Volume thresholds scale with volatility
-        - RSI thresholds adapt to trend strength
+        **Key Improvements:**
+        - More responsive delta thresholds (0.6/-0.6)
+        - Higher gamma thresholds (0.08) for meaningful options
+        - Relaxed volume requirements (1.3x) especially in early market
+        - Narrowed strike range (±5) around current price
+        - Volatility-based dynamic adjustments
+        - Special handling for early market conditions
         
         **Refresh Features:**
         - **Auto-refresh:** Automatically updates data at set intervals
