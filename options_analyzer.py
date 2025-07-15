@@ -40,33 +40,40 @@ CONFIG = {
         'low': 0.015,
         'medium': 0.03,
         'high': 0.05
+    },
+    'PROFIT_TARGETS': {
+        'call': 0.15,  # 15% profit target
+        'put': 0.15,   # 15% profit target
+        'stop_loss': 0.08  # 8% stop loss
     }
 }
 
 SIGNAL_THRESHOLDS = {
     'call': {
-        'delta_base': 0.5,  # Reduced from 0.6 to catch more signals
+        'delta_base': 0.5,
         'delta_vol_multiplier': 0.1,
-        'gamma_base': 0.05,  # Reduced from 0.08 to catch more signals
+        'gamma_base': 0.05,
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'rsi_min': 50,  # ADDED MISSING THRESHOLD
-        'rsi_max': 50,  # ADDED MISSING THRESHOLD
-        'volume_multiplier_base': 1.0,  # Reduced from 1.3 to catch more signals
-        'volume_vol_multiplier': 0.3
+        'rsi_min': 50,
+        'rsi_max': 50,
+        'volume_multiplier_base': 1.0,
+        'volume_vol_multiplier': 0.3,
+        'volume_min': 1000  # Minimum volume threshold
     },
     'put': {
-        'delta_base': -0.5,  # Reduced from -0.6 to catch more signals
+        'delta_base': -0.5,
         'delta_vol_multiplier': 0.1,
-        'gamma_base': 0.05,  # Reduced from 0.08 to catch more signals
+        'gamma_base': 0.05,
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'rsi_min': 50,  # ADDED MISSING THRESHOLD
-        'rsi_max': 50,  # ADDED MISSING THRESHOLD
-        'volume_multiplier_base': 1.0,  # Reduced from 1.3 to catch more signals
-        'volume_vol_multiplier': 0.3
+        'rsi_min': 50,
+        'rsi_max': 50,
+        'volume_multiplier_base': 1.0,
+        'volume_vol_multiplier': 0.3,
+        'volume_min': 1000  # Minimum volume threshold
     }
 }
 
@@ -608,6 +615,41 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
     
     return thresholds
 
+def calculate_holding_period(option: pd.Series, spot_price: float) -> str:
+    """Determine optimal holding period based on option characteristics"""
+    # Calculate time to expiration
+    expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
+    days_to_expiry = (expiry_date - datetime.date.today()).days
+    
+    # Determine holding period based on option type and time
+    if days_to_expiry == 0:  # 0DTE
+        return "Intraday (Exit before 3:30 PM)"
+    
+    # Calculate intrinsic value
+    if option['contractSymbol'].startswith('C'):
+        intrinsic_value = max(0, spot_price - option['strike'])
+    else:
+        intrinsic_value = max(0, option['strike'] - spot_price)
+    
+    # Determine holding strategy based on intrinsic value and theta
+    if intrinsic_value > 0:  # In the money
+        if option['theta'] < -0.1:  # High time decay
+            return "1-2 days (Scalp quickly)"
+        else:
+            return "3-5 days (Swing trade)"
+    else:  # Out of the money
+        if days_to_expiry <= 3:
+            return "1 day (Gamma play)"
+        else:
+            return "3-7 days (Wait for move)"
+
+def calculate_profit_targets(option: pd.Series) -> Tuple[float, float]:
+    """Calculate profit targets and stop loss levels"""
+    entry_price = option['lastPrice']
+    profit_target = entry_price * (1 + CONFIG['PROFIT_TARGETS']['call' if option['contractSymbol'].startswith('C') else 'put'])
+    stop_loss = entry_price * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
+    return profit_target, stop_loss
+
 def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
     """Generate trading signal with detailed analysis using dynamic thresholds"""
     if stock_df.empty:
@@ -644,6 +686,9 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
         conditions = []
         
         if side == "call":
+            # Volume condition: Use absolute min volume instead of relative
+            volume_ok = option_volume > thresholds['volume_min']  # Absolute volume threshold
+            
             conditions = [
                 (delta >= thresholds['delta_min'], f"Delta >= {thresholds['delta_min']:.2f}", delta),
                 (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']:.3f}", gamma),
@@ -651,9 +696,12 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']:.1f}", rsi),
                 (vwap is not None and close > vwap, "Price > VWAP", f"{close:.2f} > {vwap:.2f}" if vwap else "N/A"),
-                (option_volume > thresholds['volume_multiplier'] * avg_vol, f"Option Vol > {thresholds['volume_multiplier']:.1f}x avg", f"{option_volume:.0f} > {avg_vol:.0f}")
+                (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f} > {thresholds['volume_min']}")
             ]
         else:  # put
+            # Volume condition: Use absolute min volume instead of relative
+            volume_ok = option_volume > thresholds['volume_min']  # Absolute volume threshold
+            
             conditions = [
                 (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']:.2f}", delta),
                 (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']:.3f}", gamma),
@@ -661,7 +709,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
                 (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (vwap is not None and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
-                (option_volume > thresholds['volume_multiplier'] * avg_vol, f"Option Vol > {thresholds['volume_multiplier']:.1f}x avg", f"{option_volume:.0f} > {avg_vol:.0f}")
+                (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f} > {thresholds['volume_min']}")
             ]
         
         # Check all conditions
@@ -670,12 +718,23 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
         
         signal = all(passed for passed, desc, val in conditions)
         
+        # Calculate profit targets and holding period if signal is valid
+        profit_target = None
+        stop_loss = None
+        holding_period = None
+        if signal:
+            profit_target, stop_loss = calculate_profit_targets(option)
+            holding_period = calculate_holding_period(option, current_price)
+        
         return {
             'signal': signal,
             'passed_conditions': passed_conditions,
             'failed_conditions': failed_conditions,
             'score': len(passed_conditions) / len(conditions),
-            'thresholds': thresholds  # Return thresholds for display
+            'thresholds': thresholds,  # Return thresholds for display
+            'profit_target': profit_target,
+            'stop_loss': stop_loss,
+            'holding_period': holding_period
         }
         
     except Exception as e:
@@ -746,19 +805,27 @@ with st.sidebar:
         SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Base Delta", 0.1, 1.0, 0.5, 0.1)
         SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Base Gamma", 0.01, 0.2, 0.05, 0.01)
         SIGNAL_THRESHOLDS['call']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)  # ADDED
+        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider("Min Volume", 100, 5000, 1000, 100)
     
     with col2:
         st.write("**Puts**")
         SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta ", -1.0, -0.1, -0.5, 0.1)
         SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
         SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)  # ADDED
+        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
     
     # Common thresholds
     st.write("**Common**")
     SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
     SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.0, 0.1)
+    
+    # Profit targets
+    st.subheader("🎯 Profit Targets")
+    CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
+    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
+    CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01)
     
     # Dynamic threshold parameters
     st.subheader("📈 Dynamic Threshold Parameters")
@@ -901,11 +968,11 @@ if ticker:
                 with col1:
                     st.caption(f"**Calls:** Δ ≥ {SIGNAL_THRESHOLDS['call']['delta_base']:.2f} | "
                               f"Γ ≥ {SIGNAL_THRESHOLDS['call']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THRESHOLDS['call']['volume_multiplier_base']:.1f}x")
+                              f"Vol > {SIGNAL_THRESHOLDS['call']['volume_min']}")
                 with col2:
                     st.caption(f"**Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | "
                               f"Γ ≥ {SIGNAL_THRESHOLDS['put']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THRESHOLDS['put']['volume_multiplier_base']:.1f}x")
+                              f"Vol > {SIGNAL_THRESHOLDS['put']['volume_min']}")
                 
                 # Get options expiries
                 expiries = get_options_expiries(ticker)
@@ -983,6 +1050,9 @@ if ticker:
                                 row_dict['thresholds'] = signal_result['thresholds']
                                 row_dict['passed_conditions'] = signal_result['passed_conditions']
                                 row_dict['is_0dte'] = is_0dte
+                                row_dict['profit_target'] = signal_result['profit_target']
+                                row_dict['stop_loss'] = signal_result['stop_loss']
+                                row_dict['holding_period'] = signal_result['holding_period']
                                 call_signals.append(row_dict)
                         
                         if call_signals:
@@ -991,7 +1061,8 @@ if ticker:
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
                             # Display key columns
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score', 'is_0dte']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 
+                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
                             st.dataframe(
@@ -1009,7 +1080,7 @@ if ticker:
                                     f"Γ ≥ {th['gamma_min']:.3f} | "
                                     f"Θ ≤ {th['theta_base']:.3f} | "
                                     f"RSI > {th['rsi_min']:.1f} | "
-                                    f"Vol > {th['volume_multiplier']:.1f}x"
+                                    f"Vol > {th['volume_min']}"
                                 )
                             
                             # Show passed conditions for first signal
@@ -1049,6 +1120,9 @@ if ticker:
                                 row_dict['thresholds'] = signal_result['thresholds']
                                 row_dict['passed_conditions'] = signal_result['passed_conditions']
                                 row_dict['is_0dte'] = is_0dte
+                                row_dict['profit_target'] = signal_result['profit_target']
+                                row_dict['stop_loss'] = signal_result['stop_loss']
+                                row_dict['holding_period'] = signal_result['holding_period']
                                 put_signals.append(row_dict)
                         
                         if put_signals:
@@ -1057,7 +1131,8 @@ if ticker:
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
                             # Display key columns
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score', 'is_0dte']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 
+                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
                             st.dataframe(
@@ -1075,7 +1150,7 @@ if ticker:
                                     f"Γ ≥ {th['gamma_min']:.3f} | "
                                     f"Θ ≤ {th['theta_base']:.3f} | "
                                     f"RSI < {th['rsi_max']:.1f} | "
-                                    f"Vol > {th['volume_multiplier']:.1f}x"
+                                    f"Vol > {th['volume_min']}"
                                 )
                             
                             # Show passed conditions for first signal
@@ -1182,6 +1257,9 @@ if ticker:
         st.write("**Current Signal Thresholds:**")
         st.json(SIGNAL_THRESHOLDS)
         
+        st.write("**Profit Targets:**")
+        st.json(CONFIG['PROFIT_TARGETS'])
+        
         st.write("**System Configuration:**")
         st.json(CONFIG)
 
@@ -1210,12 +1288,14 @@ else:
         
         **Key Improvements:**
         - **Seamless Auto-Refresh:** Data updates automatically at your chosen interval
-        - **Enhanced Volatility Handling:** Better signals during price moves
-        - **Near-The-Money (NTM) Classification:** More precise option categorization
-        - **Early Market Adjustments:** Thresholds adapt to premarket/early market conditions
+        - **Enhanced Volume Detection:** Fixed volume comparison logic
+        - **Profit Targets & Exit Strategy:** Clear profit targets and holding periods
+        - **Early Market Detection:** Special thresholds for premarket/early market
+        - **Volatility-Based Adjustments:** Thresholds adapt to market conditions
         
-        **Refresh Features:**
-        - **Auto-refresh:** Updates data automatically at set intervals
-        - **Manual refresh:** Click "Refresh Now" for immediate updates
-        - **Visual Countdown:** See exactly when next refresh will occur
+        **New Features:**
+        - **Profit Targets:** Set custom profit targets and stop losses
+        - **Holding Period Suggestions:** Intelligent holding period recommendations
+        - **Volume Thresholds:** Minimum volume requirements to filter low-liquidity options
+        - **Diagnostic Details:** Clear reasons why signals fail
         """)
