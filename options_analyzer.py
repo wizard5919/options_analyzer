@@ -8,6 +8,7 @@ import warnings
 from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
+from ta.volatility import AverageTrueRange  # Added for volatility measurement
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -33,18 +34,24 @@ CONFIG = {
 
 SIGNAL_THRESHOLDS = {
     'call': {
-        'delta_min': 0.6,
-        'gamma_min': 0.08,
-        'theta_max': 0.05,
-        'rsi_min': 50,
-        'volume_multiplier': 1.5
+        'delta_base': 0.6,
+        'delta_vol_multiplier': 0.1,
+        'gamma_base': 0.08,
+        'gamma_vol_multiplier': 0.02,
+        'theta_base': 0.05,
+        'rsi_base': 50,
+        'volume_multiplier_base': 1.5,
+        'volume_vol_multiplier': 0.3
     },
     'put': {
-        'delta_max': -0.6,
-        'gamma_min': 0.08,
-        'theta_max': 0.05,
-        'rsi_max': 50,
-        'volume_multiplier': 1.5
+        'delta_base': -0.6,
+        'delta_vol_multiplier': 0.1,
+        'gamma_base': 0.08,
+        'gamma_vol_multiplier': 0.02,
+        'theta_base': 0.05,
+        'rsi_base': 50,
+        'volume_multiplier_base': 1.5,
+        'volume_vol_multiplier': 0.3
     }
 }
 
@@ -195,6 +202,15 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 df['avg_vol'] = volume.mean()
                 
+            # ATR for volatility measurement
+            if len(close) >= 14:
+                atr = AverageTrueRange(high=high, low=low, close=close, window=14)
+                df['ATR'] = atr.average_true_range()
+                df['ATR_pct'] = df['ATR'] / close  # ATR as % of price
+            else:
+                df['ATR'] = np.nan
+                df['ATR_pct'] = np.nan
+                
         except Exception as e:
             st.error(f"Error computing indicators: {str(e)}")
             return pd.DataFrame()
@@ -297,8 +313,44 @@ def validate_option_data(option: pd.Series) -> bool:
     
     return True
 
+def calculate_dynamic_thresholds(stock_data: pd.Series, side: str) -> Dict[str, float]:
+    """Calculate dynamic thresholds based on current volatility and trend"""
+    thresholds = SIGNAL_THRESHOLDS[side].copy()
+    
+    # Get volatility measure (ATR as % of price)
+    volatility = stock_data.get('ATR_pct', 0.02)  # Default to 2% if missing
+    
+    # Adjust delta threshold based on volatility
+    if side == 'call':
+        thresholds['delta_min'] = thresholds['delta_base'] * (1 + thresholds['delta_vol_multiplier'] * volatility * 100)
+    else:
+        thresholds['delta_max'] = thresholds['delta_base'] * (1 + thresholds['delta_vol_multiplier'] * volatility * 100)
+    
+    # Adjust gamma threshold based on volatility
+    thresholds['gamma_min'] = thresholds['gamma_base'] * (1 + thresholds['gamma_vol_multiplier'] * volatility * 100)
+    
+    # Adjust volume multiplier based on volatility
+    thresholds['volume_multiplier'] = thresholds['volume_multiplier_base'] * (1 + thresholds['volume_vol_multiplier'] * volatility * 100)
+    
+    # Adjust RSI based on trend strength (using EMA slope)
+    ema_slope = 0
+    if not pd.isna(stock_data['EMA_9']) and not pd.isna(stock_data['EMA_20']):
+        ema_slope = stock_data['EMA_9'] - stock_data['EMA_20']
+    
+    # Normalize slope to percentage of price
+    slope_pct = ema_slope / stock_data['Close'] if stock_data['Close'] != 0 else 0
+    
+    if side == 'call':
+        # Stronger uptrend allows lower RSI threshold
+        thresholds['rsi_min'] = max(40, min(70, thresholds['rsi_base'] - (slope_pct * 500)))
+    else:
+        # Stronger downtrend allows higher RSI threshold
+        thresholds['rsi_max'] = min(60, max(30, thresholds['rsi_base'] + (slope_pct * 500)))
+    
+    return thresholds
+
 def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dict:
-    """Generate trading signal with detailed analysis"""
+    """Generate trading signal with detailed analysis using dynamic thresholds"""
     if stock_df.empty:
         return {'signal': False, 'reason': 'No stock data available'}
     
@@ -308,6 +360,9 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
     latest = stock_df.iloc[-1]
     
     try:
+        # Calculate DYNAMIC thresholds based on current market conditions
+        thresholds = calculate_dynamic_thresholds(latest, side)
+        
         # Extract option Greeks
         delta = float(option['delta'])
         gamma = float(option['gamma'])
@@ -322,31 +377,28 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
         volume = float(latest['Volume'])
         avg_vol = float(latest['avg_vol']) if not pd.isna(latest['avg_vol']) else volume
         
-        # Get thresholds for the side
-        thresholds = SIGNAL_THRESHOLDS[side]
-        
         # Check conditions based on side
         conditions = []
         
         if side == "call":
             conditions = [
-                (delta >= thresholds['delta_min'], f"Delta >= {thresholds['delta_min']}", delta),
-                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']}", gamma),
-                (theta <= thresholds['theta_max'], f"Theta <= {thresholds['theta_max']}", theta),
+                (delta >= thresholds['delta_min'], f"Delta >= {thresholds['delta_min']:.2f}", delta),
+                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']:.3f}", gamma),
+                (theta <= thresholds['theta_base'], f"Theta <= {thresholds['theta_base']:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
-                (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']}", rsi),
+                (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']:.1f}", rsi),
                 (vwap is not None and close > vwap, "Price > VWAP", f"{close:.2f} > {vwap:.2f}" if vwap else "N/A"),
-                (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']}x avg", f"{volume:.0f} > {avg_vol:.0f}")
+                (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']:.1f}x avg", f"{volume:.0f} > {avg_vol:.0f}")
             ]
         else:  # put
             conditions = [
-                (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']}", delta),
-                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']}", gamma),
-                (theta <= thresholds['theta_max'], f"Theta <= {thresholds['theta_max']}", theta),
+                (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']:.2f}", delta),
+                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']:.3f}", gamma),
+                (theta <= thresholds['theta_base'], f"Theta <= {thresholds['theta_base']:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
-                (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']}", rsi),
+                (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (vwap is not None and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
-                (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']}x avg", f"{volume:.0f} > {avg_vol:.0f}")
+                (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']:.1f}x avg", f"{volume:.0f} > {avg_vol:.0f}")
             ]
         
         # Check all conditions
@@ -359,7 +411,8 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
             'signal': signal,
             'passed_conditions': passed_conditions,
             'failed_conditions': failed_conditions,
-            'score': len(passed_conditions) / len(conditions)
+            'score': len(passed_conditions) / len(conditions),
+            'thresholds': thresholds  # Return thresholds for display
         }
         
     except Exception as e:
@@ -370,7 +423,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
 # =============================
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced robust version** with comprehensive error handling, detailed analysis, and real-time refresh capabilities.")
+st.markdown("**Enhanced robust version** with dynamic Greeks thresholds and volatility-based adjustments")
 
 # Initialize session state for refresh functionality
 if 'refresh_counter' not in st.session_state:
@@ -418,26 +471,56 @@ with st.sidebar:
         refresh_interval = None
     
     # Signal thresholds
-    st.subheader("Signal Thresholds")
+    st.subheader("Base Signal Thresholds")
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.write("**Calls**")
-        SIGNAL_THRESHOLDS['call']['delta_min'] = st.slider("Min Delta", 0.1, 1.0, 0.6, 0.1)
-        SIGNAL_THRESHOLDS['call']['gamma_min'] = st.slider("Min Gamma", 0.01, 0.2, 0.08, 0.01)
-        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Base Delta", 0.1, 1.0, 0.6, 0.1)
+        SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Base Gamma", 0.01, 0.2, 0.08, 0.01)
+        SIGNAL_THRESHOLDS['call']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5)
     
     with col2:
         st.write("**Puts**")
-        SIGNAL_THRESHOLDS['put']['delta_max'] = st.slider("Max Delta", -1.0, -0.1, -0.6, 0.1)
-        SIGNAL_THRESHOLDS['put']['gamma_min'] = st.slider("Min Gamma ", 0.01, 0.2, 0.08, 0.01)
-        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
+        SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta ", -1.0, -0.1, -0.6, 0.1)
+        SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.08, 0.01)
+        SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
     
     # Common thresholds
     st.write("**Common**")
-    SIGNAL_THRESHOLDS['call']['theta_max'] = SIGNAL_THRESHOLDS['put']['theta_max'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_multiplier'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
+    SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
+    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
+    
+    # Dynamic threshold parameters
+    st.subheader("📈 Dynamic Threshold Parameters")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**Call Sensitivities**")
+        SIGNAL_THRESHOLDS['call']['delta_vol_multiplier'] = st.slider(
+            "Delta Vol Sensitivity", 0.0, 0.5, 0.1, 0.01,
+            help="How much Delta threshold adjusts to volatility (higher = more sensitive)"
+        )
+        SIGNAL_THRESHOLDS['call']['gamma_vol_multiplier'] = st.slider(
+            "Gamma Vol Sensitivity", 0.0, 0.5, 0.02, 0.01
+        )
+        
+    with col2:
+        st.write("**Put Sensitivities**")
+        SIGNAL_THRESHOLDS['put']['delta_vol_multiplier'] = st.slider(
+            "Delta Vol Sensitivity ", 0.0, 0.5, 0.1, 0.01
+        )
+        SIGNAL_THRESHOLDS['put']['gamma_vol_multiplier'] = st.slider(
+            "Gamma Vol Sensitivity ", 0.0, 0.5, 0.02, 0.01
+        )
+    
+    # Common parameters
+    st.write("**Volume Sensitivity**")
+    SIGNAL_THRESHOLDS['call']['volume_vol_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_vol_multiplier'] = st.slider(
+        "Volume Vol Multiplier", 0.0, 1.0, 0.3, 0.05,
+        help="How much volume requirement increases with volatility"
+    )
 
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
@@ -514,6 +597,11 @@ if ticker:
                 current_price = df.iloc[-1]['Close']
                 st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**")
                 
+                # Display volatility info
+                atr_pct = df.iloc[-1].get('ATR_pct', 0)
+                if not pd.isna(atr_pct):
+                    st.info(f"📈 Current Volatility (ATR%): {atr_pct*100:.2f}%")
+                
                 # Get options expiries
                 expiries = get_options_expiries(ticker)
                 
@@ -578,6 +666,7 @@ if ticker:
                             if signal_result['signal']:
                                 row_dict = row.to_dict()
                                 row_dict['signal_score'] = signal_result['score']
+                                row_dict['thresholds'] = signal_result['thresholds']
                                 call_signals.append(row_dict)
                         
                         if call_signals:
@@ -595,6 +684,18 @@ if ticker:
                                 hide_index=True
                             )
                             
+                            # Display dynamic thresholds
+                            if signals_df.iloc[0]['thresholds']:
+                                th = signals_df.iloc[0]['thresholds']
+                                st.info(
+                                    f"Applied Thresholds: "
+                                    f"Δ ≥ {th['delta_min']:.2f} | "
+                                    f"Γ ≥ {th['gamma_min']:.3f} | "
+                                    f"Θ ≤ {th['theta_base']:.3f} | "
+                                    f"RSI > {th['rsi_min']:.1f} | "
+                                    f"Vol > {th['volume_multiplier']:.1f}x"
+                                )
+                            
                             st.success(f"Found {len(call_signals)} call signals!")
                         else:
                             st.info("No call signals found matching criteria.")
@@ -610,6 +711,7 @@ if ticker:
                             if signal_result['signal']:
                                 row_dict = row.to_dict()
                                 row_dict['signal_score'] = signal_result['score']
+                                row_dict['thresholds'] = signal_result['thresholds']
                                 put_signals.append(row_dict)
                         
                         if put_signals:
@@ -626,6 +728,18 @@ if ticker:
                                 use_container_width=True,
                                 hide_index=True
                             )
+                            
+                            # Display dynamic thresholds
+                            if signals_df.iloc[0]['thresholds']:
+                                th = signals_df.iloc[0]['thresholds']
+                                st.info(
+                                    f"Applied Thresholds: "
+                                    f"Δ ≤ {th['delta_max']:.2f} | "
+                                    f"Γ ≥ {th['gamma_min']:.3f} | "
+                                    f"Θ ≤ {th['theta_base']:.3f} | "
+                                    f"RSI < {th['rsi_max']:.1f} | "
+                                    f"Vol > {th['volume_multiplier']:.1f}x"
+                                )
                             
                             st.success(f"Found {len(put_signals)} put signals!")
                         else:
@@ -645,7 +759,7 @@ if ticker:
             # Display latest values
             latest = df.iloc[-1]
             
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
                 st.metric("Current Price", f"${latest['Close']:.2f}")
@@ -671,10 +785,18 @@ if ticker:
                 else:
                     st.metric("RSI", "N/A")
             
+            with col5:
+                atr_pct = latest['ATR_pct']
+                if not pd.isna(atr_pct):
+                    st.metric("Volatility (ATR%)", f"{atr_pct*100:.2f}%")
+                else:
+                    st.metric("Volatility", "N/A")
+            
             # Display recent data
             st.subheader("Recent Data")
-            display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'Volume']].round(2)
-            st.dataframe(display_df, use_container_width=True)
+            display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'ATR_pct', 'Volume']].round(2)
+            display_df['ATR_pct'] = display_df['ATR_pct'] * 100  # Convert to percentage
+            st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%'}), use_container_width=True)
         
     with tab3:
         st.subheader("🔍 Analysis Details")
@@ -721,15 +843,12 @@ else:
         5. Filter by moneyness (ITM, ATM, OTM)
         6. Review generated signals
         
-        **Signal Criteria:**
-        - **Calls:** High delta, sufficient gamma, low theta, bullish technicals
-        - **Puts:** Low delta, sufficient gamma, low theta, bearish technicals
-        
-        **Technical Indicators:**
-        - EMA crossovers for trend direction
-        - RSI for momentum
-        - VWAP for intraday sentiment
-        - Volume analysis for confirmation
+        **Dynamic Threshold Features:**
+        - Greeks thresholds adjust based on market volatility (ATR%)
+        - Delta requirements expand during high volatility
+        - Gamma requirements increase with market turbulence
+        - Volume thresholds scale with volatility
+        - RSI thresholds adapt to trend strength
         
         **Refresh Features:**
         - **Auto-refresh:** Automatically updates data at set intervals
