@@ -33,7 +33,12 @@ CONFIG = {
     'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
     'MARKET_OPEN': datetime.time(9, 30),  # 9:30 AM Eastern
     'MARKET_CLOSE': datetime.time(16, 0),  # 4:00 PM Eastern
-    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern
+    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern,
+    'VOLATILITY_THRESHOLDS': {
+        'low': 0.015,
+        'medium': 0.03,
+        'high': 0.05
+    }
 }
 
 SIGNAL_THRESHOLDS = {
@@ -44,7 +49,7 @@ SIGNAL_THRESHOLDS = {
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'volume_multiplier_base': 1.3,  # Changed from 1.5 to 1.3
+        'volume_multiplier_base': 1.3,
         'volume_vol_multiplier': 0.3
     },
     'put': {
@@ -54,7 +59,7 @@ SIGNAL_THRESHOLDS = {
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
-        'volume_multiplier_base': 1.3,  # Changed from 1.5 to 1.3
+        'volume_multiplier_base': 1.3,
         'volume_vol_multiplier': 0.3
     }
 }
@@ -207,6 +212,35 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
         st.error(f"Error fetching stock data: {str(e)}")
         return pd.DataFrame()
 
+def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate more accurate volume averages with separate premarket handling"""
+    if df.empty:
+        return df
+    
+    # Calculate volume averages separately for premarket and regular sessions
+    df['avg_vol'] = np.nan
+    
+    for date, group in df.groupby(df['Datetime'].dt.date):
+        # Regular session
+        regular = group[~group['premarket']]
+        if not regular.empty:
+            # Use expanding average during market hours
+            regular_avg_vol = regular['Volume'].expanding(min_periods=1).mean()
+            df.loc[regular.index, 'avg_vol'] = regular_avg_vol
+        
+        # Premarket session
+        premarket = group[group['premarket']]
+        if not premarket.empty:
+            # Use cumulative average for premarket
+            premarket_avg_vol = premarket['Volume'].expanding(min_periods=1).mean()
+            df.loc[premarket.index, 'avg_vol'] = premarket_avg_vol
+    
+    # Fill any remaining NaN with the overall average
+    overall_avg = df['Volume'].mean()
+    df['avg_vol'] = df['avg_vol'].fillna(overall_avg)
+    
+    return df
+
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Compute technical indicators with comprehensive error handling"""
     if df.empty:
@@ -281,14 +315,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                     volume_cumsum = regular['Volume'].cumsum()
                     regular_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
                     df.loc[regular.index, 'VWAP'] = regular_vwap
-                    
-                    # Calculate average volume for regular session
-                    window_size = min(20, len(regular))
-                    if window_size > 1:
-                        regular_avg_vol = regular['Volume'].rolling(window=window_size, min_periods=1).mean()
-                        df.loc[regular.index, 'avg_vol'] = regular_avg_vol
-                    else:
-                        df.loc[regular.index, 'avg_vol'] = regular['Volume'].mean()
                 
                 # For premarket, use the previous day's close as reference
                 if not premarket.empty:
@@ -301,9 +327,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                     volume_cumsum = premarket['Volume'].cumsum()
                     premarket_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
                     df.loc[premarket.index, 'VWAP'] = premarket_vwap
-                    
-                    # Use premarket volume as avg_vol since we don't have history
-                    df.loc[premarket.index, 'avg_vol'] = premarket['Volume'].mean()
                 
             # ATR for volatility measurement
             if len(close) >= 14:
@@ -317,6 +340,9 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         except Exception as e:
             st.error(f"Error computing indicators: {str(e)}")
             return pd.DataFrame()
+        
+        # Calculate volume averages
+        df = calculate_volume_averages(df)
         
         return df
         
@@ -363,7 +389,7 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
             puts['expiry'] = expiry
             
             # Validate required columns exist
-            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest']
+            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest', 'delta', 'gamma', 'theta']
             
             for df_name, df in [('calls', calls), ('puts', puts)]:
                 missing_cols = [col for col in required_cols if col not in df.columns]
@@ -392,19 +418,27 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
     
     return all_calls, all_puts
 
-def classify_moneyness(strike: float, spot: float, tolerance: float = 0.01) -> str:
-    """Classify option moneyness with tolerance"""
-    ratio = strike / spot
-    if ratio < (1 - tolerance):
-        return 'ITM'
-    elif ratio > (1 + tolerance):
-        return 'OTM'
-    else:
+def classify_moneyness(strike: float, spot: float) -> str:
+    """Classify option moneyness with dynamic ranges"""
+    diff = abs(strike - spot)
+    diff_pct = diff / spot
+    
+    if diff_pct < 0.01:  # Within 1%
         return 'ATM'
+    elif strike < spot:  # Below current price
+        if diff_pct < 0.03:  # 1-3% below
+            return 'NTM'  # Near-the-money
+        else:
+            return 'ITM'
+    else:  # Above current price
+        if diff_pct < 0.03:  # 1-3% above
+            return 'NTM'  # Near-the-money
+        else:
+            return 'OTM'
 
 def validate_option_data(option: pd.Series) -> bool:
     """Validate that option has required data for analysis"""
-    required_fields = ['delta', 'gamma', 'theta', 'strike', 'lastPrice']
+    required_fields = ['delta', 'gamma', 'theta', 'strike', 'lastPrice', 'volume']
     
     for field in required_fields:
         if field not in option or pd.isna(option[field]):
@@ -417,46 +451,45 @@ def validate_option_data(option: pd.Series) -> bool:
     return True
 
 def calculate_dynamic_thresholds(stock_data: pd.Series, side: str) -> Dict[str, float]:
-    """Calculate dynamic thresholds based on current volatility and trend"""
+    """Calculate dynamic thresholds with enhanced volatility response"""
     thresholds = SIGNAL_THRESHOLDS[side].copy()
     
     # Get volatility measure (ATR as % of price)
     volatility = stock_data.get('ATR_pct', 0.02)  # Default to 2% if missing
     
+    # Enhanced volatility multiplier
+    vol_multiplier = 1 + (volatility * 100)
+    
     # Adjust delta threshold based on volatility
     if side == 'call':
-        thresholds['delta_min'] = thresholds['delta_base'] * (1 + thresholds['delta_vol_multiplier'] * volatility * 100)
+        thresholds['delta_min'] = max(0.3, min(0.8, 
+            thresholds['delta_base'] * vol_multiplier
+        ))
     else:
-        thresholds['delta_max'] = thresholds['delta_base'] * (1 + thresholds['delta_vol_multiplier'] * volatility * 100)
+        thresholds['delta_max'] = min(-0.3, max(-0.8, 
+            thresholds['delta_base'] * vol_multiplier
+        ))
     
-    # Adjust gamma threshold based on volatility
-    thresholds['gamma_min'] = thresholds['gamma_base'] * (1 + thresholds['gamma_vol_multiplier'] * volatility * 100)
+    # More responsive gamma adjustment
+    thresholds['gamma_min'] = thresholds['gamma_base'] * (1 + 
+        thresholds['gamma_vol_multiplier'] * (volatility * 200)  # More sensitive to volatility
+    )
     
-    # Adjust volume multiplier based on volatility
-    thresholds['volume_multiplier'] = thresholds['volume_multiplier_base'] * (1 + thresholds['volume_vol_multiplier'] * volatility * 100)
-    
-    # Adjust RSI based on trend strength (using EMA slope)
-    ema_slope = 0
-    if not pd.isna(stock_data['EMA_9']) and not pd.isna(stock_data['EMA_20']):
-        ema_slope = stock_data['EMA_9'] - stock_data['EMA_20']
-    
-    # Normalize slope to percentage of price
-    slope_pct = ema_slope / stock_data['Close'] if stock_data['Close'] != 0 else 0
-    
-    if side == 'call':
-        # Stronger uptrend allows lower RSI threshold
-        thresholds['rsi_min'] = max(40, min(70, thresholds['rsi_base'] - (slope_pct * 500)))
-    else:
-        # Stronger downtrend allows higher RSI threshold
-        thresholds['rsi_max'] = min(60, max(30, thresholds['rsi_base'] + (slope_pct * 500)))
+    # Volume multiplier with floor
+    thresholds['volume_multiplier'] = max(0.8, min(2.5,
+        thresholds['volume_multiplier_base'] * (1 + 
+            thresholds['volume_vol_multiplier'] * (volatility * 150)
+        )
+    ))
     
     # Apply early market adjustments
     if is_premarket() or is_early_market():
         if side == 'call':
-            thresholds['delta_min'] = 0.40  # Lower call delta threshold
+            thresholds['delta_min'] = 0.35  # Lower call delta threshold
         else:
-            thresholds['delta_max'] = -0.40  # Higher put delta threshold
-        thresholds['volume_multiplier'] *= 0.7  # Relax volume requirement
+            thresholds['delta_max'] = -0.35  # Higher put delta threshold
+        thresholds['volume_multiplier'] *= 0.6  # Relax volume requirement
+        thresholds['gamma_min'] *= 0.8  # Slightly relax gamma in early market
     
     return thresholds
 
@@ -478,6 +511,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
         delta = float(option['delta'])
         gamma = float(option['gamma'])
         theta = float(option['theta'])
+        option_volume = float(option['volume'])
         
         # Extract stock data
         close = float(latest['Close'])
@@ -499,7 +533,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']:.1f}", rsi),
                 (vwap is not None and close > vwap, "Price > VWAP", f"{close:.2f} > {vwap:.2f}" if vwap else "N/A"),
-                (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']:.1f}x avg", f"{volume:.0f} > {avg_vol:.0f}")
+                (option_volume > thresholds['volume_multiplier'] * avg_vol, f"Option Vol > {thresholds['volume_multiplier']:.1f}x avg", f"{option_volume:.0f} > {avg_vol:.0f}")
             ]
         else:  # put
             conditions = [
@@ -509,7 +543,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
                 (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (vwap is not None and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
-                (volume > thresholds['volume_multiplier'] * avg_vol, f"Volume > {thresholds['volume_multiplier']:.1f}x avg", f"{volume:.0f} > {avg_vol:.0f}")
+                (option_volume > thresholds['volume_multiplier'] * avg_vol, f"Option Vol > {thresholds['volume_multiplier']:.1f}x avg", f"{option_volume:.0f} > {avg_vol:.0f}")
             ]
         
         # Check all conditions
@@ -534,7 +568,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
 # =============================
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced robust version** with premarket data support and dynamic Greeks thresholds")
+st.markdown("**Enhanced for volatile markets** with improved signal detection during price moves")
 
 # Initialize session state for refresh functionality
 if 'refresh_counter' not in st.session_state:
@@ -601,7 +635,7 @@ with st.sidebar:
     # Common thresholds
     st.write("**Common**")
     SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.3, 0.1)  # Changed default to 1.3
+    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.3, 0.1)
     
     # Dynamic threshold parameters
     st.subheader("📈 Dynamic Threshold Parameters")
@@ -708,8 +742,36 @@ if ticker:
                 
                 # Display volatility info
                 atr_pct = df.iloc[-1].get('ATR_pct', 0)
+                volatility_status = "Low"
                 if not pd.isna(atr_pct):
-                    st.info(f"📈 Current Volatility (ATR%): {atr_pct*100:.2f}%")
+                    if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
+                        volatility_status = "Extreme"
+                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['medium']:
+                        volatility_status = "High"
+                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
+                        volatility_status = "Medium"
+                    st.info(f"📈 Current Volatility (ATR%): {atr_pct*100:.2f}% - **{volatility_status}**")
+                
+                # Diagnostic Information
+                st.subheader("🧠 Diagnostic Information")
+                
+                # Market status
+                if is_premarket():
+                    st.warning("⚠️ PREMARKET CONDITIONS: Volume requirements relaxed, delta thresholds adjusted")
+                elif is_early_market():
+                    st.warning("⚠️ EARLY MARKET CONDITIONS: Volume requirements relaxed, delta thresholds adjusted")
+                
+                # Show current thresholds
+                st.write("📏 Current Signal Thresholds:")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.caption(f"**Calls:** Δ ≥ {SIGNAL_THRESHOLDS['call']['delta_base']:.2f} | "
+                              f"Γ ≥ {SIGNAL_THRESHOLDS['call']['gamma_base']:.3f} | "
+                              f"Vol > {SIGNAL_THRESHOLDS['call']['volume_multiplier_base']:.1f}x")
+                with col2:
+                    st.caption(f"**Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | "
+                              f"Γ ≥ {SIGNAL_THRESHOLDS['put']['gamma_base']:.3f} | "
+                              f"Vol > {SIGNAL_THRESHOLDS['put']['volume_multiplier_base']:.1f}x")
                 
                 # Get options expiries
                 expiries = get_options_expiries(ticker)
@@ -719,7 +781,7 @@ if ticker:
                     st.stop()
                 
                 # Expiry selection
-                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=1)  # Default to all near-term
+                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=1)
                 
                 today = datetime.date.today()
                 if expiry_mode == "0DTE Only":
@@ -756,12 +818,16 @@ if ticker:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 
                 # Moneyness filter
-                m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "ATM", "OTM"], default=["ITM", "ATM", "OTM"])
+                m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "NTM", "ATM", "OTM"], default=["ITM", "NTM", "ATM"])
                 
                 if not calls_filtered.empty:
                     calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
                 if not puts_filtered.empty:
                     puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
+                
+                # Show filtered options count
+                st.write(f"🔍 Filtered Options: {len(calls_filtered)} calls, {len(puts_filtered)} puts "
+                         f"(Strike range: ${min_strike:.2f}-${max_strike:.2f})")
                 
                 # Generate signals
                 col1, col2 = st.columns(2)
@@ -776,6 +842,7 @@ if ticker:
                                 row_dict = row.to_dict()
                                 row_dict['signal_score'] = signal_result['score']
                                 row_dict['thresholds'] = signal_result['thresholds']
+                                row_dict['passed_conditions'] = signal_result['passed_conditions']
                                 call_signals.append(row_dict)
                         
                         if call_signals:
@@ -784,7 +851,7 @@ if ticker:
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
                             # Display key columns
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
                             st.dataframe(
@@ -805,9 +872,26 @@ if ticker:
                                     f"Vol > {th['volume_multiplier']:.1f}x"
                                 )
                             
+                            # Show passed conditions for first signal
+                            with st.expander("View Conditions for Top Signal"):
+                                if signals_df.iloc[0]['passed_conditions']:
+                                    st.write("✅ Passed Conditions:")
+                                    for condition in signals_df.iloc[0]['passed_conditions']:
+                                        st.write(f"- {condition}")
+                                else:
+                                    st.info("No conditions passed")
+                            
                             st.success(f"Found {len(call_signals)} call signals!")
                         else:
                             st.info("No call signals found matching criteria.")
+                            # Show why the top option didn't qualify
+                            if not calls_filtered.empty:
+                                sample_call = calls_filtered.iloc[0]
+                                result = generate_signal(sample_call, "call", df)
+                                if result and 'failed_conditions' in result:
+                                    st.write("Top call option failed conditions:")
+                                    for condition in result['failed_conditions']:
+                                        st.write(f"- {condition}")
                     else:
                         st.info("No call options available for selected filters.")
                 
@@ -821,6 +905,7 @@ if ticker:
                                 row_dict = row.to_dict()
                                 row_dict['signal_score'] = signal_result['score']
                                 row_dict['thresholds'] = signal_result['thresholds']
+                                row_dict['passed_conditions'] = signal_result['passed_conditions']
                                 put_signals.append(row_dict)
                         
                         if put_signals:
@@ -829,7 +914,7 @@ if ticker:
                             signals_df = signals_df.sort_values('signal_score', ascending=False)
                             
                             # Display key columns
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             
                             st.dataframe(
@@ -850,9 +935,26 @@ if ticker:
                                     f"Vol > {th['volume_multiplier']:.1f}x"
                                 )
                             
+                            # Show passed conditions for first signal
+                            with st.expander("View Conditions for Top Signal"):
+                                if signals_df.iloc[0]['passed_conditions']:
+                                    st.write("✅ Passed Conditions:")
+                                    for condition in signals_df.iloc[0]['passed_conditions']:
+                                        st.write(f"- {condition}")
+                                else:
+                                    st.info("No conditions passed")
+                            
                             st.success(f"Found {len(put_signals)} put signals!")
                         else:
                             st.info("No put signals found matching criteria.")
+                            # Show why the top option didn't qualify
+                            if not puts_filtered.empty:
+                                sample_put = puts_filtered.iloc[0]
+                                result = generate_signal(sample_put, "put", df)
+                                if result and 'failed_conditions' in result:
+                                    st.write("Top put option failed conditions:")
+                                    for condition in result['failed_conditions']:
+                                        st.write(f"- {condition}")
                     else:
                         st.info("No put options available for selected filters.")
                 
@@ -908,9 +1010,13 @@ if ticker:
             
             # Display recent data
             st.subheader("Recent Data")
-            display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'ATR_pct', 'Volume']].round(2)
+            display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'RSI', 'VWAP', 'ATR_pct', 'Volume', 'avg_vol']].round(2)
             display_df['ATR_pct'] = display_df['ATR_pct'] * 100  # Convert to percentage
-            st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%'}), use_container_width=True)
+            display_df['Volume Ratio'] = display_df['Volume'] / display_df['avg_vol']
+            st.dataframe(display_df.rename(columns={
+                'ATR_pct': 'ATR%',
+                'avg_vol': 'Avg Vol'
+            }), use_container_width=True)
     
     with tab3:
         st.subheader("🔍 Analysis Details")
@@ -957,13 +1063,13 @@ else:
         5. Filter by moneyness (ITM, ATM, OTM)
         6. Review generated signals
         
-        **Key Improvements:**
-        - More responsive delta thresholds (0.6/-0.6)
-        - Higher gamma thresholds (0.08) for meaningful options
-        - Relaxed volume requirements (1.3x) especially in early market
-        - Narrowed strike range (±5) around current price
-        - Volatility-based dynamic adjustments
+        **Key Improvements for Volatile Markets:**
+        - Enhanced volume average calculation
+        - More responsive thresholds during price moves
+        - New Near-The-Money (NTM) classification
         - Special handling for early market conditions
+        - Volatility-based adjustments for Greeks thresholds
+        - Diagnostic information to understand signals
         
         **Refresh Features:**
         - **Auto-refresh:** Automatically updates data at set intervals
