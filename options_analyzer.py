@@ -8,7 +8,8 @@ import warnings
 from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
-from ta.volatility import AverageTrueRange  # Added for volatility measurement
+from ta.volatility import AverageTrueRange
+import pytz  # For timezone handling
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -30,6 +31,9 @@ CONFIG = {
     'MIN_DATA_POINTS': 50,
     'CACHE_TTL': 300,  # 5 minutes
     'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
+    'MARKET_OPEN': datetime.time(9, 30),  # 9:30 AM Eastern
+    'MARKET_CLOSE': datetime.time(16, 0),  # 4:00 PM Eastern
+    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern
 }
 
 SIGNAL_THRESHOLDS = {
@@ -59,6 +63,44 @@ SIGNAL_THRESHOLDS = {
 # UTILITY FUNCTIONS
 # =============================
 
+def is_market_open() -> bool:
+    """Check if market is currently open based on Eastern Time"""
+    eastern = pytz.timezone('US/Eastern')
+    now = datetime.datetime.now(eastern)
+    now_time = now.time()
+    
+    # Check if weekday (Monday=0, Sunday=6)
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return False
+    
+    # Check time
+    return CONFIG['MARKET_OPEN'] <= now_time <= CONFIG['MARKET_CLOSE']
+
+def is_premarket() -> bool:
+    """Check if we're in premarket hours"""
+    eastern = pytz.timezone('US/Eastern')
+    now = datetime.datetime.now(eastern)
+    now_time = now.time()
+    
+    # Only consider weekdays
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return False
+    
+    return CONFIG['PREMARKET_START'] <= now_time < CONFIG['MARKET_OPEN']
+
+def get_current_price(ticker: str) -> float:
+    """Get the most current price including premarket"""
+    try:
+        stock = yf.Ticker(ticker)
+        # Get today's data including premarket
+        data = stock.history(period='1d', interval='1m', prepost=True)
+        if not data.empty:
+            return data['Close'].iloc[-1]
+        return 0.0
+    except Exception as e:
+        st.error(f"Error getting current price: {str(e)}")
+        return 0.0
+
 def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
     """Safely call API functions with retry logic"""
     for attempt in range(max_retries):
@@ -78,20 +120,23 @@ def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
     return None
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
-def get_stock_data(ticker: str, days: int = 10) -> pd.DataFrame:
-    """Fetch stock data with caching and error handling"""
+def get_stock_data(ticker: str) -> pd.DataFrame:
+    """Fetch stock data with caching, error handling, and premarket support"""
     try:
+        # Determine time range
         end = datetime.datetime.now()
-        start = end - datetime.timedelta(days=days)
+        start = end - datetime.timedelta(days=10)
         
         # Use auto_adjust=True to suppress warnings
+        # Include pre/post market data
         data = yf.download(
             ticker, 
             start=start, 
             end=end, 
             interval="5m",
             auto_adjust=True,
-            progress=False
+            progress=False,
+            prepost=True  # Include pre-market and after-hours data
         )
 
         if data.empty:
@@ -127,7 +172,16 @@ def get_stock_data(ticker: str, days: int = 10) -> pd.DataFrame:
             st.warning(f"Insufficient data points ({len(data)}). Need at least {CONFIG['MIN_DATA_POINTS']}.")
             return pd.DataFrame()
         
-        return data.reset_index(drop=True)
+        # Add premarket flag
+        eastern = pytz.timezone('US/Eastern')
+        data.index = data.index.tz_localize(pytz.utc).tz_convert(eastern)
+        data['premarket'] = False
+        
+        # Identify premarket sessions (4:00 AM to 9:30 AM Eastern)
+        premarket_mask = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
+        data.loc[premarket_mask, 'premarket'] = True
+        
+        return data.reset_index(drop=False)
         
     except Exception as e:
         st.error(f"Error fetching stock data: {str(e)}")
@@ -148,6 +202,107 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             if col not in df.columns:
                 st.error(f"Missing required column: {col}")
                 return pd.DataFrame()
+        
+        # Ensure data types are correct
+        for col in required_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Remove any remaining NaN values
+        df = df.dropna(subset=required_cols)
+        
+        if df.empty:
+            return df
+        
+        # Extract series for calculations
+        close = df['Close'].astype(float)
+        high = df['High'].astype(float)
+        low = df['Low'].astype(float)
+        volume = df['Volume'].astype(float)
+
+        # Calculate indicators with minimum data requirements
+        try:
+            # EMA indicators
+            if len(close) >= 9:
+                ema_9 = EMAIndicator(close=close, window=9)
+                df['EMA_9'] = ema_9.ema_indicator()
+            else:
+                df['EMA_9'] = np.nan
+                
+            if len(close) >= 20:
+                ema_20 = EMAIndicator(close=close, window=20)
+                df['EMA_20'] = ema_20.ema_indicator()
+            else:
+                df['EMA_20'] = np.nan
+                
+            # RSI
+            if len(close) >= 14:
+                rsi = RSIIndicator(close=close, window=14)
+                df['RSI'] = rsi.rsi()
+            else:
+                df['RSI'] = np.nan
+
+            # VWAP - calculate separately for premarket and regular session
+            df['VWAP'] = np.nan
+            df['avg_vol'] = np.nan
+            
+            # Calculate VWAP separately for each session
+            for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
+                if group.empty:
+                    continue
+                
+                # Split into premarket and regular session
+                premarket = group[group['premarket']]
+                regular = group[~group['premarket']]
+                
+                # Calculate VWAP for regular session
+                if not regular.empty:
+                    typical_price = (regular['High'] + regular['Low'] + regular['Close']) / 3
+                    vwap_cumsum = (regular['Volume'] * typical_price).cumsum()
+                    volume_cumsum = regular['Volume'].cumsum()
+                    regular_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
+                    df.loc[regular.index, 'VWAP'] = regular_vwap
+                    
+                    # Calculate average volume for regular session
+                    window_size = min(20, len(regular))
+                    if window_size > 1:
+                        regular_avg_vol = regular['Volume'].rolling(window=window_size, min_periods=1).mean()
+                        df.loc[regular.index, 'avg_vol'] = regular_avg_vol
+                    else:
+                        df.loc[regular.index, 'avg_vol'] = regular['Volume'].mean()
+                
+                # For premarket, use the previous day's close as reference
+                if not premarket.empty:
+                    # Get previous day's close
+                    prev_day = session - datetime.timedelta(days=1)
+                    prev_close = df[df['Datetime'].dt.date == prev_day.date()]['Close'].iloc[-1] if not df[df['Datetime'].dt.date == prev_day.date()].empty else premarket['Close'].iloc[0]
+                    
+                    typical_price = (premarket['High'] + premarket['Low'] + premarket['Close']) / 3
+                    vwap_cumsum = (premarket['Volume'] * typical_price).cumsum()
+                    volume_cumsum = premarket['Volume'].cumsum()
+                    premarket_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
+                    df.loc[premarket.index, 'VWAP'] = premarket_vwap
+                    
+                    # Use premarket volume as avg_vol since we don't have history
+                    df.loc[premarket.index, 'avg_vol'] = premarket['Volume'].mean()
+                
+            # ATR for volatility measurement
+            if len(close) >= 14:
+                atr = AverageTrueRange(high=high, low=low, close=close, window=14)
+                df['ATR'] = atr.average_true_range()
+                df['ATR_pct'] = df['ATR'] / close  # ATR as % of price
+            else:
+                df['ATR'] = np.nan
+                df['ATR_pct'] = np.nan
+                
+        except Exception as e:
+            st.error(f"Error computing indicators: {str(e)}")
+            return pd.DataFrame()
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"Error in compute_indicators: {str(e)}")
+        return pd.DataFrame()
         
         # Ensure data types are correct
         for col in required_cols:
@@ -423,7 +578,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame) -> Dic
 # =============================
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced robust version** with dynamic Greeks thresholds and volatility-based adjustments")
+st.markdown("**Enhanced robust version** with premarket data support and dynamic Greeks thresholds")
 
 # Initialize session state for refresh functionality
 if 'refresh_counter' not in st.session_state:
@@ -525,20 +680,22 @@ with st.sidebar:
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
-if ticker:
-    # Real-time data refresh controls
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-    
+col1, col2, col3 = st.columns(3)
     with col1:
-        st.subheader(f"📊 {ticker} Options Analysis")
+        if is_market_open():
+            st.success("✅ Market is OPEN")
+        elif is_premarket():
+            st.warning("⏰ PREMARKET Session")
+        else:
+            st.info("💤 Market is CLOSED")
     
     with col2:
-        manual_refresh = st.button("🔄 Refresh Now")
+        current_price = get_current_price(ticker)
+        st.metric("Current Price", f"${current_price:.2f}")
     
     with col3:
-        if st.button("🗑️ Clear Cache"):
-            st.cache_data.clear()
-            st.success("Cache cleared!")
+        # Show last update timestamp
+        st.caption(f"📅 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     with col4:
         # Show refresh status
@@ -751,11 +908,15 @@ if ticker:
             st.error(f"An error occurred: {str(e)}")
             st.error("Please refresh the page and try again.")
     
-    with tab2:
-        # Stock data visualization
-        if 'df' in locals() and not df.empty:
-            st.subheader("📊 Stock Data & Indicators")
-            
+  with tab2:
+    if 'df' in locals() and not df.empty:
+        st.subheader("📊 Stock Data & Indicators")
+        
+        # Display market session info
+        if is_premarket():
+            st.info("🔔 Currently showing premarket data")
+        elif not is_market_open():
+            st.info("🔔 Showing after-hours data")
             # Display latest values
             latest = df.iloc[-1]
             
