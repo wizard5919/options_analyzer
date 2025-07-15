@@ -7,9 +7,21 @@ import warnings
 import requests
 import plotly.graph_objects as go
 from bs4 import BeautifulSoup
-from polygon import RESTClient
-from alpha_vantage.timeseries import TimeSeries
-import iexfinance as iex
+try:
+    from polygon import RESTClient
+except ImportError:
+    st.error("Polygon API client not found. Please install with 'pip install polygon-api-client'.")
+    RESTClient = None
+try:
+    from alpha_vantage.timeseries import TimeSeries
+except ImportError:
+    st.error("Alpha Vantage client not found. Please install with 'pip install alpha-vantage'.")
+    TimeSeries = None
+try:
+    import iexfinance as iex
+except ImportError:
+    st.error("IEX Finance client not found. Please install with 'pip install iexfinance'.")
+    iex = None
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 
@@ -23,8 +35,8 @@ POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
 ALPHA_API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"
 IEX_API_KEY = "YOUR_IEX_CLOUD_API_KEY"
 
-polygon_client = RESTClient(POLYGON_API_KEY)
-ts = TimeSeries(key=ALPHA_API_KEY, output_format='pandas')
+polygon_client = RESTClient(POLYGON_API_KEY) if RESTClient else None
+ts = TimeSeries(key=ALPHA_API_KEY, output_format='pandas') if TimeSeries else None
 
 # Configuration
 CONFIG = {
@@ -39,6 +51,9 @@ SIGNAL_THRESHOLDS = {
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data_polygon(ticker: str) -> pd.DataFrame:
+    if not polygon_client:
+        st.error("Polygon client not initialized. Check API key and installation.")
+        return pd.DataFrame()
     try:
         end_time = datetime.datetime.now()
         start_time = end_time - datetime.timedelta(days=10)
@@ -56,6 +71,9 @@ def get_stock_data_polygon(ticker: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data_alpha(ticker: str) -> pd.DataFrame:
+    if not ts:
+        st.error("Alpha Vantage client not initialized. Check API key and installation.")
+        return pd.DataFrame()
     try:
         data, meta = ts.get_intraday(symbol=ticker, interval='1min', outputsize='full')
         if data.empty:
@@ -69,6 +87,9 @@ def get_stock_data_alpha(ticker: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data_iex(ticker: str) -> pd.DataFrame:
+    if not iex:
+        st.error("IEX Finance client not initialized. Check API key and installation.")
+        return pd.DataFrame()
     try:
         data = iex.Stock(ticker, token=IEX_API_KEY).get_chart(range='1m', chartByDay=True)
         df = pd.DataFrame(data)
@@ -100,6 +121,9 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_options_data_polygon(ticker: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if not polygon_client:
+        st.error("Polygon client not initialized. Check API key and installation.")
+        return pd.DataFrame(), pd.DataFrame()
     try:
         calls = pd.DataFrame(columns=['strike_price', 'delta', 'gamma', 'theta', 'vega', 'last_price', 'volume', 'open_interest'])
         puts = pd.DataFrame(columns=['strike_price', 'delta', 'gamma', 'theta', 'vega', 'last_price', 'volume', 'open_interest'])
@@ -220,14 +244,13 @@ if ticker:
             if calls.empty and puts.empty:
                 st.error("No options data available.")
             else:
-                # Process all options without initial filtering to capture all opportunities
+                # Process all options to capture all opportunities
                 for side, df_options in [('call', calls), ('put', puts)]:
                     if not df_options.empty:
                         signals = [generate_signal(row, side, df) for _, row in df_options.iterrows()]
                         signal_df = pd.DataFrame(signals, index=df_options.index)
                         signal_df['signal'] = signal_df['signal']
                         if not signal_df.empty:
-                            # Display all signals that meet criteria
                             st.dataframe(signal_df[signal_df['signal']][['signal'] + [c[0] for c in signal_df['conditions'].iloc[0]]].style.applymap(color_signal, subset=['signal']), use_container_width=True)
                             st.success(f"{sum(signal_df['signal'])} {side} signals found across all opportunities!")
                         else:
@@ -262,4 +285,5 @@ else:
         2. Adjust thresholds in sidebar
         3. Review signals for all opportunities
         **Signals:** Based on Delta, Gamma, Theta, Vega, RSI, Volume
+        **Note:** Install required packages (polygon-api-client, alpha-vantage, iexfinance) using 'pip install'.
         """)
