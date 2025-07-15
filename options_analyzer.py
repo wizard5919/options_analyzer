@@ -172,9 +172,17 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
             st.warning(f"Insufficient data points ({len(data)}). Need at least {CONFIG['MIN_DATA_POINTS']}.")
             return pd.DataFrame()
         
-        # Add premarket flag
+        # FIXED TIMEZONE HANDLING
         eastern = pytz.timezone('US/Eastern')
-        data.index = data.index.tz_localize(pytz.utc).tz_convert(eastern)
+        
+        # If index is timezone-naive, localize as UTC first
+        if data.index.tz is None:
+            data.index = data.index.tz_localize(pytz.utc)
+        
+        # Convert to Eastern time
+        data.index = data.index.tz_convert(eastern)
+        
+        # Add premarket flag
         data['premarket'] = False
         
         # Identify premarket sessions (4:00 AM to 9:30 AM Eastern)
