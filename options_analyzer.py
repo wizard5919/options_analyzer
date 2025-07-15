@@ -5,15 +5,12 @@ import numpy as np
 import datetime
 import time
 import warnings
+import pytz
+import math
 from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
-import pytz
-import re
-from scipy.stats import norm
-from math import log, sqrt, exp
-from datetime import datetime as dt
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -454,65 +451,45 @@ def classify_moneyness(strike: float, spot: float) -> str:
         else:
             return 'OTM'
 
-def black_scholes_greeks(S, K, T, r, sigma, option_type):
-    """Calculate option Greeks using Black-Scholes model"""
-    if T <= 0:
-        return 0, 0, 0
+def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float, float, float]:
+    """Calculate approximate Greeks using simple formulas"""
+    # Simple approximation for delta
+    moneyness = spot_price / option['strike']
     
-    d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
-    d2 = d1 - sigma * sqrt(T)
+    if option['contractSymbol'].startswith('C'):
+        # For calls
+        if moneyness > 1.03:  # Deep ITM
+            delta = 0.95
+            gamma = 0.01
+        elif moneyness > 1.0:  # Slightly ITM
+            delta = 0.65
+            gamma = 0.05
+        elif moneyness > 0.97:  # Near the money
+            delta = 0.50
+            gamma = 0.08
+        else:  # OTM
+            delta = 0.35
+            gamma = 0.05
+    else:
+        # For puts
+        if moneyness < 0.97:  # Deep ITM
+            delta = -0.95
+            gamma = 0.01
+        elif moneyness < 1.0:  # Slightly ITM
+            delta = -0.65
+            gamma = 0.05
+        elif moneyness < 1.03:  # Near the money
+            delta = -0.50
+            gamma = 0.08
+        else:  # OTM
+            delta = -0.35
+            gamma = 0.05
     
-    if option_type == 'call':
-        delta = norm.cdf(d1)
-        gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
-        theta = - (S * norm.pdf(d1) * sigma) / (2 * sqrt(T)) - r * K * exp(-r * T) * norm.cdf(d2)
-    else:  # put
-        delta = norm.cdf(d1) - 1
-        gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
-        theta = - (S * norm.pdf(d1) * sigma) / (2 * sqrt(T)) + r * K * exp(-r * T) * norm.cdf(-d2)
+    # Simple approximation for theta (time decay)
+    # Higher for near-term options, especially 0DTE
+    theta = 0.05 if "today" in option['expiry'] else 0.02
     
     return delta, gamma, theta
-
-def calculate_greeks(option: pd.Series, spot_price: float, risk_free_rate: float = 0.01) -> Tuple[float, float, float]:
-    """Calculate Greeks if they're missing from the data"""
-    # Only calculate if we have implied volatility
-    if pd.isna(option.get('impliedVolatility')):
-        return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
-    
-    try:
-        # Parse expiration date from option symbol
-        symbol = option['contractSymbol']
-        expiry_match = re.search(r'\d{6}', symbol)
-        if not expiry_match:
-            return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
-        
-        expiry_str = expiry_match.group(0)
-        expiry_date = dt.strptime(expiry_str, '%y%m%d')
-        
-        # Calculate time to expiration in years
-        now = dt.now()
-        T = (expiry_date - now).total_seconds() / (365 * 24 * 3600)
-        
-        # Skip if expiration is in the past
-        if T <= 0:
-            return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
-        
-        # Get parameters
-        S = spot_price
-        K = option['strike']
-        sigma = option['impliedVolatility']
-        option_type = 'call' if option['contractSymbol'].startswith('C') else 'put'
-        
-        # Calculate Greeks
-        delta, gamma, theta = black_scholes_greeks(S, K, T, risk_free_rate, sigma, option_type)
-        
-        # Adjust theta to be positive for decay
-        theta = abs(theta) if theta < 0 else -theta
-        
-        return delta, gamma, theta
-        
-    except Exception:
-        return option.get('delta', 0), option.get('gamma', 0), option.get('theta', 0)
 
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     """Validate that option has required data for analysis"""
@@ -528,7 +505,8 @@ def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     
     # Calculate Greeks if missing
     if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
-        delta, gamma, theta = calculate_greeks(option, spot_price)
+        # Use approximate method if Greeks are missing
+        delta, gamma, theta = calculate_approximate_greeks(option, spot_price)
         option['delta'] = delta
         option['gamma'] = gamma
         option['theta'] = theta
@@ -874,7 +852,7 @@ if ticker:
                 with col2:
                     st.caption(f"**Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | "
                               f"Γ ≥ {SIGNAL_THRESHOLDS['put']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THREShOLDS['put']['volume_multiplier_base']:.1f}x")
+                              f"Vol > {SIGNAL_THRESHOLDS['put']['volume_multiplier_base']:.1f}x")
                 
                 # Get options expiries
                 expiries = get_options_expiries(ticker)
@@ -906,8 +884,8 @@ if ticker:
                     st.stop()
                 
                 # Identify 0DTE options
-                for df in [calls, puts]:
-                    df['is_0dte'] = df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
+                for option_df in [calls, puts]:
+                    option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
                 
                 # Strike range filter - narrowed to ±5
                 strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-5, 5), 1)
