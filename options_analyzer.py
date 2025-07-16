@@ -35,7 +35,8 @@ CONFIG = {
     'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
     'MARKET_OPEN': datetime.time(9, 30),  # 9:30 AM Eastern
     'MARKET_CLOSE': datetime.time(16, 0),  # 4:00 PM Eastern
-    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern,
+    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern
+    'POSTMARKET_END': datetime.time(20, 0),  # 8:00 PM Eastern
     'VOLATILITY_THRESHOLDS': {
         'low': 0.015,
         'medium': 0.03,
@@ -46,7 +47,7 @@ CONFIG = {
         'put': 0.15,   # 15% profit target
         'stop_loss': 0.08  # 8% stop loss
     },
-    'PRICE_UPDATE_INTERVAL': 5  # Conservative 5-second interval
+    'PRICE_UPDATE_INTERVAL': 1  # 1-second interval for all sessions
 }
 
 SIGNAL_THRESHOLDS = {
@@ -139,6 +140,18 @@ def is_premarket() -> bool:
     
     return CONFIG['PREMARKET_START'] <= now_time < CONFIG['MARKET_OPEN']
 
+def is_postmarket() -> bool:
+    """Check if we're in postmarket hours"""
+    eastern = pytz.timezone('US/Eastern')
+    now = datetime.datetime.now(eastern)
+    now_time = now.time()
+    
+    # Only consider weekdays
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return False
+    
+    return CONFIG['MARKET_CLOSE'] < now_time <= CONFIG['POSTMARKET_END']
+
 def is_early_market() -> bool:
     """Check if we're in the first 30 minutes of market open"""
     if not is_market_open():
@@ -153,25 +166,26 @@ def is_early_market() -> bool:
 
 @st.cache_data(ttl=CONFIG['PRICE_UPDATE_INTERVAL'], show_spinner=False)
 def get_current_price(ticker: str) -> float:
-    """Get the most current price including premarket with rate limit protection"""
+    """Get the most current price including premarket and postmarket with rate limit protection"""
     try:
         if 'rate_limited_until' in st.session_state:
             if time.time() < st.session_state['rate_limited_until']:
                 return st.session_state.get('last_price', 0.0)
         
         stock = yf.Ticker(ticker)
-        # Get today's data including premarket
+        # Get today's data including premarket and postmarket
         data = stock.history(period='1d', interval='1m', prepost=True)
         if not data.empty:
             price = data['Close'].iloc[-1]
             st.session_state['last_price'] = price
+            st.session_state['last_price_update'] = time.time()
             return price
         return st.session_state.get('last_price', 0.0)
     except Exception as e:
         error_msg = str(e)
         if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
             st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-            st.warning("Yahoo Finance rate limit reached. Price updates paused.")
+            st.warning(f"Yahoo Finance rate limit reached. Price updates paused for {CONFIG['RATE_LIMIT_COOLDOWN']} seconds.")
         return st.session_state.get('last_price', 0.0)
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
@@ -914,6 +928,8 @@ if ticker:
             st.success("✅ Market is OPEN")
         elif is_premarket():
             st.warning("⏰ PREMARKET Session")
+        elif is_postmarket():
+            st.info("🌙 POSTMARKET Session")
         else:
             st.info("💤 Market is CLOSED")
     
@@ -1223,6 +1239,8 @@ if ticker:
             # Display market session info
             if is_premarket():
                 st.info("🔔 Currently showing premarket data")
+            elif is_postmarket():
+                st.info("🔔 Currently showing postmarket data")
             elif not is_market_open():
                 st.info("🔔 Showing after-hours data")
             
@@ -1307,7 +1325,7 @@ if ticker:
         - Use the app with one ticker at a time to reduce load
         
         **Additional Tips:**
-        - Price updates occur every 5 seconds to reduce load
+        - Price updates occur every 1 second during all market sessions
         - Options data is cached for 5 minutes
         - Only 3 expiries are fetched to reduce API calls
         - Failed requests automatically pause for 3 minutes
@@ -1328,7 +1346,7 @@ else:
         6. Review generated signals
         
         **Rate Limit Protection:**
-        - Price updates every 5 seconds
+        - Price updates every 1 second during all market sessions
         - Data caching minimizes API calls
         - Automatic pause on rate limits
         - Limited expiries fetched
@@ -1339,5 +1357,3 @@ else:
         - Holding Period Recommendations
         - Volatility-Based Adjustments
         """)
-
-
