@@ -1340,11 +1340,4 @@ else:
         - Volatility-Based Adjustments
         """)
 
-# Price update mechanism
-if 'price_placeholder' in locals():
-    # Update session state
-    st.session_state.last_price_update = time.time()
-    
-    # Schedule a rerun to update the price
-    time.sleep(CONFIG['PRICE_UPDATE_INTERVAL'])
-    st.experimental_rerun()
+
