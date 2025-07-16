@@ -110,46 +110,6 @@ class AutoRefreshSystem:
             self.thread.join(timeout=1.0)
 
 # =============================
-# REAL-TIME PRICE UPDATER
-# =============================
-
-class PriceUpdater:
-    def __init__(self):
-        self.running = False
-        self.thread = None
-        self.current_ticker = None
-        self.current_price = 0.0
-        
-    def start(self, ticker):
-        if self.running and ticker == self.current_ticker:
-            return  # Already running for this ticker
-            
-        self.stop()  # Stop any existing thread
-        self.running = True
-        self.current_ticker = ticker
-        
-        def update_loop():
-            while self.running:
-                try:
-                    stock = yf.Ticker(ticker)
-                    data = stock.history(period='1d', interval='1m', prepost=True)
-                    if not data.empty:
-                        self.current_price = data['Close'].iloc[-1]
-                    time.sleep(1)  # Update every second
-                except Exception as e:
-                    print(f"Price update error: {e}")
-                    time.sleep(5)  # Wait longer on errors
-        
-        self.thread = threading.Thread(target=update_loop, daemon=True)
-        self.thread.start()
-    
-    def stop(self):
-        self.running = False
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
-        self.current_ticker = None
-
-# =============================
 # UTILITY FUNCTIONS
 # =============================
 
@@ -190,7 +150,7 @@ def is_early_market() -> bool:
     
     return (now - market_open_today).total_seconds() < 1800  # First 30 minutes
 
-@st.cache_data(ttl=5)  # Cache for 5 seconds to reduce API calls
+@st.cache_data(ttl=1)  # Cache for 1 second to enable real-time updates
 def get_current_price(ticker: str) -> float:
     """Get the most current price including premarket"""
     try:
@@ -792,8 +752,10 @@ if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
 if 'refresh_system' not in st.session_state:
     st.session_state.refresh_system = AutoRefreshSystem()
-if 'price_updater' not in st.session_state:
-    st.session_state.price_updater = PriceUpdater()
+if 'last_price_update' not in st.session_state:
+    st.session_state.last_price_update = 0
+if 'current_price' not in st.session_state:
+    st.session_state.current_price = 0.0
 
 # Rate limit check
 if 'rate_limited_until' in st.session_state:
@@ -925,9 +887,6 @@ else:
     refresh_status.empty()  # Clear refresh status
 
 if ticker:
-    # Start/update price updater for real-time price
-    st.session_state.price_updater.start(ticker)
-    
     # Create four columns: for market status, current price, last updated, and refresh button
     col1, col2, col3, col4 = st.columns(4)
     
@@ -940,9 +899,11 @@ if ticker:
             st.info("💤 Market is CLOSED")
     
     with col2:
-        # Use the real-time price from the updater
-        current_price = st.session_state.price_updater.current_price
-        price_display = st.empty()  # Placeholder for dynamic price update
+        # Get current price with 1-second caching
+        current_price = get_current_price(ticker)
+        
+        # Create a placeholder for the price that we'll update in real-time
+        price_display = st.empty()
         price_display.metric("Current Price", f"${current_price:.2f}")
     
     with col3:
@@ -1349,12 +1310,14 @@ else:
         - **Diagnostic Details:** Clear reasons why signals fail
         """)
 
-# Continuously update the price display
-while True:
-    if ticker:
-        # Update the price display with the latest value
-        current_price = st.session_state.price_updater.current_price
-        price_display.metric("Current Price", f"${current_price:.2f}")
+# Real-time price update mechanism
+if 'price_display' in locals():
+    # Get the latest price with 1-second caching
+    latest_price = get_current_price(ticker) if ticker else 0.0
     
-    # Add a short delay to prevent excessive CPU usage
-    time.sleep(0.5)
+    # Update the price display
+    price_display.metric("Current Price", f"${latest_price:.2f}")
+    
+    # Schedule a rerun after 1 second to update the price
+    time.sleep(1)
+    st.experimental_rerun()
