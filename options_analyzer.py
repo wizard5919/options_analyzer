@@ -819,7 +819,7 @@ with st.sidebar:
         SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
         SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
         SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
+        SIGNAL_THREShOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
     
     # Common thresholds
     st.write("**Common**")
@@ -899,12 +899,14 @@ if ticker:
             st.info("💤 Market is CLOSED")
     
     with col2:
-        # Get current price with 1-second caching
+        # Create a placeholder for the price that will be updated in real-time
+        price_placeholder = st.empty()
+        
+        # Get the current price with 1-second caching
         current_price = get_current_price(ticker)
         
-        # Create a placeholder for the price that we'll update in real-time
-        price_display = st.empty()
-        price_display.metric("Current Price", f"${current_price:.2f}")
+        # Display the price in the placeholder
+        price_placeholder.metric("Current Price", f"${current_price:.2f}")
     
     with col3:
         if 'last_refresh' in st.session_state:
@@ -1311,13 +1313,7 @@ else:
         """)
 
 # Real-time price update mechanism
-if 'price_display' in locals():
-    # Get the latest price with 1-second caching
-    latest_price = get_current_price(ticker) if ticker else 0.0
-    
-    # Update the price display
-    price_display.metric("Current Price", f"${latest_price:.2f}")
-    
-    # Schedule a rerun after 1 second to update the price
+if 'price_placeholder' in locals():
+    # Schedule a rerun to update the price
     time.sleep(1)
     st.experimental_rerun()
