@@ -110,6 +110,46 @@ class AutoRefreshSystem:
             self.thread.join(timeout=1.0)
 
 # =============================
+# REAL-TIME PRICE UPDATER
+# =============================
+
+class PriceUpdater:
+    def __init__(self):
+        self.running = False
+        self.thread = None
+        self.current_ticker = None
+        self.current_price = 0.0
+        
+    def start(self, ticker):
+        if self.running and ticker == self.current_ticker:
+            return  # Already running for this ticker
+            
+        self.stop()  # Stop any existing thread
+        self.running = True
+        self.current_ticker = ticker
+        
+        def update_loop():
+            while self.running:
+                try:
+                    stock = yf.Ticker(ticker)
+                    data = stock.history(period='1d', interval='1m', prepost=True)
+                    if not data.empty:
+                        self.current_price = data['Close'].iloc[-1]
+                    time.sleep(1)  # Update every second
+                except Exception as e:
+                    print(f"Price update error: {e}")
+                    time.sleep(5)  # Wait longer on errors
+        
+        self.thread = threading.Thread(target=update_loop, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+        self.current_ticker = None
+
+# =============================
 # UTILITY FUNCTIONS
 # =============================
 
@@ -150,6 +190,7 @@ def is_early_market() -> bool:
     
     return (now - market_open_today).total_seconds() < 1800  # First 30 minutes
 
+@st.cache_data(ttl=5)  # Cache for 5 seconds to reduce API calls
 def get_current_price(ticker: str) -> float:
     """Get the most current price including premarket"""
     try:
@@ -162,24 +203,6 @@ def get_current_price(ticker: str) -> float:
     except Exception as e:
         st.error(f"Error getting current price: {str(e)}")
         return 0.0
-
-def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
-    """Safely call API functions with retry logic"""
-    for attempt in range(max_retries):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            error_msg = str(e)
-            # Check for rate limit
-            if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
-                st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
-                st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-                return None
-            if attempt == max_retries - 1:
-                st.error(f"API call failed after {max_retries} attempts: {str(e)}")
-                return None
-            time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
-    return None
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data(ticker: str) -> pd.DataFrame:
@@ -477,6 +500,24 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
     
     return all_calls, all_puts
 
+def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
+    """Safely call API functions with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_msg = str(e)
+            # Check for rate limit
+            if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
+                st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
+                st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+                return None
+            if attempt == max_retries - 1:
+                st.error(f"API call failed after {max_retries} attempts: {str(e)}")
+                return None
+            time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
+    return None
+
 def classify_moneyness(strike: float, spot: float) -> str:
     """Classify option moneyness with dynamic ranges"""
     diff = abs(strike - spot)
@@ -751,6 +792,8 @@ if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
 if 'refresh_system' not in st.session_state:
     st.session_state.refresh_system = AutoRefreshSystem()
+if 'price_updater' not in st.session_state:
+    st.session_state.price_updater = PriceUpdater()
 
 # Rate limit check
 if 'rate_limited_until' in st.session_state:
@@ -781,11 +824,11 @@ with st.sidebar:
     enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
     
     if enable_auto_refresh:
-        min_interval = 60  # set a sensible floor
+        min_interval = 10  # Minimum interval to prevent excessive API calls
         refresh_interval = st.selectbox(
             "Refresh Interval",
-            options=[60, 120, 300],
-            index=1,  # Default to 120 seconds
+            options=[10, 30, 60, 120, 300],
+            index=2,  # Default to 60 seconds
             format_func=lambda x: f"{x} seconds"
         )
         
@@ -882,6 +925,9 @@ else:
     refresh_status.empty()  # Clear refresh status
 
 if ticker:
+    # Start/update price updater for real-time price
+    st.session_state.price_updater.start(ticker)
+    
     # Create four columns: for market status, current price, last updated, and refresh button
     col1, col2, col3, col4 = st.columns(4)
     
@@ -894,8 +940,10 @@ if ticker:
             st.info("💤 Market is CLOSED")
     
     with col2:
-        current_price = get_current_price(ticker)
-        st.metric("Current Price", f"${current_price:.2f}")
+        # Use the real-time price from the updater
+        current_price = st.session_state.price_updater.current_price
+        price_display = st.empty()  # Placeholder for dynamic price update
+        price_display.metric("Current Price", f"${current_price:.2f}")
     
     with col3:
         if 'last_refresh' in st.session_state:
@@ -1294,8 +1342,19 @@ else:
         - **Volatility-Based Adjustments:** Thresholds adapt to market conditions
         
         **New Features:**
+        - **Real-Time Price Updates:** Current price refreshes every second
         - **Profit Targets:** Set custom profit targets and stop losses
         - **Holding Period Suggestions:** Intelligent holding period recommendations
         - **Volume Thresholds:** Minimum volume requirements to filter low-liquidity options
         - **Diagnostic Details:** Clear reasons why signals fail
         """)
+
+# Continuously update the price display
+while True:
+    if ticker:
+        # Update the price display with the latest value
+        current_price = st.session_state.price_updater.current_price
+        price_display.metric("Current Price", f"${current_price:.2f}")
+    
+    # Add a short delay to prevent excessive CPU usage
+    time.sleep(0.5)
