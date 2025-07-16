@@ -139,16 +139,30 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    # ✅ CORRECTED: Add this check to ensure input is a valid, non-empty DataFrame
+    # Check for valid input
     if not isinstance(df, pd.DataFrame) or df.empty:
         return pd.DataFrame()
 
     df = df.copy()
     required_cols = ['Close', 'High', 'Low', 'Volume']
+    
+    # Check if required columns exist
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        st.error(f"Missing required columns in data: {', '.join(missing_cols)}")
+        return pd.DataFrame()
+    
+    # Convert columns to numeric
     for col in required_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    df = df.dropna(subset=required_cols)
-    if df.empty: return df
+        try:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        except TypeError:
+            # Handle case where we might have a DataFrame instead of Series
+            df[col] = pd.to_numeric(df[col].iloc[:, 0], errors='coerce')
+    
+    df = df.dropna(subset=required_cols, how='all')
+    if df.empty: 
+        return df
 
     close, high, low = df['Close'], df['High'], df['Low']
     if len(close) >= 9: df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
