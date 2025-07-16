@@ -45,7 +45,8 @@ CONFIG = {
         'call': 0.15,  # 15% profit target
         'put': 0.15,   # 15% profit target
         'stop_loss': 0.08  # 8% stop loss
-    }
+    },
+    'PRICE_UPDATE_INTERVAL': 5  # Conservative 5-second interval
 }
 
 SIGNAL_THRESHOLDS = {
@@ -150,19 +151,28 @@ def is_early_market() -> bool:
     
     return (now - market_open_today).total_seconds() < 1800  # First 30 minutes
 
-@st.cache_data(ttl=1)  # Cache for 1 second to enable real-time updates
+@st.cache_data(ttl=CONFIG['PRICE_UPDATE_INTERVAL'], show_spinner=False)
 def get_current_price(ticker: str) -> float:
-    """Get the most current price including premarket"""
+    """Get the most current price including premarket with rate limit protection"""
     try:
+        if 'rate_limited_until' in st.session_state:
+            if time.time() < st.session_state['rate_limited_until']:
+                return st.session_state.get('last_price', 0.0)
+        
         stock = yf.Ticker(ticker)
         # Get today's data including premarket
         data = stock.history(period='1d', interval='1m', prepost=True)
         if not data.empty:
-            return data['Close'].iloc[-1]
-        return 0.0
+            price = data['Close'].iloc[-1]
+            st.session_state['last_price'] = price
+            return price
+        return st.session_state.get('last_price', 0.0)
     except Exception as e:
-        st.error(f"Error getting current price: {str(e)}")
-        return 0.0
+        error_msg = str(e)
+        if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
+            st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+            st.warning("Yahoo Finance rate limit reached. Price updates paused.")
+        return st.session_state.get('last_price', 0.0)
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data(ticker: str) -> pd.DataFrame:
@@ -786,11 +796,11 @@ with st.sidebar:
     enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
     
     if enable_auto_refresh:
-        min_interval = 10  # Minimum interval to prevent excessive API calls
+        min_interval = 60  # Minimum interval to prevent excessive API calls
         refresh_interval = st.selectbox(
             "Refresh Interval",
-            options=[10, 30, 60, 120, 300],
-            index=2,  # Default to 60 seconds
+            options=[60, 120, 300],
+            index=0,  # Default to 60 seconds
             format_func=lambda x: f"{x} seconds"
         )
         
@@ -819,7 +829,7 @@ with st.sidebar:
         SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
         SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
         SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
-        SIGNAL_THREShOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
+        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
     
     # Common thresholds
     st.write("**Common**")
@@ -861,6 +871,15 @@ with st.sidebar:
         "Volume Vol Multiplier", 0.0, 1.0, 0.3, 0.05,
         help="How much volume requirement increases with volatility"
     )
+    
+    # Rate limit warning
+    st.warning("""
+    **Rate Limit Notice:**
+    Yahoo Finance may restrict frequent data requests. Please:
+    - Use auto-refresh intervals ≥ 60 seconds
+    - Avoid changing tickers too frequently
+    - Use one ticker at a time
+    """)
 
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
@@ -899,24 +918,29 @@ if ticker:
             st.info("💤 Market is CLOSED")
     
     with col2:
-        # Create a placeholder for the price that will be updated in real-time
+        # Create a placeholder for the price
         price_placeholder = st.empty()
         
-        # Get the current price with 1-second caching
+        # Get the current price with rate limit protection
         current_price = get_current_price(ticker)
         
-        # Display the price in the placeholder
+        # Display the price
         price_placeholder.metric("Current Price", f"${current_price:.2f}")
+        
+        # Show refresh time for price
+        if 'last_price_update' in st.session_state:
+            last_update = datetime.datetime.fromtimestamp(st.session_state.last_price_update)
+            st.caption(f"Price updated: {last_update.strftime('%H:%M:%S')}")
     
     with col3:
         if 'last_refresh' in st.session_state:
             last_update = datetime.datetime.fromtimestamp(st.session_state.last_refresh)
-            st.caption(f"📅 Last updated: {last_update.strftime('%Y-%m-%d %H:%M:%S')}")
+            st.caption(f"📅 Last data refresh: {last_update.strftime('%H:%M:%S')}")
         else:
-            st.caption("📅 Last updated: Never")
+            st.caption("📅 Last data refresh: Never")
     
     with col4:
-        manual_refresh = st.button("🔁 Refresh Now", key="manual_refresh")
+        manual_refresh = st.button("🔁 Refresh Data", key="manual_refresh")
     
     # Manual refresh logic
     if manual_refresh:
@@ -926,7 +950,7 @@ if ticker:
         st.rerun()
     
     # Add refresh counter display
-    st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
+    st.caption(f"🔄 Data refresh count: {st.session_state.refresh_counter}")
 
     # Create tabs for better organization
     tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
@@ -999,7 +1023,7 @@ if ticker:
                 if expiry_mode == "0DTE Only":
                     expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
                 else:
-                    expiries_to_use = expiries[:5]  # Get more expiries for better analysis
+                    expiries_to_use = expiries[:3]  # Only get 3 expiries to reduce load
                 
                 if not expiries_to_use:
                     st.warning("No options expiries available for the selected mode.")
@@ -1281,6 +1305,12 @@ if ticker:
         - Wait a few minutes before refreshing again
         - Avoid setting auto-refresh intervals lower than 1 minute
         - Use the app with one ticker at a time to reduce load
+        
+        **Additional Tips:**
+        - Price updates occur every 5 seconds to reduce load
+        - Options data is cached for 5 minutes
+        - Only 3 expiries are fetched to reduce API calls
+        - Failed requests automatically pause for 3 minutes
         """)
 
 else:
@@ -1297,23 +1327,24 @@ else:
         5. Filter by moneyness (ITM, ATM, OTM)
         6. Review generated signals
         
-        **Key Improvements:**
-        - **Seamless Auto-Refresh:** Data updates automatically at your chosen interval
-        - **Enhanced Volume Detection:** Fixed volume comparison logic
-        - **Profit Targets & Exit Strategy:** Clear profit targets and holding periods
-        - **Early Market Detection:** Special thresholds for premarket/early market
-        - **Volatility-Based Adjustments:** Thresholds adapt to market conditions
+        **Rate Limit Protection:**
+        - Price updates every 5 seconds
+        - Data caching minimizes API calls
+        - Automatic pause on rate limits
+        - Limited expiries fetched
         
-        **New Features:**
-        - **Real-Time Price Updates:** Current price refreshes every second
-        - **Profit Targets:** Set custom profit targets and stop losses
-        - **Holding Period Suggestions:** Intelligent holding period recommendations
-        - **Volume Thresholds:** Minimum volume requirements to filter low-liquidity options
-        - **Diagnostic Details:** Clear reasons why signals fail
+        **Key Features:**
+        - Real-Time Price Updates
+        - Profit Targets & Exit Strategy
+        - Holding Period Recommendations
+        - Volatility-Based Adjustments
         """)
 
-# Real-time price update mechanism
+# Price update mechanism
 if 'price_placeholder' in locals():
+    # Update session state
+    st.session_state.last_price_update = time.time()
+    
     # Schedule a rerun to update the price
-    time.sleep(1)
+    time.sleep(CONFIG['PRICE_UPDATE_INTERVAL'])
     st.experimental_rerun()
