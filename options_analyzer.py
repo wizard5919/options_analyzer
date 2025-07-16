@@ -139,7 +139,10 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty: return df
+    # ✅ CORRECTED: Add this check to ensure input is a valid, non-empty DataFrame
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame()
+
     df = df.copy()
     required_cols = ['Close', 'High', 'Low', 'Volume']
     for col in required_cols:
@@ -334,7 +337,7 @@ with st.sidebar:
         selected_expiries = []
 
 # --- Main Display Area ---
-col_price, col_button = st.columns([1, 3])
+col_price, col_main = st.columns([1, 3])
 
 with col_price:
     # This placeholder will be updated by the loop at the end of the script
@@ -342,7 +345,7 @@ with col_price:
     # Initially populate it so it doesn't look empty
     price_placeholder.info("Fetching price...")
 
-with col_button:
+with col_main:
     # Button to trigger the heavy analysis
     if st.button("🚀 Run Full Analysis", use_container_width=True):
         if not ticker:
@@ -352,6 +355,8 @@ with col_button:
         else:
             with st.spinner(f"Performing deep analysis for ${ticker}... This may take a moment."):
                 perform_full_analysis(ticker, selected_expiries)
+    else:
+        st.info("Click the 'Run Full Analysis' button to begin.")
 
 # --- The "Real-Time" Update Loop ---
 # This part of the script loops continuously to update the price.
