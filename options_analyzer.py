@@ -101,15 +101,18 @@ class AutoRefreshSystem:
             while self.running:
                 time.sleep(interval)
                 if self.running:  # Double-check after sleep
+                    st.session_state.last_refresh = time.time()
                     st.rerun()
         
         self.thread = threading.Thread(target=refresh_loop, daemon=True)
         self.thread.start()
-    
+        st.write(f"Debug: Auto-refresh started with interval {interval} seconds")  # Debug output
+        
     def stop(self):
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)
+        st.write("Debug: Auto-refresh stopped")  # Debug output
 
 # =============================
 # UTILITY FUNCTIONS
@@ -820,6 +823,7 @@ with st.sidebar:
         
         # Start/update auto-refresh
         st.session_state.refresh_system.start(refresh_interval)
+        st.session_state.auto_refresh_interval = refresh_interval  # Store interval in session state
         st.info(f"Data will refresh every {refresh_interval} seconds")
     else:
         st.session_state.refresh_system.stop()
@@ -1295,7 +1299,7 @@ if ticker:
         
         # Auto-refresh status
         if enable_auto_refresh:
-            st.info(f"🔄 Auto-refresh enabled: Every {refresh_interval} seconds")
+            st.info(f"🔄 Auto-refresh enabled: Every {st.session_state.auto_refresh_interval} seconds")
         else:
             st.info("🔄 Auto-refresh disabled")
         
