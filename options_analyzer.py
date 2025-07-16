@@ -47,7 +47,7 @@ CONFIG = {
         'put': 0.15,   # 15% profit target
         'stop_loss': 0.08  # 8% stop loss
     },
-    'PRICE_UPDATE_INTERVAL': 1  # 1-second interval for all sessions
+    'PRICE_UPDATE_INTERVAL': 1  # 1-second interval for price updates
 }
 
 SIGNAL_THRESHOLDS = {
@@ -115,6 +115,34 @@ class AutoRefreshSystem:
         st.write("Debug: Auto-refresh stopped")  # Debug output
 
 # =============================
+# PRICE UPDATE SYSTEM
+# =============================
+
+def start_price_update(ticker):
+    def update_price():
+        while True:
+            try:
+                if 'rate_limited_until' in st.session_state and time.time() < st.session_state['rate_limited_until']:
+                    time.sleep(CONFIG['PRICE_UPDATE_INTERVAL'])
+                    continue
+                
+                stock = yf.Ticker(ticker)
+                data = stock.history(period='1d', interval='1m', prepost=True)
+                if not data.empty:
+                    price = data['Close'].iloc[-1]
+                    st.session_state['current_price'] = price
+                    st.session_state['last_price_update'] = time.time()
+                time.sleep(CONFIG['PRICE_UPDATE_INTERVAL'])
+            except Exception as e:
+                if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
+                    st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+                    st.warning(f"Yahoo Finance rate limit reached. Price updates paused for {CONFIG['RATE_LIMIT_COOLDOWN']} seconds.")
+                time.sleep(CONFIG['PRICE_UPDATE_INTERVAL'])
+    
+    thread = threading.Thread(target=update_price, daemon=True)
+    thread.start()
+
+# =============================
 # UTILITY FUNCTIONS
 # =============================
 
@@ -166,30 +194,6 @@ def is_early_market() -> bool:
     market_open_today = eastern.localize(market_open_today)
     
     return (now - market_open_today).total_seconds() < 1800  # First 30 minutes
-
-@st.cache_data(ttl=CONFIG['PRICE_UPDATE_INTERVAL'], show_spinner=False)
-def get_current_price(ticker: str) -> float:
-    """Get the most current price including premarket and postmarket with rate limit protection"""
-    try:
-        if 'rate_limited_until' in st.session_state:
-            if time.time() < st.session_state['rate_limited_until']:
-                return st.session_state.get('last_price', 0.0)
-        
-        stock = yf.Ticker(ticker)
-        # Get today's data including premarket and postmarket
-        data = stock.history(period='1d', interval='1m', prepost=True)
-        if not data.empty:
-            price = data['Close'].iloc[-1]
-            st.session_state['last_price'] = price
-            st.session_state['last_price_update'] = time.time()
-            return price
-        return st.session_state.get('last_price', 0.0)
-    except Exception as e:
-        error_msg = str(e)
-        if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
-            st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-            st.warning(f"Yahoo Finance rate limit reached. Price updates paused for {CONFIG['RATE_LIMIT_COOLDOWN']} seconds.")
-        return st.session_state.get('last_price', 0.0)
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data(ticker: str) -> pd.DataFrame:
@@ -772,7 +776,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
 # STREAMLIT INTERFACE
 # =============================
 
-# Initialize session state for refresh functionality
+# Initialize session state
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0
 if 'last_refresh' not in st.session_state:
@@ -780,16 +784,17 @@ if 'last_refresh' not in st.session_state:
 if 'refresh_system' not in st.session_state:
     st.session_state.refresh_system = AutoRefreshSystem()
 if 'last_price_update' not in st.session_state:
-    st.session_state.last_price_update = 0
+    st.session_state.last_price_update = time.time()
 if 'current_price' not in st.session_state:
     st.session_state.current_price = 0.0
+if 'price_update_thread' not in st.session_state:
+    st.session_state.price_update_thread = None
 
 # Rate limit check
 if 'rate_limited_until' in st.session_state:
     if time.time() < st.session_state['rate_limited_until']:
         remaining = int(st.session_state['rate_limited_until'] - time.time())
         st.warning(f"Yahoo Finance API rate limited. Please wait {remaining} seconds before retrying.")
-        # Show help
         with st.expander("ℹ️ About Rate Limiting"):
             st.markdown("""
             Yahoo Finance may restrict how often data can be retrieved. If you see a "rate limited" warning, please:
@@ -823,7 +828,7 @@ with st.sidebar:
         
         # Start/update auto-refresh
         st.session_state.refresh_system.start(refresh_interval)
-        st.session_state.auto_refresh_interval = refresh_interval  # Store interval in session state
+        st.session_state.auto_refresh_interval = refresh_interval
         st.info(f"Data will refresh every {refresh_interval} seconds")
     else:
         st.session_state.refresh_system.stop()
@@ -902,26 +907,22 @@ with st.sidebar:
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
+# Start price update thread if not already running and ticker is provided
+if ticker and st.session_state.price_update_thread is None:
+    start_price_update(ticker)
+    st.session_state.price_update_thread = True
+
 # Create refresh status container
 refresh_status = st.empty()
 
-# Show refresh status
+# Show refresh status and current time
 if enable_auto_refresh:
-    # Create a placeholder for dynamic countdown
     countdown_placeholder = refresh_status.empty()
-    
-    # Get current time
-    current_time = time.time()
-    elapsed = current_time - st.session_state.last_refresh
-    
-    # Calculate remaining time
-    if 'auto_refresh_interval' in st.session_state:
-        remaining = max(0, st.session_state.auto_refresh_interval - elapsed)
-        countdown_placeholder.info(f"⏱️ Next refresh in {int(remaining)} seconds")
-    else:
-        countdown_placeholder.info("🔄 Auto-refresh starting...")
+    current_time = datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')
+    countdown_placeholder.info(f"⏱️ Next refresh in {int(max(0, st.session_state.auto_refresh_interval - (time.time() - st.session_state.last_refresh)))} seconds | Current Time: {current_time}")
 else:
-    refresh_status.empty()  # Clear refresh status
+    current_time = datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')
+    refresh_status.info(f"📅 Current Time: {current_time}")
 
 if ticker:
     # Create four columns: for market status, current price, last updated, and refresh button
@@ -938,16 +939,12 @@ if ticker:
             st.info("💤 Market is CLOSED")
     
     with col2:
-        # Create a placeholder for the price
+        # Display real-time price
         price_placeholder = st.empty()
-        
-        # Get the current price with rate limit protection
-        current_price = get_current_price(ticker)
-        
-        # Display the price
+        current_price = st.session_state.get('current_price', 0.0)
         price_placeholder.metric("Current Price", f"${current_price:.2f}")
         
-        # Show refresh time for price
+        # Show last price update time
         if 'last_price_update' in st.session_state:
             last_update = datetime.datetime.fromtimestamp(st.session_state.last_price_update)
             st.caption(f"Price updated: {last_update.strftime('%H:%M:%S')}")
@@ -993,7 +990,7 @@ if ticker:
                     st.stop()
                 
                 # Display current stock info
-                current_price = df.iloc[-1]['Close']
+                current_price = st.session_state.get('current_price', df.iloc[-1]['Close'])
                 st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**")
                 
                 # Display volatility info
@@ -1254,7 +1251,7 @@ if ticker:
             col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
-                st.metric("Current Price", f"${latest['Close']:.2f}")
+                st.metric("Current Price", f"${st.session_state.get('current_price', latest['Close']):.2f}")
             
             with col2:
                 ema_9 = latest['EMA_9']
