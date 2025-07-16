@@ -160,26 +160,45 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             # Handle case where we might have a DataFrame instead of Series
             df[col] = pd.to_numeric(df[col].iloc[:, 0], errors='coerce')
     
-    df = df.dropna(subset=required_cols, how='all')
+    # Only drop NA values on columns that actually exist
+    existing_cols = [col for col in required_cols if col in df.columns]
+    if existing_cols:
+        df = df.dropna(subset=existing_cols, how='all')
+    
     if df.empty: 
         return df
 
     close, high, low = df['Close'], df['High'], df['Low']
-    if len(close) >= 9: df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
-    if len(close) >= 20: df['EMA_20'] = EMAIndicator(close=close, window=20).ema_indicator()
-    if len(close) >= 14: df['RSI'] = RSIIndicator(close=close, window=14).rsi()
-    if len(close) >= 14: df['ATR'] = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
+    if len(close) >= 9: 
+        df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
+    if len(close) >= 20: 
+        df['EMA_20'] = EMAIndicator(close=close, window=20).ema_indicator()
+    if len(close) >= 14: 
+        df['RSI'] = RSIIndicator(close=close, window=14).rsi()
+    if len(close) >= 14: 
+        df['ATR'] = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
     
     # VWAP and Volume calculations
     df['VWAP'] = np.nan
     df['avg_vol'] = np.nan
-    for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
-        if group.empty: continue
-        typical_price = (group['High'] + group['Low'] + group['Close']) / 3
-        vwap_cumsum = (group['Volume'] * typical_price).cumsum()
-        volume_cumsum = group['Volume'].cumsum()
-        df.loc[group.index, 'VWAP'] = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
-        df.loc[group.index, 'avg_vol'] = group['Volume'].expanding(min_periods=1).mean()
+    
+    # Group by day only if 'Datetime' column exists
+    if 'Datetime' in df.columns:
+        for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
+            if group.empty: 
+                continue
+            typical_price = (group['High'] + group['Low'] + group['Close']) / 3
+            vwap_cumsum = (group['Volume'] * typical_price).cumsum()
+            volume_cumsum = group['Volume'].cumsum()
+            df.loc[group.index, 'VWAP'] = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
+            df.loc[group.index, 'avg_vol'] = group['Volume'].expanding(min_periods=1).mean()
+    else:
+        # Fallback calculation without datetime grouping
+        typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+        vwap_cumsum = (df['Volume'] * typical_price).cumsum()
+        volume_cumsum = df['Volume'].cumsum()
+        df['VWAP'] = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
+        df['avg_vol'] = df['Volume'].expanding(min_periods=1).mean()
         
     df['ATR_pct'] = df['ATR'] / df['Close']
     df['avg_vol'] = df['avg_vol'].fillna(df['Volume'].mean())
