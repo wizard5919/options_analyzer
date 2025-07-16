@@ -35,7 +35,7 @@ CONFIG = {
     'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
     'MARKET_OPEN': datetime.time(9, 30),  # 9:30 AM Eastern
     'MARKET_CLOSE': datetime.time(16, 0),  # 4:00 PM Eastern
-    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern
+    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern,
     'VOLATILITY_THRESHOLDS': {
         'low': 0.015,
         'medium': 0.03,
@@ -138,18 +138,6 @@ def is_premarket() -> bool:
     
     return CONFIG['PREMARKET_START'] <= now_time < CONFIG['MARKET_OPEN']
 
-def is_after_hours() -> bool:
-    """Check if we're in after-hours trading"""
-    eastern = pytz.timezone('US/Eastern')
-    now = datetime.datetime.now(eastern)
-    now_time = now.time()
-    
-    # Only consider weekdays
-    if now.weekday() >= 5:  # Saturday or Sunday
-        return False
-    
-    return CONFIG['MARKET_CLOSE'] < now_time <= datetime.time(20, 0)  # 8 PM Eastern
-
 def is_early_market() -> bool:
     """Check if we're in the first 30 minutes of market open"""
     if not is_market_open():
@@ -163,28 +151,14 @@ def is_early_market() -> bool:
     return (now - market_open_today).total_seconds() < 1800  # First 30 minutes
 
 def get_current_price(ticker: str) -> float:
-    """Get the most current price with improved real-time accuracy"""
+    """Get the most current price including premarket"""
     try:
         stock = yf.Ticker(ticker)
-        info = stock.fast_info
-        
-        # Use appropriate price based on market session
-        if is_market_open():
-            price = info.get('last_price') or info.get('regular_market_price')
-        elif is_premarket():
-            price = info.get('pre_market_price') or info.get('regular_market_price')
-        elif is_after_hours():
-            price = info.get('post_market_price') or info.get('regular_market_price')
-        else:
-            price = info.get('regular_market_price') or info.get('previous_close')
-        
-        if price is None:
-            # Fallback to minute data if fast_info fails
-            data = stock.history(period='1d', interval='1m', prepost=True)
-            if not data.empty:
-                return data['Close'].iloc[-1]
-        
-        return price or 0.0
+        # Get today's data including premarket
+        data = stock.history(period='1d', interval='1m', prepost=True)
+        if not data.empty:
+            return data['Close'].iloc[-1]
+        return 0.0
     except Exception as e:
         st.error(f"Error getting current price: {str(e)}")
         return 0.0
@@ -777,10 +751,6 @@ if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
 if 'refresh_system' not in st.session_state:
     st.session_state.refresh_system = AutoRefreshSystem()
-if 'last_price_fetch' not in st.session_state:
-    st.session_state.last_price_fetch = 0
-if 'current_price' not in st.session_state:
-    st.session_state.current_price = 0.0
 
 # Rate limit check
 if 'rate_limited_until' in st.session_state:
@@ -920,24 +890,12 @@ if ticker:
             st.success("✅ Market is OPEN")
         elif is_premarket():
             st.warning("⏰ PREMARKET Session")
-        elif is_after_hours():
-            st.warning("🌙 AFTER-HOURS Session")
         else:
             st.info("💤 Market is CLOSED")
     
-    # REAL-TIME PRICE UPDATES
     with col2:
-        # Only fetch price if market is open or we need to update
-        current_time = time.time()
-        price_refresh_rate = 30  # Update price every 30 seconds
-        
-        if (current_time - st.session_state.last_price_fetch > price_refresh_rate or
-            st.session_state.current_price == 0.0):
-            
-            st.session_state.current_price = get_current_price(ticker)
-            st.session_state.last_price_fetch = current_time
-            
-        st.metric("Current Price", f"${st.session_state.current_price:.2f}")
+        current_price = get_current_price(ticker)
+        st.metric("Current Price", f"${current_price:.2f}")
     
     with col3:
         if 'last_refresh' in st.session_state:
@@ -954,7 +912,6 @@ if ticker:
         st.cache_data.clear()
         st.session_state.last_refresh = time.time()
         st.session_state.refresh_counter += 1
-        st.session_state.last_price_fetch = 0  # Force price refresh
         st.rerun()
     
     # Add refresh counter display
