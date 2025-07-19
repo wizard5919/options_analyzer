@@ -1,6 +1,9 @@
 © 2025 Youssef Sbai. All rights reserved.
 This project is licensed under the MIT License.
 Please provide attribution if you reuse any part of this code. Contact: youssefsbai83@gmail.com
+## Notice
+
+This project is open source under the MIT License. If you use any part of this code, please provide proper attribution to the original author: Youssef Sbai.
 # 📈 Options Greeks Buy Signal Analyzer
 
 This Streamlit app analyzes options contracts using their Greeks (Delta, Gamma, Theta, Vega) to determine potential **Buy signals** for Calls and Puts.
