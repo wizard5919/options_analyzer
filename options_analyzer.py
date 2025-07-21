@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -53,36 +52,37 @@ CONFIG = {
     }
 }
 
+# Base thresholds are now dynamically set based on market conditions
 SIGNAL_THRESHOLDS = {
     'call': {
-        'delta_base': 0.5,
-        'delta_vol_multiplier': 0.15,  # Increased sensitivity
+        'delta_base': 0.5,  # Will be adjusted dynamically
+        'delta_vol_multiplier': 0.15,
         'gamma_base': 0.05,
-        'gamma_vol_multiplier': 0.03,  # Increased sensitivity
+        'gamma_vol_multiplier': 0.03,
         'theta_base': 0.05,
         'rsi_base': 50,
         'rsi_min': 50,
         'rsi_max': 70,
-        'stoch_base': 60,  # Added stochastic threshold
+        'stoch_base': 60,
         'volume_multiplier_base': 1.0,
-        'volume_vol_multiplier': 0.4,  # Increased sensitivity
+        'volume_vol_multiplier': 0.4,
         'volume_min': 1000,
-        'price_momentum_min': 0.005  # Minimum price momentum for signal
+        'price_momentum_min': 0.005
     },
     'put': {
         'delta_base': -0.5,
-        'delta_vol_multiplier': 0.15,  # Increased sensitivity
+        'delta_vol_multiplier': 0.15,
         'gamma_base': 0.05,
-        'gamma_vol_multiplier': 0.03,  # Increased sensitivity
+        'gamma_vol_multiplier': 0.03,
         'theta_base': 0.05,
         'rsi_base': 50,
         'rsi_min': 30,
         'rsi_max': 50,
-        'stoch_base': 40,  # Added stochastic threshold
+        'stoch_base': 40,
         'volume_multiplier_base': 1.0,
-        'volume_vol_multiplier': 0.4,  # Increased sensitivity
+        'volume_vol_multiplier': 0.4,
         'volume_min': 1000,
-        'price_momentum_min': -0.005  # Minimum price momentum for signal
+        'price_momentum_min': -0.005
     }
 }
 
@@ -157,8 +157,7 @@ def calculate_time_decay_factor() -> float:
     total_market_seconds = (market_close - market_open).total_seconds()
     elapsed_seconds = (now - market_open).total_seconds()
     
-    # Linear increase in time decay effect, peaking at market close
-    decay_factor = 1.0 + (elapsed_seconds / total_market_seconds) * 0.5  # Up to 50% price impact
+    decay_factor = 1.0 + (elapsed_seconds / total_market_seconds) * 0.5
     return decay_factor
 
 def get_current_price(ticker: str) -> float:
@@ -265,10 +264,7 @@ def compute_price_action(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     lookback = CONFIG['PRICE_ACTION']['lookback_periods']
     
-    # Calculate price momentum (percentage change over lookback period)
     df['price_momentum'] = df['Close'].pct_change(periods=lookback)
-    
-    # Identify breakout signals
     df['range_high'] = df['High'].rolling(window=lookback).max()
     df['range_low'] = df['Low'].rolling(window=lookback).min()
     df['breakout_up'] = df['Close'] > df['range_high'].shift(1) * (1 + CONFIG['PRICE_ACTION']['breakout_threshold'])
@@ -316,7 +312,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df['RSI'] = np.nan
             
-        # Add Stochastic Oscillator
         if len(close) >= 14:
             stoch = StochasticOscillator(high=high, low=low, close=close, window=14, smooth_window=3)
             df['Stochastic'] = stoch.stoch()
@@ -411,7 +406,7 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
                         df['theta'] = np.nan
             all_calls = pd.concat([all_calls, calls], ignore_index=True)
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
-            time.sleep(1)
+            time.sleep(0.5)  # Reduced delay for faster processing
         except Exception as e:
             error_msg = str(e)
             if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
@@ -472,7 +467,6 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
             delta = -0.35
             gamma = 0.05
     
-    # Adjust theta for time decay during market hours
     expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
     days_to_expiry = (expiry_date - datetime.date.today()).days
     theta = (0.05 if days_to_expiry == 0 else 0.02) * time_decay
@@ -495,42 +489,66 @@ def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     return True
 
 def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool) -> Dict[str, float]:
+    """Dynamically adjust all signal thresholds based on market conditions"""
     thresholds = SIGNAL_THRESHOLDS[side].copy()
     volatility = stock_data.get('ATR_pct', 0.02)
     price_momentum = stock_data.get('price_momentum', 0.0)
     breakout_up = stock_data.get('breakout_up', False)
     breakout_down = stock_data.get('breakout_down', False)
+    time_decay = calculate_time_decay_factor()
     
-    # Enhanced volatility multiplier with price action influence
-    vol_multiplier = 1 + (volatility * 100) + (abs(price_momentum) * 50)
+    # Adjust base thresholds based on market conditions
+    vol_factor = 1 + (volatility * 100)  # Volatility multiplier
+    momentum_factor = 1 + abs(price_momentum) * 50  # Momentum multiplier
     
+    # Delta base adjustment
     if side == 'call':
-        thresholds['delta_min'] = max(0.3, min(0.8, thresholds['delta_base'] * vol_multiplier))
+        thresholds['delta_base'] = max(0.3, min(0.8, 0.5 * vol_factor * momentum_factor))
         if breakout_up:
-            thresholds['delta_min'] = min(thresholds['delta_min'] * 1.2, 0.85)  # Increase delta on breakout
+            thresholds['delta_base'] = min(thresholds['delta_base'] * 1.2, 0.85)
+        thresholds['delta_min'] = thresholds['delta_base']
     else:
-        thresholds['delta_max'] = min(-0.3, max(-0.8, thresholds['delta_base'] * vol_multiplier))
+        thresholds['delta_base'] = min(-0.3, max(-0.8, -0.5 * vol_factor * momentum_factor))
         if breakout_down:
-            thresholds['delta_max'] = max(thresholds['delta_max'] * 0.8, -0.85)  # Decrease delta on breakout
+            thresholds['delta_base'] = max(thresholds['delta_base'] * 0.8, -0.85)
+        thresholds['delta_max'] = thresholds['delta_base']
     
-    thresholds['gamma_min'] = thresholds['gamma_base'] * (1 + thresholds['gamma_vol_multiplier'] * (volatility * 200))
-    thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * (1 + thresholds['volume_vol_multiplier'] * (volatility * 150))))
+    # Gamma base adjustment
+    thresholds['gamma_base'] = max(0.02, min(0.15, 0.05 * vol_factor))
     
-    # Adjust for time decay
-    if is_market_open():
-        time_decay = calculate_time_decay_factor()
-        thresholds['theta_base'] *= time_decay  # Increase theta threshold as day progresses
+    # Theta base adjustment
+    thresholds['theta_base'] = min(0.1, 0.05 * time_decay)
     
+    # RSI and Stochastic adjustments
+    if side == 'call':
+        thresholds['rsi_base'] = max(40, min(60, 50 + (price_momentum * 1000)))
+        thresholds['rsi_min'] = thresholds['rsi_base']
+        thresholds['stoch_base'] = max(50, min(80, 60 + (price_momentum * 1000)))
+    else:
+        thresholds['rsi_base'] = max(40, min(60, 50 - abs(price_momentum * 1000)))
+        thresholds['rsi_max'] = thresholds['rsi_base']
+        thresholds['stoch_base'] = max(20, min(50, 40 - abs(price_momentum * 1000)))
+    
+    # Volume adjustments
+    thresholds['volume_min'] = max(500, min(3000, 1000 * vol_factor))
+    thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor))
+    
+    # Price momentum adjustments
+    thresholds['price_momentum_min'] = 0.005 * vol_factor if side == 'call' else -0.005 * vol_factor
+    
+    # Apply special conditions for premarket, early market, or 0DTE
     if is_premarket() or is_early_market():
         if side == 'call':
             thresholds['delta_min'] = 0.35
         else:
             thresholds['delta_max'] = -0.35
         thresholds['volume_multiplier'] *= 0.6
-        thresholds['gamma_min'] *= 0.8
+        thresholds['gamma_base'] *= 0.8
+        thresholds['volume_min'] = max(300, thresholds['volume_min'] * 0.5)
+    
     if is_0dte:
         thresholds['volume_multiplier'] *= 0.7
-        thresholds['gamma_min'] *= 0.7
+        thresholds['gamma_base'] *= 0.7
         if side == 'call':
             thresholds['delta_min'] = max(0.4, thresholds['delta_min'])
         else:
@@ -563,7 +581,7 @@ def calculate_holding_period(option: pd.Series, spot_price: float) -> str:
             return "3-7 days (Wait for move)"
 
 def calculate_profit_targets(option: pd.Series) -> Tuple[float, float]:
-    entry_price = option['lastPrice'] * calculate_time_decay_factor()  # Adjust for time decay
+    entry_price = option['lastPrice'] * calculate_time_decay_factor()
     profit_target = entry_price * (1 + CONFIG['PROFIT_TARGETS']['call' if option['contractSymbol'].startswith('C') else 'put'])
     stop_loss = entry_price * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
     return profit_target, stop_loss
@@ -600,7 +618,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             volume_ok = option_volume > thresholds['volume_min']
             conditions = [
                 (delta >= thresholds['delta_min'], f"Delta >= {thresholds['delta_min']:.2f}", delta),
-                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']:.3f}", gamma),
+                (gamma >= thresholds['gamma_base'], f"Gamma >= {thresholds['gamma_base']:.3f}", gamma),
                 (theta <= thresholds['theta_base'], f"Theta <= {thresholds['theta_base']:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']:.1f}", rsi),
@@ -613,7 +631,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             volume_ok = option_volume > thresholds['volume_min']
             conditions = [
                 (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']:.2f}", delta),
-                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']:.3f}", gamma),
+                (gamma >= thresholds['gamma_base'], f"Gamma >= {thresholds['gamma_base']:.3f}", gamma),
                 (theta <= thresholds['theta_base'], f"Theta <= {thresholds['theta_base']:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
@@ -673,12 +691,12 @@ if 'rate_limited_until' in st.session_state:
         del st.session_state['rate_limited_until']
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced for volatile markets** with price action and time decay analysis")
+st.markdown("**Auto-adjusted for market conditions** with swift signal detection")
 
 with st.sidebar:
     st.header("⚙️ Configuration")
     st.subheader("🔄 Auto-Refresh Settings")
-    enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
+    enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=True)  # Enabled by default
     if enable_auto_refresh:
         min_interval = 60
         refresh_interval = st.selectbox(
@@ -692,38 +710,51 @@ with st.sidebar:
     else:
         st.session_state.refresh_system.stop()
     
-    st.subheader("Base Signal Thresholds")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Calls**")
-        SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Base Delta", 0.1, 1.0, 0.5, 0.05)
-        SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Base Gamma", 0.01, 0.2, 0.05, 0.01)
-        SIGNAL_THRESHOLDS['call']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['call']['stoch_base'] = st.slider("Stochastic", 50, 90, 60, 5)
-        SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider("Min Volume", 100, 5000, 1000, 100)
-        SIGNAL_THRESHOLDS['call']['price_momentum_min'] = st.slider("Min Price Momentum (%)", 0.0, 2.0, 0.5, 0.1) / 100
+    st.subheader("📊 Auto-Adjusted Signal Thresholds")
+    st.write("Thresholds are dynamically set based on market conditions")
     
-    with col2:
-        st.write("**Puts**")
-        SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta ", -1.0, -0.1, -0.5, 0.05)
-        SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
-        SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI ", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['stoch_base'] = st.slider("Stochastic ", 10, 50, 40, 5)
-        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
-        SIGNAL_THRESHOLDS['put']['price_momentum_min'] = -st.slider("Min Price Momentum (%) ", 0.0, 2.0, 0.5, 0.1) / 100
-    
-    st.write("**Common**")
-    SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.0, 0.1)
+    # Fetch stock data to compute dynamic thresholds for display
+    ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+    df = get_stock_data(ticker)
+    if not df.empty:
+        df = compute_indicators(df)
+        latest = df.iloc[-1]
+        call_thresholds = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
+        put_thresholds = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Calls**")
+            st.metric("Base Delta", f"{call_thresholds['delta_base']:.2f}")
+            st.metric("Base Gamma", f"{call_thresholds['gamma_base']:.3f}")
+            st.metric("Base RSI", f"{call_thresholds['rsi_base']:.1f}")
+            st.metric("Min RSI", f"{call_thresholds['rsi_min']:.1f}")
+            st.metric("Stochastic", f"{call_thresholds['stoch_base']:.1f}")
+            st.metric("Min Volume", f"{call_thresholds['volume_min']:.0f}")
+            st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}")
+        
+        with col2:
+            st.write("**Puts**")
+            st.metric("Base Delta", f"{put_thresholds['delta_base']:.2f}")
+            st.metric("Base Gamma", f"{put_thresholds['gamma_base']:.3f}")
+            st.metric("Base RSI", f"{put_thresholds['rsi_base']:.1f}")
+            st.metric("Max RSI", f"{put_thresholds['rsi_max']:.1f}")
+            st.metric("Stochastic", f"{put_thresholds['stoch_base']:.1f}")
+            st.metric("Min Volume", f"{put_thresholds['volume_min']:.0f}")
+            st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}")
+        
+        st.write("**Common**")
+        st.metric("Max Theta", f"{call_thresholds['theta_base']:.3f}")
+        st.metric("Volume Multiplier", f"{call_thresholds['volume_multiplier']:.2f}")
     
     st.subheader("🎯 Profit Targets")
+    st.write("Profit targets are fixed but can be adjusted if needed")
     CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
     CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
     CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01)
     
     st.subheader("📈 Dynamic Threshold Parameters")
+    st.write("Sensitivities are fixed but can be adjusted if needed")
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Call Sensitivities**")
@@ -731,27 +762,12 @@ with st.sidebar:
         SIGNAL_THRESHOLDS['call']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity", 0.0, 0.5, 0.03, 0.01)
     with col2:
         st.write("**Put Sensitivities**")
-        SIGNAL_THRESHOLDS['put']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity ", 0.0, 0.5, 0.15, 0.01)
-        SIGNAL_THRESHOLDS['put']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity ", 0.0, 0.5, 0.03, 0.01)
+        SIGNAL_THRESHOLDS['put']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity", 0.0, 0.5, 0.15, 0.01)
+        SIGNAL_THRESHOLDS['put']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity", 0.0, 0.5, 0.03, 0.01)
     st.write("**Volume Sensitivity**")
     SIGNAL_THRESHOLDS['call']['volume_vol_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_vol_multiplier'] = st.slider("Volume Vol Multiplier", 0.0, 1.0, 0.4, 0.05)
 
 # Main interface
-ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
-refresh_status = st.empty()
-
-if enable_auto_refresh:
-    countdown_placeholder = refresh_status.empty()
-    current_time = time.time()
-    elapsed = current_time - st.session_state.last_refresh
-    if 'auto_refresh_interval' in st.session_state:
-        remaining = max(0, st.session_state.auto_refresh_interval - elapsed)
-        countdown_placeholder.info(f"⏱️ Next refresh in {int(remaining)} seconds")
-    else:
-        countdown_placeholder.info("🔄 Auto-refresh starting...")
-else:
-    refresh_status.empty()
-
 if ticker:
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -788,7 +804,6 @@ if ticker:
     with tab1:
         try:
             with st.spinner("Fetching and analyzing data..."):
-                df = get_stock_data(ticker)
                 if df.empty:
                     st.error("Unable to fetch stock data. Please check the ticker symbol.")
                     st.stop()
@@ -821,27 +836,27 @@ if ticker:
                 st.write("📏 Current Signal Thresholds:")
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.caption(f"**Calls:** Δ ≥ {SIGNAL_THRESHOLDS['call']['delta_base']:.2f} | "
-                              f"Γ ≥ {SIGNAL_THRESHOLDS['call']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THRESHOLDS['call']['volume_min']} | "
-                              f"Momentum ≥ {SIGNAL_THRESHOLDS['call']['price_momentum_min']*100:.2f}%")
+                    st.caption(f"**Calls:** Δ ≥ {call_thresholds['delta_base']:.2f} | "
+                              f"Γ ≥ {call_thresholds['gamma_base']:.3f} | "
+                              f"Vol > {call_thresholds['volume_min']:.0f} | "
+                              f"Momentum ≥ {call_thresholds['price_momentum_min']*100:.2f}%")
                 with col2:
-                    st.caption(f"**Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | "
-                              f"Γ ≥ {SIGNAL_THRESHOLDS['put']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THRESHOLDS['put']['volume_min']} | "
-                              f"Momentum ≤ {SIGNAL_THRESHOLDS['put']['price_momentum_min']*100:.2f}%")
+                    st.caption(f"**Puts:** Δ ≤ {put_thresholds['delta_base']:.2f} | "
+                              f"Γ ≥ {put_thresholds['gamma_base']:.3f} | "
+                              f"Vol > {put_thresholds['volume_min']:.0f} | "
+                              f"Momentum ≤ {put_thresholds['price_momentum_min']*100:.2f}%")
                 
                 expiries = get_options_expiries(ticker)
                 if not expiries:
                     st.error("No options expiries available. Please wait due to rate limits.")
                     st.stop()
                 
-                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=1)
+                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=0)  # Default to 0DTE for speed
                 today = datetime.date.today()
                 if expiry_mode == "0DTE Only":
                     expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
                 else:
-                    expiries_to_use = expiries[:5]
+                    expiries_to_use = expiries[:3]  # Reduced to 3 for faster processing
                 
                 if not expiries_to_use:
                     st.warning("No options expiries available for the selected mode.")
@@ -869,7 +884,7 @@ if ticker:
                 if not puts_filtered.empty:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 
-                m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "NTM", "ATM", "OTM"], default=["ITM", "NTM", "ATM"])
+                m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "NTM", "ATM", "OTM"], default=["NTM", "ATM"])
                 if not calls_filtered.empty:
                     calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
                 if not puts_filtered.empty:
@@ -905,17 +920,27 @@ if ticker:
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             st.dataframe(signals_df[available_cols].round(4), use_container_width=True, hide_index=True)
                             
-                            if signals_df.iloc[0]['thresholds']:
-                                th = signals_df.iloc[0]['thresholds']
+                            # Immediate notification for top signal
+                            top_signal = signals_df.iloc[0]
+                            st.success(
+                                f"🚨 **CALL SIGNAL DETECTED!** "
+                                f"Contract: {top_signal['contractSymbol']} | "
+                                f"Strike: ${top_signal['strike']:.2f} | "
+                                f"Price: ${top_signal['lastPrice']:.2f} | "
+                                f"Holding: {top_signal['holding_period']}"
+                            )
+                            
+                            if top_signal['thresholds']:
+                                th = top_signal['thresholds']
                                 st.info(f"Applied Thresholds: Δ ≥ {th['delta_min']:.2f} | "
-                                        f"Γ ≥ {th['gamma_min']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
+                                        f"Γ ≥ {th['gamma_base']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
                                         f"RSI > {th['rsi_min']:.1f} | Stoch > {th['stoch_base']:.1f} | "
-                                        f"Vol > {th['volume_min']}")
+                                        f"Vol > {th['volume_min']:.0f}")
                             
                             with st.expander("View Conditions for Top Signal"):
-                                if signals_df.iloc[0]['passed_conditions']:
+                                if top_signal['passed_conditions']:
                                     st.write("✅ Passed Conditions:")
-                                    for condition in signals_df.iloc[0]['passed_conditions']:
+                                    for condition in top_signal['passed_conditions']:
                                         st.write(f"- {condition}")
                                 else:
                                     st.info("No conditions passed")
@@ -960,17 +985,27 @@ if ticker:
                             available_cols = [col for col in display_cols if col in signals_df.columns]
                             st.dataframe(signals_df[available_cols].round(4), use_container_width=True, hide_index=True)
                             
-                            if signals_df.iloc[0]['thresholds']:
-                                th = signals_df.iloc[0]['thresholds']
+                            # Immediate notification for top signal
+                            top_signal = signals_df.iloc[0]
+                            st.success(
+                                f"🚨 **PUT SIGNAL DETECTED!** "
+                                f"Contract: {top_signal['contractSymbol']} | "
+                                f"Strike: ${top_signal['strike']:.2f} | "
+                                f"Price: ${top_signal['lastPrice']:.2f} | "
+                                f"Holding: {top_signal['holding_period']}"
+                            )
+                            
+                            if top_signal['thresholds']:
+                                th = top_signal['thresholds']
                                 st.info(f"Applied Thresholds: Δ ≤ {th['delta_max']:.2f} | "
-                                        f"Γ ≥ {th['gamma_min']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
+                                        f"Γ ≥ {th['gamma_base']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
                                         f"RSI < {th['rsi_max']:.1f} | Stoch < {th['stoch_base']:.1f} | "
-                                        f"Vol > {th['volume_min']}")
+                                        f"Vol > {th['volume_min']:.0f}")
                             
                             with st.expander("View Conditions for Top Signal"):
-                                if signals_df.iloc[0]['passed_conditions']:
+                                if top_signal['passed_conditions']:
                                     st.write("✅ Passed Conditions:")
-                                    for condition in signals_df.iloc[0]['passed_conditions']:
+                                    for condition in top_signal['passed_conditions']:
                                         st.write(f"- {condition}")
                                 else:
                                     st.info("No conditions passed")
@@ -1047,7 +1082,7 @@ if ticker:
                 st.json(result)
         
         st.write("**Current Signal Thresholds:**")
-        st.json(SIGNAL_THRESHOLDS)
+        st.json({'call': call_thresholds, 'put': put_thresholds})
         st.write("**Profit Targets:**")
         st.json(CONFIG['PROFIT_TARGETS'])
         st.write("**System Configuration:**")
@@ -1066,18 +1101,17 @@ else:
         st.markdown("""
         **Steps to analyze options:**
         1. Enter a stock ticker (e.g., SPY, QQQ, AAPL)
-        2. Configure auto-refresh settings in the sidebar (optional)
+        2. Configure auto-refresh settings in the sidebar (recommended to keep enabled)
         3. Select expiration filter (0DTE for same-day, or near-term)
         4. Adjust strike range around current price
         5. Filter by moneyness (ITM, ATM, OTM)
-        6. Review generated signals
+        6. Receive immediate signal notifications
         
-        **Key Improvements:**
+        **Key Features:**
+        - **Auto-Adjusted Thresholds:** Thresholds adapt to volatility, momentum, and time decay
+        - **Swift Signal Detection:** Immediate alerts for call/put signals
         - **Price Action Analysis:** Incorporates momentum and breakout signals
         - **Time Decay Adjustment:** Accounts for theta impact during market hours
-        - **Dynamic Thresholds:** Adjusts to volatility and price action
         - **Seamless Auto-Refresh:** Data updates at chosen intervals
         - **Profit Targets & Exit Strategy:** Clear profit targets and holding periods
-        - **Early Market Detection:** Special thresholds for premarket/early market
         """)
-
