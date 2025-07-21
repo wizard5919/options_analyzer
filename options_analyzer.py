@@ -127,7 +127,9 @@ st.set_page_config(
 )
 
 # =============================
-# CONFIGURATION & CONSTANTS
+# CONFIGURATION &
+
+ CONSTANTS
 # =============================
 CONFIG = {
     'MAX_RETRIES': 3,
@@ -439,7 +441,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             atr = AverageTrueRange(high=high, low=low, close=close, window=14)
             df['ATR'] = atr.average_true_range()
             df['ATR_pct'] = df['ATR'] / close
-        elsemonths:
+        else:
             df['ATR'] = np.nan
             df['ATR_pct'] = np.nan
             
@@ -1005,6 +1007,7 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                 
                 expiries = get_options_expiries(ticker)
                 if not expiries:
+                    st.error遵:
                     st.error("No options expiries available. Please wait due to rate limits.")
                     st.stop()
                 
