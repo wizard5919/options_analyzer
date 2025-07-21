@@ -25,7 +25,10 @@ st.markdown("""
 .stSidebar { background-color: #e9ecef !important; }
 @media (prefers-color-scheme: dark) {
     .stSidebar { background-color: #343a40 !important; }
+    .stMetric { color: #ffffff !important; } /* Ensure visibility in dark mode */
 }
+.sidebar .stMetric { color: #000000 !important; } /* Force black text in sidebar */
+.sidebar .stMetric .stMetric-value { color: #000000 !important; } /* Target metric value specifically */
 .sidebar .stSelectbox, .sidebar .stTextInput { background-color: #ffffff; border-radius: 5px; }
 .signal-table th { background-color: #007bff; color: white; }
 .tooltip { position: relative; display: inline-block; cursor: pointer; margin-left: 5px; }
@@ -926,14 +929,18 @@ if ticker:
                     if not invalid_puts.empty:
                         st.warning(f"Skipped {len(invalid_puts)} put options due to insufficient data (e.g., missing Greeks, low volume).")
                 
+                # Use a separate variable to avoid session state modification after widget instantiation
+                default_moneyness = st.session_state.moneyness_filter
                 moneyness_filter = st.multiselect(
                     "Filter by Moneyness:",
                     options=["ITM", "NTM", "ATM", "OTM"],
-                    default=st.session_state.moneyness_filter,
+                    default=default_moneyness,
                     key="moneyness_filter"
                 )
-                # Move session state update outside widget instantiation
-                st.session_state.moneyness_filter = moneyness_filter
+                # Update session state only if the selection changes
+                if moneyness_filter != st.session_state.moneyness_filter:
+                    st.session_state.moneyness_filter = moneyness_filter
+                
                 if not calls_filtered.empty:
                     calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(moneyness_filter)]
                 if not puts_filtered.empty:
