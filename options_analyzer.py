@@ -99,7 +99,7 @@ h1, h2, h3 { color: #1a3c6e; font-weight: 600; }
 }
 
 /* Responsive Design */
-@media (max-width: 768px) {
+@Media (max-width: 768px) {
     .stApp { zoom: 0.9; }
     .stSidebar { padding: 15px; }
     .stMetric { padding: 10px; }
@@ -127,9 +127,7 @@ st.set_page_config(
 )
 
 # =============================
-# CONFIGURATION &
-
- CONSTANTS
+# CONFIGURATION & CONSTANTS
 # =============================
 CONFIG = {
     'MAX_RETRIES': 3,
@@ -156,6 +154,18 @@ CONFIG = {
         'momentum_threshold': 0.01,
         'breakout_threshold': 0.02
     }
+}
+
+CONSTANTS = {
+    'MAX_RETRIES': 3,
+    'RETRY_DELAY': 1,
+    'DATA_TIMEOUT': 30,
+    'MIN_DATA_POINTS': 50,
+    'CACHE_TTL': 300,
+    'RATE_LIMIT_COOLDOWN': 180,
+    'MARKET_OPEN': datetime.time(9, 30),
+    'MARKET_CLOSE': datetime.time(16, 0),
+    'PREMARKET_START': datetime.time(4, 0)
 }
 
 SIGNAL_THRESHOLDS = {
@@ -1007,7 +1017,6 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                 
                 expiries = get_options_expiries(ticker)
                 if not expiries:
-                    st.error遵:
                     st.error("No options expiries available. Please wait due to rate limits.")
                     st.stop()
                 
