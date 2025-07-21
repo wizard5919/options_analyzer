@@ -52,10 +52,10 @@ CONFIG = {
     }
 }
 
-# Base thresholds are now dynamically set based on market conditions
+# Base thresholds are dynamically set based on market conditions
 SIGNAL_THRESHOLDS = {
     'call': {
-        'delta_base': 0.5,  # Will be adjusted dynamically
+        'delta_base': 0.5,
         'delta_vol_multiplier': 0.15,
         'gamma_base': 0.05,
         'gamma_vol_multiplier': 0.03,
@@ -406,7 +406,7 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
                         df['theta'] = np.nan
             all_calls = pd.concat([all_calls, calls], ignore_index=True)
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
-            time.sleep(0.5)  # Reduced delay for faster processing
+            time.sleep(0.5)
         except Exception as e:
             error_msg = str(e)
             if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
@@ -696,7 +696,7 @@ st.markdown("**Auto-adjusted for market conditions** with swift signal detection
 with st.sidebar:
     st.header("⚙️ Configuration")
     st.subheader("🔄 Auto-Refresh Settings")
-    enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=True)  # Enabled by default
+    enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=True)
     if enable_auto_refresh:
         min_interval = 60
         refresh_interval = st.selectbox(
@@ -749,23 +749,23 @@ with st.sidebar:
     
     st.subheader("🎯 Profit Targets")
     st.write("Profit targets are fixed but can be adjusted if needed")
-    CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
-    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
-    CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01)
+    CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit_target")
+    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="put_profit_target")
+    CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, key="stop_loss")
     
     st.subheader("📈 Dynamic Threshold Parameters")
     st.write("Sensitivities are fixed but can be adjusted if needed")
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Call Sensitivities**")
-        SIGNAL_THRESHOLDS['call']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity", 0.0, 0.5, 0.15, 0.01)
-        SIGNAL_THRESHOLDS['call']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity", 0.0, 0.5, 0.03, 0.01)
+        SIGNAL_THRESHOLDS['call']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity (Calls)", 0.0, 0.5, 0.15, 0.01, key="call_delta_vol")
+        SIGNAL_THRESHOLDS['call']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity (Calls)", 0.0, 0.5, 0.03, 0.01, key="call_gamma_vol")
     with col2:
         st.write("**Put Sensitivities**")
-        SIGNAL_THRESHOLDS['put']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity", 0.0, 0.5, 0.15, 0.01)
-        SIGNAL_THRESHOLDS['put']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity", 0.0, 0.5, 0.03, 0.01)
+        SIGNAL_THRESHOLDS['put']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity (Puts)", 0.0, 0.5, 0.15, 0.01, key="put_delta_vol")
+        SIGNAL_THRESHOLDS['put']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity (Puts)", 0.0, 0.5, 0.03, 0.01, key="put_gamma_vol")
     st.write("**Volume Sensitivity**")
-    SIGNAL_THRESHOLDS['call']['volume_vol_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_vol_multiplier'] = st.slider("Volume Vol Multiplier", 0.0, 1.0, 0.4, 0.05)
+    SIGNAL_THRESHOLDS['call']['volume_vol_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_vol_multiplier'] = st.slider("Volume Vol Multiplier", 0.0, 1.0, 0.4, 0.05, key="volume_vol_multiplier")
 
 # Main interface
 if ticker:
@@ -851,12 +851,12 @@ if ticker:
                     st.error("No options expiries available. Please wait due to rate limits.")
                     st.stop()
                 
-                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=0)  # Default to 0DTE for speed
+                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=0)
                 today = datetime.date.today()
                 if expiry_mode == "0DTE Only":
                     expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
                 else:
-                    expiries_to_use = expiries[:3]  # Reduced to 3 for faster processing
+                    expiries_to_use = expiries[:3]
                 
                 if not expiries_to_use:
                     st.warning("No options expiries available for the selected mode.")
@@ -872,7 +872,7 @@ if ticker:
                 for option_df in [calls, puts]:
                     option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
                 
-                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-5, 5), 1)
+                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-5, 5), 1, key="strike_range")
                 min_strike = current_price + strike_range[0]
                 max_strike = current_price + strike_range[1]
                 
@@ -884,7 +884,7 @@ if ticker:
                 if not puts_filtered.empty:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 
-                m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "NTM", "ATM", "OTM"], default=["NTM", "ATM"])
+                m_filter = st.multiselect("Filter by Moneyness:", options=["ITM", "NTM", "ATM", "OTM"], default=["NTM", "ATM"], key="moneyness_filter")
                 if not calls_filtered.empty:
                     calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
                 if not puts_filtered.empty:
