@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -1080,4 +1080,4 @@ else:
         - **Profit Targets & Exit Strategy:** Clear profit targets and holding periods
         - **Early Market Detection:** Special thresholds for premarket/early market
         """)
-```
+
