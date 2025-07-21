@@ -25,10 +25,12 @@ st.markdown("""
 .stSidebar { background-color: #e9ecef !important; }
 @media (prefers-color-scheme: dark) {
     .stSidebar { background-color: #343a40 !important; }
-    .stMetric { color: #ffffff !important; } /* Ensure visibility in dark mode */
+    .stMetric { color: #ffffff !important; } /* White text in dark mode */
+    .stMetric .stMetric-value { color: #ffffff !important; } /* Ensure dark mode value visibility */
 }
-.sidebar .stMetric { color: #000000 !important; } /* Force black text in sidebar */
+.sidebar .stMetric { color: #000000 !important; } /* Force black text in sidebar (light mode) */
 .sidebar .stMetric .stMetric-value { color: #000000 !important; } /* Target metric value specifically */
+.sidebar .stMetric .stMetric-label + * { color: #000000 !important; } /* Target the value after the label */
 .sidebar .stSelectbox, .sidebar .stTextInput { background-color: #ffffff; border-radius: 5px; }
 .signal-table th { background-color: #007bff; color: white; }
 .tooltip { position: relative; display: inline-block; cursor: pointer; margin-left: 5px; }
