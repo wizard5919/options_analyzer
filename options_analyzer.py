@@ -25,6 +25,11 @@ st.markdown("""
 .stSidebar { background-color: #e9ecef; }
 .sidebar .stSelectbox, .sidebar .stTextInput { background-color: #ffffff; border-radius: 5px; }
 .signal-table th { background-color: #007bff; color: white; }
+.tooltip { position: relative; display: inline-block; cursor: pointer; margin-left: 5px; }
+.tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #555; color: #fff; 
+    text-align: center; border-radius: 6px; padding: 5px; position: absolute; z-index: 1; 
+    bottom: 125%; left: 50%; margin-left: -100px; opacity: 0; transition: opacity 0.3s; }
+.tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -705,7 +710,7 @@ with st.sidebar:
             st.session_state.refresh_system.stop()
     
     with st.expander("📊 Stock Selection", expanded=True):
-        ticker_options = ["SPY", "QQQ", "AAPL", "IWM", "Other"]
+        ticker_options = ["SPY", "QQQ", "AAPL", "IWM", "TSLA", "GLD", "TLT", "Other"]
         selected_ticker = st.selectbox("Select or Enter Stock Ticker", ticker_options, key="ticker_select")
         if selected_ticker == "Other":
             ticker = st.text_input("Enter Custom Ticker:", value=st.session_state.ticker, key="custom_ticker").upper()
@@ -713,8 +718,8 @@ with st.sidebar:
             ticker = selected_ticker.upper()
         if ticker:
             try:
-                yf.Ticker(ticker).info
-                st.success(f"Valid ticker: {ticker}")
+                ticker_info = yf.Ticker(ticker).info
+                st.success(f"Valid ticker: {ticker} ({ticker_info.get('shortName', ticker)})")
                 st.session_state.ticker = ticker
             except:
                 st.error("Invalid ticker. Please try again (e.g., SPY, AAPL).")
@@ -734,30 +739,46 @@ with st.sidebar:
                 with col1:
                     st.markdown('<div class="call-metric">', unsafe_allow_html=True)
                     st.write("**Calls**")
-                    st.metric("Base Delta", f"{call_thresholds['delta_base']:.2f}", help="Minimum delta for call signals")
-                    st.metric("Base Gamma", f"{call_thresholds['gamma_base']:.3f}", help="Minimum gamma for call signals")
-                    st.metric("Base RSI", f"{call_thresholds['rsi_base']:.1f}", help="Base RSI level for calls")
-                    st.metric("Min RSI", f"{call_thresholds['rsi_min']:.1f}", help="Minimum RSI for call signals")
-                    st.metric("Stochastic", f"{call_thresholds['stoch_base']:.1f}", help="Minimum stochastic for calls")
-                    st.metric("Min Volume", f"{call_thresholds['volume_min']:.0f}", help="Minimum option volume")
-                    st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}", help="Minimum price momentum")
+                    st.metric("Base Delta", f"{call_thresholds['delta_base']:.2f}", 
+                             help="Minimum delta for call signals, adjusted for volatility")
+                    st.metric("Base Gamma", f"{call_thresholds['gamma_base']:.3f}", 
+                             help="Minimum gamma for call signals, sensitive to price movements")
+                    st.metric("Base RSI", f"{call_thresholds['rsi_base']:.1f}", 
+                             help="Base RSI level for calls, reflecting momentum")
+                    st.metric("Min RSI", f"{call_thresholds['rsi_min']:.1f}", 
+                             help="Minimum RSI for call signals")
+                    st.metric("Stochastic", f"{call_thresholds['stoch_base']:.1f}", 
+                             help="Minimum stochastic oscillator value for calls")
+                    st.metric("Min Volume", f"{call_thresholds['volume_min']:.0f}", 
+                             help="Minimum option volume for valid signals")
+                    st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}", 
+                             help="Minimum price change for call signals")
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 with col2:
                     st.markdown('<div class="put-metric">', unsafe_allow_html=True)
                     st.write("**Puts**")
-                    st.metric("Base Delta", f"{put_thresholds['delta_base']:.2f}", help="Maximum delta for put signals")
-                    st.metric("Base Gamma", f"{put_thresholds['gamma_base']:.3f}", help="Minimum gamma for put signals")
-                    st.metric("Base RSI", f"{put_thresholds['rsi_base']:.1f}", help="Base RSI level for puts")
-                    st.metric("Max RSI", f"{put_thresholds['rsi_max']:.1f}", help="Maximum RSI for put signals")
-                    st.metric("Stochastic", f"{put_thresholds['stoch_base']:.1f}", help="Maximum stochastic for puts")
-                    st.metric("Min Volume", f"{put_thresholds['volume_min']:.0f}", help="Minimum option volume")
-                    st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}", help="Minimum price momentum")
+                    st.metric("Base Delta", f"{put_thresholds['delta_base']:.2f}", 
+                             help="Maximum delta for put signals, adjusted for volatility")
+                    st.metric("Base Gamma", f"{put_thresholds['gamma_base']:.3f}", 
+                             help="Minimum gamma for put signals, sensitive to price movements")
+                    st.metric("Base RSI", f"{put_thresholds['rsi_base']:.1f}", 
+                             help="Base RSI level for puts, reflecting momentum")
+                    st.metric("Max RSI", f"{put_thresholds['rsi_max']:.1f}", 
+                             help="Maximum RSI for put signals")
+                    st.metric("Stochastic", f"{put_thresholds['stoch_base']:.1f}", 
+                             help="Maximum stochastic oscillator value for puts")
+                    st.metric("Min Volume", f"{put_thresholds['volume_min']:.0f}", 
+                             help="Minimum option volume for valid signals")
+                    st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}", 
+                             help="Minimum price change for put signals")
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 st.write("**Common**")
-                st.metric("Max Theta", f"{call_thresholds['theta_base']:.3f}", help="Maximum theta for signals")
-                st.metric("Volume Multiplier", f"{call_thresholds['volume_multiplier']:.2f}", help="Volume threshold multiplier")
+                st.metric("Max Theta", f"{call_thresholds['theta_base']:.3f}", 
+                         help="Maximum theta for signals, accounting for time decay")
+                st.metric("Volume Multiplier", f"{call_thresholds['volume_multiplier']:.2f}", 
+                         help="Multiplier for volume thresholds based on volatility")
     
     with st.expander("🎯 Profit Targets"):
         CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit_target")
@@ -776,7 +797,14 @@ with st.sidebar:
             SIGNAL_THRESHOLDS['put']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity (Puts)", 0.0, 0.5, 0.15, 0.01, key="put_delta_vol")
             SIGNAL_THRESHOLDS['put']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity (Puts)", 0.0, 0.5, 0.03, 0.01, key="put_gamma_vol")
         st.write("**Volume Sensitivity**")
-        SIGNAL_THRESHOLDS['call']['volume_vol_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_vol_multiplier'] = st.slider("Volume Vol Multiplier", 0.0, 1.0, 0.4, 0.05, key="volume_vol_multiplier")
+        SIGNAL_THRESHOLDS['call']['volume_vol_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_vol_multiplier'] = st.slider(
+            "Volume Vol Multiplier", 0.0, 1.0, 0.4, 0.05, key="volume_vol_multiplier")
+        if st.button("Preview Thresholds", key="preview_thresholds"):
+            if 'df' in locals() and not df.empty:
+                latest = df.iloc[-1]
+                preview_call = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
+                preview_put = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
+                st.json({'call': preview_call, 'put': preview_put})
 
 # Main interface
 if ticker:
@@ -961,6 +989,14 @@ if ticker:
                                 icon="✅"
                             )
                             
+                            # Audible alert for new signal
+                            st.markdown("""
+                            <script>
+                            var audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
+                            audio.play();
+                            </script>
+                            """, unsafe_allow_html=True)
+                            
                             # Signal strength gauge
                             st.write("**Signal Strength**")
                             st.markdown("""
@@ -1051,6 +1087,15 @@ if ticker:
                                 icon="✅"
                             )
                             
+                            # Audible alert for new signal
+                            st.markdown("""
+                            <script>
+                            var audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
+                            audio.play();
+                            </script>
+                            """, unsafe_allow_html=True)
+                            
+                            # Signal strength gauge
                             st.write("**Signal Strength**")
                             st.markdown("""
                             <chartjs
@@ -1180,17 +1225,17 @@ else:
     with st.expander("ℹ️ How to use this app"):
         st.markdown("""
         **Steps to analyze options:**
-        1. Select a stock ticker (e.g., SPY, QQQ) or enter a custom one
+        1. Select a stock ticker (e.g., SPY, IWM, TSLA) or enter a custom one
         2. Configure auto-refresh settings in the sidebar
         3. Select expiration filter (0DTE or near-term)
         4. Adjust strike range around current price
         5. Filter by moneyness (ITM, ATM, OTM)
         6. Sort signals by score, strike, price, or volume
-        7. Receive immediate signal notifications with strength gauges
+        7. Receive immediate signal notifications with strength gauges and audible alerts
         
         **Key Features:**
         - **Auto-Adjusted Thresholds:** Adapt to volatility and momentum
-        - **Swift Signal Detection:** Immediate alerts for call/put signals
+        - **Swift Signal Detection:** Immediate alerts with audible notifications
         - **Price Action Analysis:** Incorporates momentum and breakouts
         - **Time Decay Adjustment:** Accounts for theta during market hours
         - **Seamless Auto-Refresh:** Updates at chosen intervals
