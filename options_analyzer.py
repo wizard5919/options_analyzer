@@ -852,11 +852,11 @@ with st.sidebar:
                 put_thresholds = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
                 
                 with st.expander("📈 Signal Thresholds", expanded=True):
-                    st.write("Thresholds adapt to market volatility and momentum")
+                    st.markdown("Thresholds adapt to market volatility and momentum", unsafe_allow_html=True)
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.markdown('<div class="call-metric">', unsafe_allow_html=True)
-                        st.write("**Calls**")
+                        st.markdown('<div style="font-size: 0.9rem; margin-bottom: 8px;"><strong>Calls</strong></div>', unsafe_allow_html=True)
+                        st.markdown('<div style="font-size: 0.85rem; padding: 5px; border-radius: 5px; background-color: #e6f4ea;">', unsafe_allow_html=True)
                         st.metric("Base Delta", f"{call_thresholds['delta_base']:.2f}", 
                                  help="Minimum delta for call signals")
                         st.metric("Base Gamma", f"{call_thresholds['gamma_base']:.3f}", 
@@ -870,8 +870,8 @@ with st.sidebar:
                         st.markdown('</div>', unsafe_allow_html=True)
                     
                     with col2:
-                        st.markdown('<div class="put-metric">', unsafe_allow_html=True)
-                        st.write("**Puts**")
+                        st.markdown('<div style="font-size: 0.9rem; margin-bottom: 8px;"><strong>Puts</strong></div>', unsafe_allow_html=True)
+                        st.markdown('<div style="font-size: 0.85rem; padding: 5px; border-radius: 5px; background-color: #f8d7da;">', unsafe_allow_html=True)
                         st.metric("Base Delta", f"{put_thresholds['delta_base']:.2f}", 
                                  help="Maximum delta for put signals")
                         st.metric("Base Gamma", f"{put_thresholds['gamma_base']:.3f}", 
@@ -884,9 +884,11 @@ with st.sidebar:
                                  help="Minimum option volume for signals")
                         st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.write("**Common**")
+                    st.markdown('<div style="font-size: 0.9rem; margin-top: 10px;"><strong>Common</strong></div>', unsafe_allow_html=True)
+                    st.markdown('<div style="font-size: 0.85rem; padding: 5px; border-radius: 5px; background-color: #f0f2f6;">', unsafe_allow_html=True)
                     st.metric("Max Theta", f"{call_thresholds['theta_base']:.3f}", 
                              help="Maximum theta for signals")
+                    st.markdown('</div>', unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Error computing thresholds: {str(e)}")
     
@@ -903,6 +905,7 @@ with st.sidebar:
             "Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, 
             key="stop_loss", help="Stop loss percentage"
         )
+
 
 # Main interface
 if 'ticker' in st.session_state and st.session_state.ticker:
