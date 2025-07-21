@@ -33,7 +33,6 @@ st.markdown("""
     text-align: center; border-radius: 6px; padding: 5px; position: absolute; z-index: 1; 
     bottom: 125%; left: 50%; margin-left: -100px; opacity: 0; transition: opacity 0.3s; }
 .tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
-/* Added for clarity */
 * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 body { font-size: 14px; line-height: 1.5; }
 .stApp { zoom: 1; }
@@ -748,46 +747,30 @@ with st.sidebar:
                 with col1:
                     st.markdown('<div class="call-metric">', unsafe_allow_html=True)
                     st.write("**Calls**")
-                    st.metric("Base Delta", f"{call_thresholds['delta_base']:.2f}", 
-                             help="Minimum delta for call signals, adjusted for volatility")
-                    st.metric("Base Gamma", f"{call_thresholds['gamma_base']:.3f}", 
-                             help="Minimum gamma for call signals, sensitive to price movements")
-                    st.metric("Base RSI", f"{call_thresholds['rsi_base']:.1f}", 
-                             help="Base RSI level for calls, reflecting momentum")
-                    st.metric("Min RSI", f"{call_thresholds['rsi_min']:.1f}", 
-                             help="Minimum RSI for call signals")
-                    st.metric("Stochastic", f"{call_thresholds['stoch_base']:.1f}", 
-                             help="Minimum stochastic oscillator value for calls")
-                    st.metric("Min Volume", f"{call_thresholds['volume_min']:.0f}", 
-                             help="Minimum option volume for valid signals")
-                    st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}", 
-                             help="Minimum price change for call signals")
+                    st.metric("Base Delta", call_thresholds['delta_base'], help="Minimum delta for call signals, adjusted for volatility")
+                    st.metric("Base Gamma", call_thresholds['gamma_base'], help="Minimum gamma for call signals, sensitive to price movements")
+                    st.metric("Base RSI", call_thresholds['rsi_base'], help="Base RSI level for calls, reflecting momentum")
+                    st.metric("Min RSI", call_thresholds['rsi_min'], help="Minimum RSI for call signals")
+                    st.metric("Stochastic", call_thresholds['stoch_base'], help="Minimum stochastic oscillator value for calls")
+                    st.metric("Min Volume", call_thresholds['volume_min'], help="Minimum option volume for valid signals")
+                    st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}", help="Minimum price change for call signals")
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 with col2:
                     st.markdown('<div class="put-metric">', unsafe_allow_html=True)
                     st.write("**Puts**")
-                    st.metric("Base Delta", f"{put_thresholds['delta_base']:.2f}", 
-                             help="Maximum delta for put signals, adjusted for volatility")
-                    st.metric("Base Gamma", f"{put_thresholds['gamma_base']:.3f}", 
-                             help="Minimum gamma for put signals, sensitive to price movements")
-                    st.metric("Base RSI", f"{put_thresholds['rsi_base']:.1f}", 
-                             help="Base RSI level for puts, reflecting momentum")
-                    st.metric("Max RSI", f"{put_thresholds['rsi_max']:.1f}", 
-                             help="Maximum RSI for put signals")
-                    st.metric("Stochastic", f"{put_thresholds['stoch_base']:.1f}", 
-                             help="Maximum stochastic oscillator value for puts")
-                    st.metric("Min Volume", f"{put_thresholds['volume_min']:.0f}", 
-                             help="Minimum option volume for valid signals")
-                    st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}", 
-                             help="Minimum price change for put signals")
+                    st.metric("Base Delta", put_thresholds['delta_base'], help="Maximum delta for put signals, adjusted for volatility")
+                    st.metric("Base Gamma", put_thresholds['gamma_base'], help="Minimum gamma for put signals, sensitive to price movements")
+                    st.metric("Base RSI", put_thresholds['rsi_base'], help="Base RSI level for puts, reflecting momentum")
+                    st.metric("Max RSI", put_thresholds['rsi_max'], help="Maximum RSI for put signals")
+                    st.metric("Stochastic", put_thresholds['stoch_base'], help="Maximum stochastic oscillator value for puts")
+                    st.metric("Min Volume", put_thresholds['volume_min'], help="Minimum option volume for valid signals")
+                    st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}", help="Minimum price change for put signals")
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 st.write("**Common**")
-                st.metric("Max Theta", f"{call_thresholds['theta_base']:.3f}", 
-                         help="Maximum theta for signals, accounting for time decay")
-                st.metric("Volume Multiplier", f"{call_thresholds['volume_multiplier']:.2f}", 
-                         help="Multiplier for volume thresholds based on volatility")
+                st.metric("Max Theta", call_thresholds['theta_base'], help="Maximum theta for signals, accounting for time decay")
+                st.metric("Volume Multiplier", call_thresholds['volume_multiplier'], help="Multiplier for volume thresholds based on volatility")
     
     with st.expander("🎯 Profit Targets"):
         CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit_target")
@@ -949,6 +932,7 @@ if ticker:
                     default=st.session_state.moneyness_filter,
                     key="moneyness_filter"
                 )
+                # Move session state update outside widget instantiation
                 st.session_state.moneyness_filter = moneyness_filter
                 if not calls_filtered.empty:
                     calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(moneyness_filter)]
