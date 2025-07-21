@@ -706,7 +706,6 @@ st.markdown("**Auto-adjusted for market conditions** with swift signal detection
 
 with st.sidebar:
     st.header("⚙️ Configuration")
-    st.write("Sidebar is active")  # Debug line
     with st.expander("🔄 Auto-Refresh Settings", expanded=True):
         enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=True, key="auto_refresh")
         if enable_auto_refresh:
@@ -738,44 +737,68 @@ with st.sidebar:
                 st.error("Invalid ticker. Please try again (e.g., SPY, AAPL).")
                 ticker = ""
     
+    # THRESHOLD DISPLAY SECTION - ALWAYS VISIBLE WHEN TICKER SELECTED
     if ticker:
-        df = get_stock_data(ticker)
-        if not df.empty:
-            df = compute_indicators(df)
-            latest = df.iloc[-1]
-            call_thresholds = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
-            put_thresholds = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
-            
-            with st.expander("📈 Auto-Adjusted Signal Thresholds", expanded=True):
-                st.write("Thresholds are dynamically set based on market conditions")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown('<div class="call-metric">', unsafe_allow_html=True)
-                    st.write("**Calls**")
-                    st.metric("Base Delta", call_thresholds['delta_base'], help="Minimum delta for call signals, adjusted for volatility")
-                    st.metric("Base Gamma", call_thresholds['gamma_base'], help="Minimum gamma for call signals, sensitive to price movements")
-                    st.metric("Base RSI", call_thresholds['rsi_base'], help="Base RSI level for calls, reflecting momentum")
-                    st.metric("Min RSI", call_thresholds['rsi_min'], help="Minimum RSI for call signals")
-                    st.metric("Stochastic", call_thresholds['stoch_base'], help="Minimum stochastic oscillator value for calls")
-                    st.metric("Min Volume", call_thresholds['volume_min'], help="Minimum option volume for valid signals")
-                    st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}", help="Minimum price change for call signals")
-                    st.markdown('</div>', unsafe_allow_html=True)
+        try:
+            df = get_stock_data(ticker)
+            if not df.empty:
+                df = compute_indicators(df)
+                latest = df.iloc[-1]
                 
-                with col2:
-                    st.markdown('<div class="put-metric">', unsafe_allow_html=True)
-                    st.write("**Puts**")
-                    st.metric("Base Delta", put_thresholds['delta_base'], help="Maximum delta for put signals, adjusted for volatility")
-                    st.metric("Base Gamma", put_thresholds['gamma_base'], help="Minimum gamma for put signals, sensitive to price movements")
-                    st.metric("Base RSI", put_thresholds['rsi_base'], help="Base RSI level for puts, reflecting momentum")
-                    st.metric("Max RSI", put_thresholds['rsi_max'], help="Maximum RSI for put signals")
-                    st.metric("Stochastic", put_thresholds['stoch_base'], help="Maximum stochastic oscillator value for puts")
-                    st.metric("Min Volume", put_thresholds['volume_min'], help="Minimum option volume for valid signals")
-                    st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}", help="Minimum price change for put signals")
-                    st.markdown('</div>', unsafe_allow_html=True)
+                # Calculate thresholds for calls and puts
+                call_thresholds = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
+                put_thresholds = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
                 
-                st.write("**Common**")
-                st.metric("Max Theta", call_thresholds['theta_base'], help="Maximum theta for signals, accounting for time decay")
-                st.metric("Volume Multiplier", call_thresholds['volume_multiplier'], help="Multiplier for volume thresholds based on volatility")
+                with st.expander("📈 Auto-Adjusted Signal Thresholds", expanded=True):
+                    st.write("Thresholds are dynamically set based on market conditions")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown('<div class="call-metric">', unsafe_allow_html=True)
+                        st.write("**Calls**")
+                        st.metric("Base Delta", f"{call_thresholds['delta_base']:.2f}", 
+                                 help="Minimum delta for call signals, adjusted for volatility")
+                        st.metric("Base Gamma", f"{call_thresholds['gamma_base']:.3f}", 
+                                 help="Minimum gamma for call signals, sensitive to price movements")
+                        st.metric("Base RSI", f"{call_thresholds['rsi_base']:.1f}", 
+                                 help="Base RSI level for calls, reflecting momentum")
+                        st.metric("Min RSI", f"{call_thresholds['rsi_min']:.1f}", 
+                                 help="Minimum RSI for call signals")
+                        st.metric("Stochastic", f"{call_thresholds['stoch_base']:.1f}", 
+                                 help="Minimum stochastic oscillator value for calls")
+                        st.metric("Min Volume", f"{call_thresholds['volume_min']:.0f}", 
+                                 help="Minimum option volume for valid signals")
+                        st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}", 
+                                 help="Minimum price change for call signals")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown('<div class="put-metric">', unsafe_allow_html=True)
+                        st.write("**Puts**")
+                        st.metric("Base Delta", f"{put_thresholds['delta_base']:.2f}", 
+                                 help="Maximum delta for put signals, adjusted for volatility")
+                        st.metric("Base Gamma", f"{put_thresholds['gamma_base']:.3f}", 
+                                 help="Minimum gamma for put signals, sensitive to price movements")
+                        st.metric("Base RSI", f"{put_thresholds['rsi_base']:.1f}", 
+                                 help="Base RSI level for puts, reflecting momentum")
+                        st.metric("Max RSI", f"{put_thresholds['rsi_max']:.1f}", 
+                                 help="Maximum RSI for put signals")
+                        st.metric("Stochastic", f"{put_thresholds['stoch_base']:.1f}", 
+                                 help="Maximum stochastic oscillator value for puts")
+                        st.metric("Min Volume", f"{put_thresholds['volume_min']:.0f}", 
+                                 help="Minimum option volume for valid signals")
+                        st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}", 
+                                 help="Minimum price change for put signals")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.write("**Common**")
+                    st.metric("Max Theta", f"{call_thresholds['theta_base']:.3f}", 
+                             help="Maximum theta for signals, accounting for time decay")
+                    st.metric("Volume Multiplier", f"{call_thresholds['volume_multiplier']:.1f}", 
+                             help="Multiplier for volume thresholds based on volatility")
+            else:
+                st.warning("No stock data available to compute thresholds.")
+        except Exception as e:
+            st.error(f"Error computing thresholds: {str(e)}")
     
     with st.expander("🎯 Profit Targets"):
         CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit_target")
@@ -804,7 +827,8 @@ with st.sidebar:
                 st.json({'call': preview_call, 'put': preview_put})
 
 # Main interface
-if ticker:
+if 'ticker' in st.session_state and st.session_state.ticker:
+    ticker = st.session_state.ticker
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         if is_market_open():
@@ -840,6 +864,7 @@ if ticker:
     with tab1:
         try:
             with st.spinner("Fetching and analyzing data..."):
+                df = get_stock_data(ticker)
                 if df.empty:
                     st.error("Unable to fetch stock data. Please check the ticker symbol.")
                     st.stop()
