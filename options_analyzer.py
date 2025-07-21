@@ -11,36 +11,112 @@ from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
+import plotly.graph_objects as go
+import uuid
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# Apply custom CSS for visual polish and clarity
+# Apply custom CSS for modern, professional look
 st.markdown("""
 <style>
-.stMetric { background-color: #f0f2f6; border-radius: 5px; padding: 10px; margin-bottom: 10px; }
-.call-metric { border-left: 4px solid #28a745; }
-.put-metric { border-left: 4px solid #dc3545; }
-.stButton>button { background-color: #007bff; color: white; border-radius: 5px; padding: 8px 16px; }
-.stSidebar { background-color: #e9ecef !important; }
-@media (prefers-color-scheme: dark) {
-    .stSidebar { background-color: #343a40 !important; }
-    .stMetric { color: #ffffff !important; } /* White text in dark mode */
-    .stMetric .stMetric-value { color: #ffffff !important; } /* Ensure dark mode value visibility */
+/* General Styling */
+.stApp { background-color: #f8f9fa; font-family: 'Segoe UI', Arial, sans-serif; }
+h1, h2, h3 { color: #1a3c6e; font-weight: 600; }
+.stButton>button { 
+    background-color: #1a3c6e; 
+    color: white; 
+    border-radius: 8px; 
+    padding: 10px 20px; 
+    font-weight: 500; 
+    transition: background-color 0.3s; 
 }
-.sidebar .stMetric { color: #000000 !important; } /* Force black text in sidebar (light mode) */
-.sidebar .stMetric .stMetric-value { color: #000000 !important; } /* Target metric value specifically */
-.sidebar .stMetric .stMetric-label + * { color: #000000 !important; } /* Target the value after the label */
-.sidebar .stSelectbox, .sidebar .stTextInput { background-color: #ffffff; border-radius: 5px; }
-.signal-table th { background-color: #007bff; color: white; }
-.tooltip { position: relative; display: inline-block; cursor: pointer; margin-left: 5px; }
-.tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #555; color: #fff; 
-    text-align: center; border-radius: 6px; padding: 5px; position: absolute; z-index: 1; 
-    bottom: 125%; left: 50%; margin-left: -100px; opacity: 0; transition: opacity 0.3s; }
+.stButton>button:hover { background-color: #2c5a9e; }
+.stSelectbox, .stTextInput, .stSlider { 
+    background-color: #ffffff; 
+    border-radius: 8px; 
+    padding: 8px; 
+    border: 1px solid #d1d5db; 
+}
+
+/* Sidebar Styling */
+.stSidebar { 
+    background-color: #ffffff !important; 
+    border-right: 1px solid #e5e7eb; 
+    padding: 20px; 
+}
+.stSidebar h2 { font-size: 1.4rem; color: #1a3c6e; }
+
+/* Metric Styling */
+.stMetric { 
+    background-color: #ffffff; 
+    border-radius: 8px; 
+    padding: 15px; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+    margin-bottom: 15px; 
+}
+.call-metric { border-left: 5px solid #28a745; }
+.put-metric { border-left: 5px solid #dc3545; }
+
+/* Table Styling */
+.signal-table th { 
+    background-color: #1a3c6e; 
+    color: white; 
+    padding: 12px; 
+    font-weight: 500; 
+}
+.signal-table td { padding: 10px; }
+
+/* Tooltip Styling */
+.tooltip { position: relative; display: inline-block; cursor: pointer; }
+.tooltip .tooltiptext { 
+    visibility: hidden; 
+    width: 220px; 
+    background-color: #1a3c6e; 
+    color: #fff; 
+    text-align: center; 
+    border-radius: 6px; 
+    padding: 8px; 
+    position: absolute; 
+    z-index: 1; 
+    bottom: 125%; 
+    left: 50%; 
+    margin-left: -110px; 
+    opacity: 0; 
+    transition: opacity 0.3s; 
+}
 .tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
-* { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-body { font-size: 14px; line-height: 1.5; }
-.stApp { zoom: 1; }
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    .stApp { background-color: #1f2a44; }
+    h1, h2, h3 { color: #e9ecef; }
+    .stMetric { background-color: #2d3b5e; color: #ffffff !important; }
+    .stMetric .stMetric-value { color: #ffffff !important; }
+    .stSidebar { background-color: #2d3b5e !important; }
+    .stSelectbox, .stTextInput, .stSlider { background-color: #3b4a6b; border: 1px solid #4b5e8a; }
+    .signal-table th { background-color: #2c5a9e; }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .stApp { zoom: 0.9; }
+    .stSidebar { padding: 15px; }
+    .stMetric { padding: 10px; }
+}
+
+/* Animation for Alerts */
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+.signal-alert { 
+    animation: pulse 1.5s infinite; 
+    border-radius: 8px; 
+    padding: 15px; 
+    margin-bottom: 15px; 
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -622,28 +698,28 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
         if side == "call":
             volume_ok = option_volume > thresholds['volume_min']
             conditions = [
-                (delta >= thresholds['delta_min'], f"Delta >= {thresholds['delta_min']:.2f}", delta),
-                (gamma >= thresholds['gamma_base'], f"Gamma >= {thresholds['gamma_base']:.3f}", gamma),
-                (theta <= thresholds['theta_base'], f"Theta <= {thresholds['theta_base']:.3f}", theta),
+                (delta >= thresholds['delta_min'], f"Delta ≥ {thresholds['delta_min']:.2f}", delta),
+                (gamma >= thresholds['gamma_base'], f"Gamma ≥ {thresholds['gamma_base']:.3f}", gamma),
+                (theta <= thresholds['theta_base'], f"Theta ≤ {theta:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']:.1f}", rsi),
                 (stochastic is not None and stochastic > thresholds['stoch_base'], f"Stochastic > {thresholds['stoch_base']:.1f}", stochastic),
                 (vwap is not None and close > vwap, "Price > VWAP", f"{close:.2f} > {vwap:.2f}" if vwap else "N/A"),
                 (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f} > {thresholds['volume_min']}"),
-                (price_momentum >= thresholds['price_momentum_min'] or breakout_up, f"Price Momentum >= {thresholds['price_momentum_min']*100:.2f}% or Breakout", f"{price_momentum*100:.2f}%")
+                (price_momentum >= thresholds['price_momentum_min'] or breakout_up, f"Price Momentum ≥ {thresholds['price_momentum_min']*100:.2f}% or Breakout", f"{price_momentum*100:.2f}%")
             ]
         else:
             volume_ok = option_volume > thresholds['volume_min']
             conditions = [
-                (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']:.2f}", delta),
-                (gamma >= thresholds['gamma_base'], f"Gamma >= {thresholds['gamma_base']:.3f}", gamma),
-                (theta <= thresholds['theta_base'], f"Theta <= {thresholds['theta_base']:.3f}", theta),
+                (delta <= thresholds['delta_max'], f"Delta ≤ {thresholds['delta_max']:.2f}", delta),
+                (gamma >= thresholds['gamma_base'], f"Gamma ≥ {thresholds['gamma_base']:.3f}", gamma),
+                (theta <= thresholds['theta_base'], f"Theta ≤ {theta:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (stochastic is not None and stochastic < thresholds['stoch_base'], f"Stochastic < {thresholds['stoch_base']:.1f}", stochastic),
                 (vwap is not None and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
                 (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f} > {thresholds['volume_min']}"),
-                (price_momentum <= thresholds['price_momentum_min'] or breakout_down, f"Price Momentum <= {thresholds['price_momentum_min']*100:.2f}% or Breakout", f"{price_momentum*100:.2f}%")
+                (price_momentum <= thresholds['price_momentum_min'] or breakout_down, f"Price Momentum ≤ {thresholds['price_momentum_min']*100:.2f}% or Breakout", f"{price_momentum*100:.2f}%")
             ]
         
         passed_conditions = [desc for passed, desc, val in conditions if passed]
@@ -685,6 +761,23 @@ if 'strike_range' not in st.session_state:
     st.session_state.strike_range = (-5.0, 5.0)
 if 'moneyness_filter' not in st.session_state:
     st.session_state.moneyness_filter = ["NTM", "ATM"]
+if 'show_welcome' not in st.session_state:
+    st.session_state.show_welcome = True
+
+# Welcome Modal
+if st.session_state.show_welcome:
+    st.markdown("""
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        alert('Welcome to the Options Greeks Buy Signal Analyzer!\n\n' +
+              '1. Select a stock ticker\n' +
+              '2. Configure settings in the sidebar\n' +
+              '3. View real-time signals and charts\n\n' +
+              'Click OK to start analyzing!');
+    });
+    </script>
+    """, unsafe_allow_html=True)
+    st.session_state.show_welcome = False
 
 if 'rate_limited_until' in st.session_state:
     if time.time() < st.session_state['rate_limited_until']:
@@ -702,11 +795,11 @@ if 'rate_limited_until' in st.session_state:
         del st.session_state['rate_limited_until']
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Auto-adjusted for market conditions** with swift signal detection")
+st.markdown("**Real-time signal detection with dynamic thresholds and interactive charts**")
 
 with st.sidebar:
-    st.header("⚙️ Configuration")
-    with st.expander("🔄 Auto-Refresh Settings", expanded=True):
+    st.header("⚙️ Settings")
+    with st.expander("🔄 Auto-Refresh", expanded=True):
         enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=True, key="auto_refresh")
         if enable_auto_refresh:
             refresh_interval = st.selectbox(
@@ -714,18 +807,29 @@ with st.sidebar:
                 options=[60, 120, 300],
                 index=1,
                 format_func=lambda x: f"{x} seconds",
-                key="refresh_interval"
+                key="refresh_interval",
+                help="Select how often data refreshes automatically"
             )
             st.session_state.refresh_system.start(refresh_interval)
-            st.info(f"Data will refresh every {refresh_interval} seconds")
+            st.info(f"Refreshing every {refresh_interval} seconds")
         else:
             st.session_state.refresh_system.stop()
     
     with st.expander("📊 Stock Selection", expanded=True):
         ticker_options = ["SPY", "QQQ", "AAPL", "IWM", "TSLA", "GLD", "TLT", "Other"]
-        selected_ticker = st.selectbox("Select or Enter Stock Ticker", ticker_options, key="ticker_select")
+        selected_ticker = st.selectbox(
+            "Select Stock Ticker",
+            ticker_options,
+            key="ticker_select",
+            help="Choose a stock or select 'Other' for a custom ticker"
+        )
         if selected_ticker == "Other":
-            ticker = st.text_input("Enter Custom Ticker:", value=st.session_state.ticker, key="custom_ticker").upper()
+            ticker = st.text_input(
+                "Enter Custom Ticker",
+                value=st.session_state.ticker,
+                key="custom_ticker",
+                help="Enter a valid stock ticker (e.g., SPY, AAPL)"
+            ).upper()
         else:
             ticker = selected_ticker.upper()
         if ticker:
@@ -734,10 +838,9 @@ with st.sidebar:
                 st.success(f"Valid ticker: {ticker} ({ticker_info.get('shortName', ticker)})")
                 st.session_state.ticker = ticker
             except:
-                st.error("Invalid ticker. Please try again (e.g., SPY, AAPL).")
+                st.error("Invalid ticker. Try again (e.g., SPY, AAPL).")
                 ticker = ""
     
-    # THRESHOLD DISPLAY SECTION - ALWAYS VISIBLE WHEN TICKER SELECTED
     if ticker:
         try:
             df = get_stock_data(ticker)
@@ -745,117 +848,87 @@ with st.sidebar:
                 df = compute_indicators(df)
                 latest = df.iloc[-1]
                 
-                # Calculate thresholds for calls and puts
                 call_thresholds = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
                 put_thresholds = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
                 
-                with st.expander("📈 Auto-Adjusted Signal Thresholds", expanded=True):
-                    st.write("Thresholds are dynamically set based on market conditions")
+                with st.expander("📈 Signal Thresholds", expanded=True):
+                    st.write("Thresholds adapt to market volatility and momentum")
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown('<div class="call-metric">', unsafe_allow_html=True)
                         st.write("**Calls**")
                         st.metric("Base Delta", f"{call_thresholds['delta_base']:.2f}", 
-                                 help="Minimum delta for call signals, adjusted for volatility")
+                                 help="Minimum delta for call signals")
                         st.metric("Base Gamma", f"{call_thresholds['gamma_base']:.3f}", 
-                                 help="Minimum gamma for call signals, sensitive to price movements")
-                        st.metric("Base RSI", f"{call_thresholds['rsi_base']:.1f}", 
-                                 help="Base RSI level for calls, reflecting momentum")
+                                 help="Minimum gamma for call signals")
                         st.metric("Min RSI", f"{call_thresholds['rsi_min']:.1f}", 
                                  help="Minimum RSI for call signals")
                         st.metric("Stochastic", f"{call_thresholds['stoch_base']:.1f}", 
-                                 help="Minimum stochastic oscillator value for calls")
+                                 help="Minimum stochastic value for calls")
                         st.metric("Min Volume", f"{call_thresholds['volume_min']:.0f}", 
-                                 help="Minimum option volume for valid signals")
-                        st.metric("Min Price Momentum (%)", f"{call_thresholds['price_momentum_min']*100:.2f}", 
-                                 help="Minimum price change for call signals")
+                                 help="Minimum option volume for signals")
                         st.markdown('</div>', unsafe_allow_html=True)
                     
                     with col2:
                         st.markdown('<div class="put-metric">', unsafe_allow_html=True)
                         st.write("**Puts**")
                         st.metric("Base Delta", f"{put_thresholds['delta_base']:.2f}", 
-                                 help="Maximum delta for put signals, adjusted for volatility")
+                                 help="Maximum delta for put signals")
                         st.metric("Base Gamma", f"{put_thresholds['gamma_base']:.3f}", 
-                                 help="Minimum gamma for put signals, sensitive to price movements")
-                        st.metric("Base RSI", f"{put_thresholds['rsi_base']:.1f}", 
-                                 help="Base RSI level for puts, reflecting momentum")
+                                 help="Minimum gamma for put signals")
                         st.metric("Max RSI", f"{put_thresholds['rsi_max']:.1f}", 
                                  help="Maximum RSI for put signals")
                         st.metric("Stochastic", f"{put_thresholds['stoch_base']:.1f}", 
-                                 help="Maximum stochastic oscillator value for puts")
+                                 help="Maximum stochastic value for puts")
                         st.metric("Min Volume", f"{put_thresholds['volume_min']:.0f}", 
-                                 help="Minimum option volume for valid signals")
-                        st.metric("Min Price Momentum (%)", f"{put_thresholds['price_momentum_min']*100:.2f}", 
-                                 help="Minimum price change for put signals")
+                                 help="Minimum option volume for signals")
                         st.markdown('</div>', unsafe_allow_html=True)
                     
                     st.write("**Common**")
                     st.metric("Max Theta", f"{call_thresholds['theta_base']:.3f}", 
-                             help="Maximum theta for signals, accounting for time decay")
-                    st.metric("Volume Multiplier", f"{call_thresholds['volume_multiplier']:.1f}", 
-                             help="Multiplier for volume thresholds based on volatility")
-            else:
-                st.warning("No stock data available to compute thresholds.")
+                             help="Maximum theta for signals")
         except Exception as e:
             st.error(f"Error computing thresholds: {str(e)}")
     
-    with st.expander("🎯 Profit Targets"):
-        CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit_target")
-        CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="put_profit_target")
-        CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, key="stop_loss")
-    
-    with st.expander("📈 Dynamic Threshold Parameters"):
-        st.write("Sensitivities are fixed but can be adjusted if needed")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Call Sensitivities**")
-            SIGNAL_THRESHOLDS['call']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity (Calls)", 0.0, 0.5, 0.15, 0.01, key="call_delta_vol")
-            SIGNAL_THRESHOLDS['call']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity (Calls)", 0.0, 0.5, 0.03, 0.01, key="call_gamma_vol")
-        with col2:
-            st.write("**Put Sensitivities**")
-            SIGNAL_THRESHOLDS['put']['delta_vol_multiplier'] = st.slider("Delta Vol Sensitivity (Puts)", 0.0, 0.5, 0.15, 0.01, key="put_delta_vol")
-            SIGNAL_THRESHOLDS['put']['gamma_vol_multiplier'] = st.slider("Gamma Vol Sensitivity (Puts)", 0.0, 0.5, 0.03, 0.01, key="put_gamma_vol")
-        st.write("**Volume Sensitivity**")
-        SIGNAL_THRESHOLDS['call']['volume_vol_multiplier'] = SIGNAL_THRESHOLDS['put']['volume_vol_multiplier'] = st.slider(
-            "Volume Vol Multiplier", 0.0, 1.0, 0.4, 0.05, key="volume_vol_multiplier")
-        if st.button("Preview Thresholds", key="preview_thresholds"):
-            if 'df' in locals() and not df.empty:
-                latest = df.iloc[-1]
-                preview_call = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
-                preview_put = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
-                st.json({'call': preview_call, 'put': preview_put})
+    with st.expander("🎯 Trade Settings"):
+        CONFIG['PROFIT_TARGETS']['call'] = st.slider(
+            "Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, 
+            key="call_profit_target", help="Target profit percentage for calls"
+        )
+        CONFIG['PROFIT_TARGETS']['put'] = st.slider(
+            "Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, 
+            key="put_profit_target", help="Target profit percentage for puts"
+        )
+        CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider(
+            "Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, 
+            key="stop_loss", help="Stop loss percentage"
+        )
 
 # Main interface
 if 'ticker' in st.session_state and st.session_state.ticker:
     ticker = st.session_state.ticker
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4 = st.columns([2,2,2,1])
     with col1:
         if is_market_open():
-            st.success("✅ Market is OPEN")
+            st.success("✅ Market Open")
             time_decay = calculate_time_decay_factor()
-            st.info(f"⏰ Time Decay Factor: {time_decay:.2f}x")
+            st.info(f"⏰ Time Decay: {time_decay:.2f}x")
         elif is_premarket():
-            st.warning("⏰ PREMARKET Session")
+            st.warning("⏰ Premarket")
         else:
-            st.info("💤 Market is CLOSED")
+            st.info("💤 Market Closed")
     with col2:
         current_price = get_current_price(ticker)
         st.metric("Current Price", f"${current_price:.2f}")
     with col3:
-        if 'last_refresh' in st.session_state:
-            last_update = datetime.datetime.fromtimestamp(st.session_state.last_refresh)
-            st.caption(f"📅 Last updated: {last_update.strftime('%Y-%m-%d %H:%M:%S')}")
-        else:
-            st.caption("📅 Last updated: Never")
+        last_update = datetime.datetime.fromtimestamp(st.session_state.last_refresh)
+        st.metric("Last Updated", last_update.strftime('%H:%M:%S'))
     with col4:
-        manual_refresh = st.button("🔁 Refresh Now", key="manual_refresh")
-    
-    if manual_refresh:
-        st.cache_data.clear()
-        st.session_state.last_refresh = time.time()
-        st.session_state.refresh_counter += 1
-        st.rerun()
+        if st.button("🔁 Refresh", key="manual_refresh"):
+            st.cache_data.clear()
+            st.session_state.last_refresh = time.time()
+            st.session_state.refresh_counter += 1
+            st.rerun()
     
     st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
     
@@ -886,33 +959,24 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                         volatility_status = "High"
                     elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
                         volatility_status = "Medium"
-                    st.info(f"📈 Current Volatility (ATR%): {atr_pct*100:.2f}% - **{volatility_status}**")
+                    st.info(f"📈 Volatility (ATR%): {atr_pct*100:.2f}% - **{volatility_status}**")
                 
-                st.subheader("🧠 Diagnostic Information")
                 if is_premarket():
-                    st.warning("⚠️ PREMARKET CONDITIONS: Volume requirements relaxed, delta thresholds adjusted")
+                    st.warning("⚠️ PREMARKET: Volume and delta thresholds adjusted")
                 elif is_early_market():
-                    st.warning("⚠️ EARLY MARKET CONDITIONS: Volume requirements relaxed, delta thresholds adjusted")
-                
-                st.write("📏 Current Signal Thresholds:")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.caption(f"**Calls:** Δ ≥ {call_thresholds['delta_base']:.2f} | "
-                              f"Γ ≥ {call_thresholds['gamma_base']:.3f} | "
-                              f"Vol > {call_thresholds['volume_min']:.0f} | "
-                              f"Momentum ≥ {call_thresholds['price_momentum_min']*100:.2f}%")
-                with col2:
-                    st.caption(f"**Puts:** Δ ≤ {put_thresholds['delta_base']:.2f} | "
-                              f"Γ ≥ {put_thresholds['gamma_base']:.3f} | "
-                              f"Vol > {put_thresholds['volume_min']:.0f} | "
-                              f"Momentum ≤ {put_thresholds['price_momentum_min']*100:.2f}%")
+                    st.warning("⚠️ EARLY MARKET: Volume and delta thresholds adjusted")
                 
                 expiries = get_options_expiries(ticker)
                 if not expiries:
                     st.error("No options expiries available. Please wait due to rate limits.")
                     st.stop()
                 
-                expiry_mode = st.radio("Select Expiration Filter:", ["0DTE Only", "All Near-Term Expiries"], index=0)
+                expiry_mode = st.radio(
+                    "Expiration Filter",
+                    ["0DTE Only", "All Near-Term Expiries"],
+                    index=0,
+                    help="Choose to analyze only 0DTE or near-term expiries"
+                )
                 today = datetime.date.today()
                 if expiry_mode == "0DTE Only":
                     expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
@@ -935,9 +999,10 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                 
                 max_range = max(10, current_price * 0.1) if current_price > 0 else 10
                 strike_range = st.slider(
-                    "Strike Range Around Current Price ($):",
+                    "Strike Range ($)",
                     -max_range, max_range, st.session_state.strike_range, 1.0,
-                    key="strike_range"
+                    key="strike_range",
+                    help="Select the strike price range around the current price"
                 )
                 min_strike = current_price + strike_range[0]
                 max_strike = current_price + strike_range[1]
@@ -949,22 +1014,20 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                     calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                     invalid_calls = calls_filtered[~calls_filtered.apply(lambda x: validate_option_data(x, current_price), axis=1)]
                     if not invalid_calls.empty:
-                        st.warning(f"Skipped {len(invalid_calls)} call options due to insufficient data (e.g., missing Greeks, low volume).")
+                        st.warning(f"Skipped {len(invalid_calls)} call options due to insufficient data.")
                 if not puts_filtered.empty:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                     invalid_puts = puts_filtered[~puts_filtered.apply(lambda x: validate_option_data(x, current_price), axis=1)]
                     if not invalid_puts.empty:
-                        st.warning(f"Skipped {len(invalid_puts)} put options due to insufficient data (e.g., missing Greeks, low volume).")
+                        st.warning(f"Skipped {len(invalid_puts)} put options due to insufficient data.")
                 
-                # Use a separate variable to avoid session state modification after widget instantiation
-                default_moneyness = st.session_state.moneyness_filter
                 moneyness_filter = st.multiselect(
-                    "Filter by Moneyness:",
+                    "Moneyness Filter",
                     options=["ITM", "NTM", "ATM", "OTM"],
-                    default=default_moneyness,
-                    key="moneyness_filter"
+                    default=st.session_state.moneyness_filter,
+                    key="moneyness_filter",
+                    help="Filter options by moneyness (ITM: In-The-Money, NTM: Near-The-Money, ATM: At-The-Money, OTM: Out-of-The-Money)"
                 )
-                # Update session state only if the selection changes
                 if moneyness_filter != st.session_state.moneyness_filter:
                     st.session_state.moneyness_filter = moneyness_filter
                 
@@ -976,7 +1039,12 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                 st.write(f"🔍 Filtered Options: {len(calls_filtered)} calls, {len(puts_filtered)} puts "
                          f"(Strike range: ${min_strike:.2f}-${max_strike:.2f})")
                 
-                sort_by = st.selectbox("Sort Signals By:", ["signal_score", "strike", "lastPrice", "volume"], key="sort_signals")
+                sort_by = st.selectbox(
+                    "Sort Signals By",
+                    ["signal_score", "strike", "lastPrice", "volume"],
+                    key="sort_signals",
+                    help="Sort signals by score, strike price, last price, or volume"
+                )
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -1001,18 +1069,42 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                             signals_df = pd.DataFrame(call_signals)
                             signals_df = signals_df.sort_values(sort_by, ascending=False)
                             display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta',
-                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte']
+                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
-                            st.dataframe(signals_df[available_cols].round(4), use_container_width=True, hide_index=True)
+                            
+                            # Format signal table with conditional styling
+                            def style_signals(row):
+                                score = row['signal_score']
+                                color = '#e6f4ea' if score > 0.8 else '#fff3cd' if score > 0.6 else '#f8d7da'
+                                return [f'background-color: {color}' for _ in row]
+                            
+                            st.dataframe(
+                                signals_df[available_cols].style.format({
+                                    'strike': "${:.2f}",
+                                    'lastPrice': "${:.2f}",
+                                    'volume': "{:.0f}",
+                                    'delta': "{:.3f}",
+                                    'gamma': "{:.3f}",
+                                    'theta': "{:.3f}",
+                                    'signal_score': "{:.2%}",
+                                    'profit_target': "${:.2f}",
+                                    'stop_loss': "${:.2f}"
+                                }).apply(style_signals, axis=1),
+                                use_container_width=True,
+                                hide_index=True
+                            )
                             
                             top_signal = signals_df.iloc[0]
-                            st.success(
-                                f"🚨 **CALL SIGNAL DETECTED!** "
-                                f"Contract: {top_signal['contractSymbol']} | "
-                                f"Strike: ${top_signal['strike']:.2f} | "
-                                f"Price: ${top_signal['lastPrice']:.2f} | "
-                                f"Holding: {top_signal['holding_period']}",
-                                icon="✅"
+                            st.markdown(
+                                f"""
+                                <div class="signal-alert" style="background-color: #e6f4ea;">
+                                    🚨 <strong>CALL SIGNAL DETECTED!</strong><br>
+                                    Contract: {top_signal['contractSymbol']}<br>
+                                    Strike: ${top_signal['strike']:.2f} | Price: ${top_signal['lastPrice']:.2f}<br>
+                                    Holding: {top_signal['holding_period']}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
                             )
                             
                             st.markdown("""
@@ -1022,58 +1114,46 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                             </script>
                             """, unsafe_allow_html=True)
                             
-                            st.write("**Signal Strength**")
-                            st.markdown("""
-                            <chartjs
-                                type="doughnut"
-                                data='{
-                                    "labels": ["Signal Strength", "Remaining"],
-                                    "datasets": [{
-                                        "data": [""" + str(top_signal['signal_score'] * 100) + """, """ + str((1 - top_signal['signal_score']) * 100) + """],
-                                        "backgroundColor": ["#28a745", "#e9ecef"],
-                                        "borderWidth": 1
-                                    }]
-                                }'
-                                options='{
-                                    "circumference": 180,
-                                    "rotation": -90,
-                                    "cutout": "70%",
-                                    "plugins": {
-                                        "legend": { "display": false },
-                                        "title": { "display": true, "text": "Top Call Signal Strength" }
-                                    }
-                                }'
-                            ></chartjs>
-                            """, unsafe_allow_html=True)
+                            # Plotly gauge for signal strength
+                            fig = go.Figure(go.Indicator(
+                                mode="gauge+number",
+                                value=top_signal['signal_score'] * 100,
+                                title={'text': "Call Signal Strength (%)"},
+                                gauge={
+                                    'axis': {'range': [0, 100]},
+                                    'bar': {'color': "#28a745"},
+                                    'steps': [
+                                        {'range': [0, 60], 'color': "#f8d7da"},
+                                        {'range': [60, 80], 'color': "#fff3cd"},
+                                        {'range': [80, 100], 'color': "#e6f4ea"}
+                                    ]
+                                }
+                            ))
+                            st.plotly_chart(fig, use_container_width=True)
                             
                             if top_signal['thresholds']:
                                 th = top_signal['thresholds']
-                                st.info(f"Applied Thresholds: Δ ≥ {th['delta_min']:.2f} | "
+                                st.info(f"Thresholds: Δ ≥ {th['delta_min']:.2f} | "
                                         f"Γ ≥ {th['gamma_base']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
-                                        f"RSI > {th['rsi_min']:.1f} | Stoch > {th['stoch_base']:.1f} | "
-                                        f"Vol > {th['volume_min']:.0f}")
+                                        f"RSI > {th['rsi_min']:.1f} | Stoch > {th['stoch_base']:.1f}")
                             
-                            with st.expander("View Conditions for Top Signal"):
-                                if top_signal['passed_conditions']:
-                                    st.write("✅ Passed Conditions:")
-                                    for condition in top_signal['passed_conditions']:
-                                        st.write(f"- {condition}")
-                                else:
-                                    st.info("No conditions passed")
+                            with st.expander("View Conditions"):
+                                for condition in top_signal['passed_conditions']:
+                                    st.write(f"✅ {condition}")
                             
                             st.success(f"Found {len(call_signals)} call signals!")
                         else:
-                            st.info("No call signals found matching criteria.")
+                            st.info("No call signals found.")
                             if not calls_filtered.empty:
                                 sample_call = calls_filtered.iloc[0]
                                 is_0dte = sample_call.get('is_0dte', False)
                                 result = generate_signal(sample_call, "call", df, is_0dte)
                                 if result and 'failed_conditions' in result:
-                                    st.write("Top call option failed conditions:")
+                                    st.write("Failed conditions for top call:")
                                     for condition in result['failed_conditions']:
-                                        st.write(f"- {condition}")
+                                        st.write(f"❌ {condition}")
                     else:
-                        st.info("No call options available for selected filters.")
+                        st.info("No call options available.")
                 
                 with col2:
                     st.subheader("📉 Put Option Signals")
@@ -1097,18 +1177,41 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                             signals_df = pd.DataFrame(put_signals)
                             signals_df = signals_df.sort_values(sort_by, ascending=False)
                             display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta',
-                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte']
+                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
-                            st.dataframe(signals_df[available_cols].round(4), use_container_width=True, hide_index=True)
+                            
+                            def style_signals(row):
+                                score = row['signal_score']
+                                color = '#e6f4ea' if score > 0.8 else '#fff3cd' if score > 0.6 else '#f8d7da'
+                                return [f'background-color: {color}' for _ in row]
+                            
+                            st.dataframe(
+                                signals_df[available_cols].style.format({
+                                    'strike': "${:.2f}",
+                                    'lastPrice': "${:.2f}",
+                                    'volume': "{:.0f}",
+                                    'delta': "{:.3f}",
+                                    'gamma': "{:.3f}",
+                                    'theta': "{:.3f}",
+                                    'signal_score': "{:.2%}",
+                                    'profit_target': "${:.2f}",
+                                    'stop_loss': "${:.2f}"
+                                }).apply(style_signals, axis=1),
+                                use_container_width=True,
+                                hide_index=True
+                            )
                             
                             top_signal = signals_df.iloc[0]
-                            st.error(
-                                f"🚨 **PUT SIGNAL DETECTED!** "
-                                f"Contract: {top_signal['contractSymbol']} | "
-                                f"Strike: ${top_signal['strike']:.2f} | "
-                                f"Price: ${top_signal['lastPrice']:.2f} | "
-                                f"Holding: {top_signal['holding_period']}",
-                                icon="✅"
+                            st.markdown(
+                                f"""
+                                <div class="signal-alert" style="background-color: #f8d7da;">
+                                    🚨 <strong>PUT SIGNAL DETECTED!</strong><br>
+                                    Contract: {top_signal['contractSymbol']}<br>
+                                    Strike: ${top_signal['strike']:.2f} | Price: ${top_signal['lastPrice']:.2f}<br>
+                                    Holding: {top_signal['holding_period']}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
                             )
                             
                             st.markdown("""
@@ -1118,58 +1221,45 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                             </script>
                             """, unsafe_allow_html=True)
                             
-                            st.write("**Signal Strength**")
-                            st.markdown("""
-                            <chartjs
-                                type="doughnut"
-                                data='{
-                                    "labels": ["Signal Strength", "Remaining"],
-                                    "datasets": [{
-                                        "data": [""" + str(top_signal['signal_score'] * 100) + """, """ + str((1 - top_signal['signal_score']) * 100) + """],
-                                        "backgroundColor": ["#dc3545", "#e9ecef"],
-                                        "borderWidth": 1
-                                    }]
-                                }'
-                                options='{
-                                    "circumference": 180,
-                                    "rotation": -90,
-                                    "cutout": "70%",
-                                    "plugins": {
-                                        "legend": { "display": false },
-                                        "title": { "display": true, "text": "Top Put Signal Strength" }
-                                    }
-                                }'
-                            ></chartjs>
-                            """, unsafe_allow_html=True)
+                            fig = go.Figure(go.Indicator(
+                                mode="gauge+number",
+                                value=top_signal['signal_score'] * 100,
+                                title={'text': "Put Signal Strength (%)"},
+                                gauge={
+                                    'axis': {'range': [0, 100]},
+                                    'bar': {'color': "#dc3545"},
+                                    'steps': [
+                                        {'range': [0, 60], 'color': "#f8d7da"},
+                                        {'range': [60, 80], 'color': "#fff3cd"},
+                                        {'range': [80, 100], 'color': "#e6f4ea"}
+                                    ]
+                                }
+                            ))
+                            st.plotly_chart(fig, use_container_width=True)
                             
                             if top_signal['thresholds']:
                                 th = top_signal['thresholds']
-                                st.info(f"Applied Thresholds: Δ ≤ {th['delta_max']:.2f} | "
+                                st.info(f"Thresholds: Δ ≤ {th['delta_max']:.2f} | "
                                         f"Γ ≥ {th['gamma_base']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
-                                        f"RSI < {th['rsi_max']:.1f} | Stoch < {th['stoch_base']:.1f} | "
-                                        f"Vol > {th['volume_min']:.0f}")
+                                        f"RSI < {th['rsi_max']:.1f} | Stoch < {th['stoch_base']:.1f}")
                             
-                            with st.expander("View Conditions for Top Signal"):
-                                if top_signal['passed_conditions']:
-                                    st.write("✅ Passed Conditions:")
-                                    for condition in top_signal['passed_conditions']:
-                                        st.write(f"- {condition}")
-                                else:
-                                    st.info("No conditions passed")
+                            with st.expander("View Conditions"):
+                                for condition in top_signal['passed_conditions']:
+                                    st.write(f"✅ {condition}")
                             
                             st.success(f"Found {len(put_signals)} put signals!")
                         else:
-                            st.info("No put signals found matching criteria.")
+                            st.info("No put signals found.")
                             if not puts_filtered.empty:
                                 sample_put = puts_filtered.iloc[0]
                                 is_0dte = sample_put.get('is_0dte', False)
                                 result = generate_signal(sample_put, "put", df, is_0dte)
                                 if result and 'failed_conditions' in result:
-                                    st.write("Top put option failed conditions:")
+                                    st.write("Failed conditions for top put:")
                                     for condition in result['failed_conditions']:
-                                        st.write(f"- {condition}")
+                                        st.write(f"❌ {condition}")
                     else:
-                        st.info("No put options available for selected filters.")
+                        st.info("No put options available.")
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
             st.error("Please refresh the page and try again.")
@@ -1178,88 +1268,91 @@ if 'ticker' in st.session_state and st.session_state.ticker:
         if 'df' in locals() and not df.empty:
             st.subheader("📊 Stock Data & Indicators")
             if is_premarket():
-                st.info("🔔 Currently showing premarket data")
+                st.info("🔔 Showing premarket data")
             elif not is_market_open():
                 st.info("🔔 Showing after-hours data")
             
             latest = df.iloc[-1]
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Current Price", f"${latest['Close']:.2f}")
             with col2:
                 ema_9 = latest['EMA_9']
                 st.metric("EMA 9", f"${ema_9:.2f}" if not pd.isna(ema_9) else "N/A")
             with col3:
-                ema_20 = latest['EMA_20']
-                st.metric("EMA 20", f"${ema_20:.2f}" if not pd.isna(ema_20) else "N/A")
-            with col4:
                 rsi = latest['RSI']
                 st.metric("RSI", f"{rsi:.1f}" if not pd.isna(rsi) else "N/A")
-            with col5:
-                stochastic = latest['Stochastic']
-                st.metric("Stochastic", f"{stochastic:.1f}" if not pd.isna(stochastic) else "N/A")
-            with col6:
+            with col4:
                 atr_pct = latest['ATR_pct']
                 st.metric("Volatility (ATR%)", f"{atr_pct*100:.2f}%" if not pd.isna(atr_pct) else "N/A")
             
+            # Plotly chart for stock price and EMAs
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Close'], name='Close Price', line=dict(color='#1a3c6e')))
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_9'], name='EMA 9', line=dict(color='#28a745')))
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_20'], name='EMA 20', line=dict(color='#dc3545')))
+            fig.update_layout(
+                title=f"{ticker} Price and EMAs",
+                xaxis_title="Date",
+                yaxis_title="Price ($)",
+                template="plotly_white",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
             st.subheader("Recent Data")
-            display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'RSI', 'Stochastic', 'VWAP', 'ATR_pct', 'Volume', 'avg_vol', 'price_momentum']].round(2)
+            display_df = df.tail(10)[['Datetime', 'Close', 'EMA_9', 'EMA_20', 'RSI', 'Stochastic', 'ATR_pct', 'Volume']].round(2)
             display_df['ATR_pct'] = display_df['ATR_pct'] * 100
-            display_df['price_momentum'] = display_df['price_momentum'] * 100
-            display_df['Volume Ratio'] = display_df['Volume'] / display_df['avg_vol']
-            st.dataframe(display_df.rename(columns={
-                'ATR_pct': 'ATR%',
-                'avg_vol': 'Avg Vol',
-                'price_momentum': 'Momentum%'
-            }), use_container_width=True)
+            st.dataframe(
+                display_df.rename(columns={
+                    'ATR_pct': 'ATR%',
+                    'Datetime': 'Time'
+                }).style.format({
+                    'Close': "${:.2f}",
+                    'EMA_9': "${:.2f}",
+                    'EMA_20': "${:.2f}",
+                    'RSI': "{:.1f}",
+                    'Stochastic': "{:.1f}",
+                    'ATR%': "{:.2f}%",
+                    'Volume': "{:.0f}"
+                }),
+                use_container_width=True
+            )
     
     with tab3:
         st.subheader("🔍 Analysis Details")
         if enable_auto_refresh:
-            st.info(f"🔄 Auto-refresh enabled: Every {refresh_interval} seconds")
+            st.info(f"🔄 Auto-refresh: Every {refresh_interval} seconds")
         else:
             st.info("🔄 Auto-refresh disabled")
         
         if 'calls_filtered' in locals() and not calls_filtered.empty:
-            st.write("**Sample Call Analysis:**")
+            st.write("**Sample Call Analysis**")
             sample_call = calls_filtered.iloc[0]
-            if 'df' in locals():
-                is_0dte = sample_call.get('is_0dte', False)
-                result = generate_signal(sample_call, "call", df, is_0dte)
-                st.json(result)
+            is_0dte = sample_call.get('is_0dte', False)
+            result = generate_signal(sample_call, "call", df, is_0dte)
+            st.json(result)
         
-        st.write("**Current Signal Thresholds:**")
+        st.write("**Current Thresholds**")
         st.json({'call': call_thresholds, 'put': put_thresholds})
-        st.write("**Profit Targets:**")
+        st.write("**Profit Targets**")
         st.json(CONFIG['PROFIT_TARGETS'])
-        st.write("**System Configuration:**")
-        st.json(CONFIG)
     
-    with st.expander("ℹ️ About Rate Limiting"):
+    with st.expander("ℹ️ How to Use"):
         st.markdown("""
-        Yahoo Finance may restrict data retrieval frequency. If rate limited, please:
-        - Wait a few minutes before refreshing
-        - Avoid auto-refresh intervals below 1 minute
-        - Use one ticker at a time
-        """)
-else:
-    st.info("Please select or enter a stock ticker to begin analysis.")
-    with st.expander("ℹ️ How to use this app"):
-        st.markdown("""
-        **Steps to analyze options:**
-        1. Select a stock ticker (e.g., SPY, IWM, TSLA) or enter a custom one
-        2. Configure auto-refresh settings in the sidebar
-        3. Select expiration filter (0DTE or near-term)
-        4. Adjust strike range around current price
-        5. Filter by moneyness (ITM, ATM, OTM)
-        6. Sort signals by score, strike, price, or volume
-        7. Receive immediate signal notifications with strength gauges and audible alerts
+        **Steps to Analyze Options:**
+        1. Select a stock ticker (e.g., SPY, IWM)
+        2. Configure auto-refresh and trade settings
+        3. Filter by expiration and moneyness
+        4. Adjust strike range
+        5. View signals with interactive charts
         
         **Key Features:**
-        - **Auto-Adjusted Thresholds:** Adapt to volatility and momentum
-        - **Swift Signal Detection:** Immediate alerts with audible notifications
-        - **Price Action Analysis:** Incorporates momentum and breakouts
-        - **Time Decay Adjustment:** Accounts for theta during market hours
-        - **Seamless Auto-Refresh:** Updates at chosen intervals
-        - **Profit Targets & Exit Strategy:** Clear targets and holding periods
+        - Real-time signal detection
+        - Dynamic thresholds based on volatility
+        - Interactive price and signal strength charts
+        - Audible alerts for new signals
+        - Customizable profit targets and stop loss
         """)
+else:
+    st.info("Please select a stock ticker to begin analysis.")
