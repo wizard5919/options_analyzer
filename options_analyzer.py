@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -188,7 +189,8 @@ def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
     return None
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
-def get_stock_data ticker: str) -> pd.DataFrame:
+def get_stock_data(ticker: str) -> pd.DataFrame:
+    """Fetch stock data with caching, error handling, and premarket support"""
     try:
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=10)
@@ -363,7 +365,7 @@ def get_options_expiries(ticker: str) -> List[str]:
     try:
         stock = yf.Ticker(ticker)
         expiries = stock.options
--return list(expiries) if expiries else []
+        return list(expiries) if expiries else []
     except Exception as e:
         error_msg = str(e)
         if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
@@ -1078,3 +1080,4 @@ else:
         - **Profit Targets & Exit Strategy:** Clear profit targets and holding periods
         - **Early Market Detection:** Special thresholds for premarket/early market
         """)
+```
