@@ -15,7 +15,7 @@ from ta.volatility import AverageTrueRange
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# Apply custom CSS for visual polish
+# Apply custom CSS for visual polish and clarity
 st.markdown("""
 <style>
 .stMetric { background-color: #f0f2f6; border-radius: 5px; padding: 10px; margin-bottom: 10px; }
@@ -30,6 +30,10 @@ st.markdown("""
     text-align: center; border-radius: 6px; padding: 5px; position: absolute; z-index: 1; 
     bottom: 125%; left: 50%; margin-left: -100px; opacity: 0; transition: opacity 0.3s; }
 .tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
+/* Added for clarity */
+* { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+body { font-size: 14px; line-height: 1.5; }
+.stApp { zoom: 1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -912,12 +916,12 @@ if ticker:
                     option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
                 
                 max_range = max(10, current_price * 0.1) if current_price > 0 else 10
+                # Use session state value before instantiating slider
                 strike_range = st.slider(
                     "Strike Range Around Current Price ($):",
                     -max_range, max_range, st.session_state.strike_range, 1.0,
                     key="strike_range"
                 )
-                st.session_state.strike_range = strike_range
                 min_strike = current_price + strike_range[0]
                 max_strike = current_price + strike_range[1]
                 
