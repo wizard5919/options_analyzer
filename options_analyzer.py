@@ -22,7 +22,10 @@ st.markdown("""
 .call-metric { border-left: 4px solid #28a745; }
 .put-metric { border-left: 4px solid #dc3545; }
 .stButton>button { background-color: #007bff; color: white; border-radius: 5px; padding: 8px 16px; }
-.stSidebar { background-color: #e9ecef; }
+.stSidebar { background-color: #e9ecef !important; }
+@media (prefers-color-scheme: dark) {
+    .stSidebar { background-color: #343a40 !important; }
+}
 .sidebar .stSelectbox, .sidebar .stTextInput { background-color: #ffffff; border-radius: 5px; }
 .signal-table th { background-color: #007bff; color: white; }
 .tooltip { position: relative; display: inline-block; cursor: pointer; margin-left: 5px; }
@@ -182,9 +185,10 @@ def get_current_price(ticker: str) -> float:
         data = stock.history(period='1d', interval='1m', prepost=True)
         if not data.empty:
             return data['Close'].iloc[-1]
+        st.warning(f"No current price data for {ticker}")
         return 0.0
     except Exception as e:
-        st.error(f"Error getting current price: {str(e)}")
+        st.error(f"Error getting current price for {ticker}: {str(e)}")
         return 0.0
 
 def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
@@ -251,7 +255,7 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
         data.loc[premarket_mask, 'premarket'] = True
         return data.reset_index(drop=False)
     except Exception as e:
-        st.error(f"Error fetching stock data: {str(e)}")
+        st.error(f"Error fetching stock data for {ticker}: {str(e)}")
         return pd.DataFrame()
 
 def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
@@ -698,6 +702,7 @@ st.markdown("**Auto-adjusted for market conditions** with swift signal detection
 
 with st.sidebar:
     st.header("⚙️ Configuration")
+    st.write("Sidebar is active")  # Debug line
     with st.expander("🔄 Auto-Refresh Settings", expanded=True):
         enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=True, key="auto_refresh")
         if enable_auto_refresh:
@@ -916,7 +921,6 @@ if ticker:
                     option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
                 
                 max_range = max(10, current_price * 0.1) if current_price > 0 else 10
-                # Use session state value before instantiating slider
                 strike_range = st.slider(
                     "Strike Range Around Current Price ($):",
                     -max_range, max_range, st.session_state.strike_range, 1.0,
@@ -993,7 +997,6 @@ if ticker:
                                 icon="✅"
                             )
                             
-                            # Audible alert for new signal
                             st.markdown("""
                             <script>
                             var audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
@@ -1001,7 +1004,6 @@ if ticker:
                             </script>
                             """, unsafe_allow_html=True)
                             
-                            # Signal strength gauge
                             st.write("**Signal Strength**")
                             st.markdown("""
                             <chartjs
@@ -1091,7 +1093,6 @@ if ticker:
                                 icon="✅"
                             )
                             
-                            # Audible alert for new signal
                             st.markdown("""
                             <script>
                             var audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
@@ -1099,7 +1100,6 @@ if ticker:
                             </script>
                             """, unsafe_allow_html=True)
                             
-                            # Signal strength gauge
                             st.write("**Signal Strength**")
                             st.markdown("""
                             <chartjs
