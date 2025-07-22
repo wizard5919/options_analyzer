@@ -358,16 +358,36 @@ async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) ->
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data(ticker: str, market_state: str = "Open") -> pd.DataFrame:
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        df = loop.run_until_complete(async_fetch_stock_data(ticker, aiohttp.ClientSession()))
-    else:
-        df = asyncio.run(async_fetch_stock_data(ticker, aiohttp.ClientSession()))
-    if df.empty:
-        st.error(f"Failed to fetch valid stock data for {ticker} after {CONFIG['MAX_RETRIES']} attempts.")
-    else:
-        st.info(f"Successfully fetched {len(df)} data points for {ticker}.")
-    return df
+    async def run_fetch():
+        async with aiohttp.ClientSession() as session:
+            return await async_fetch_stock_data(ticker, session)
+    
+    try:
+        # Get or create an event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # Run the coroutine in the current thread if possible, or use run_coroutine_threadsafe
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(run_fetch(), loop)
+            df = future.result(timeout=CONFIG['DATA_TIMEOUT'])
+        else:
+            df = loop.run_until_complete(run_fetch())
+        
+        if df.empty:
+            st.error(f"Failed to fetch valid stock data for {ticker} after {CONFIG['MAX_RETRIES']} attempts.")
+        else:
+            st.info(f"Successfully fetched {len(df)} data points for {ticker}.")
+        return df
+    except Exception as e:
+        st.error(f"Error fetching stock data: {str(e)}")
+        return pd.DataFrame()
 
 def get_current_price(ticker: str) -> float:
     for attempt in range(CONFIG['MAX_RETRIES']):
