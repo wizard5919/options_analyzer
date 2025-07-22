@@ -315,32 +315,39 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return df
         
     df = df.copy()
-    close = df['Close']
-    high = df['High']
-    low = df['Low']
+    
+    # Handle missing values
+    df = df.dropna(subset=['Close', 'High', 'Low'])
+    
+    # Get series for indicator calculations
+    close_series = df['Close'].squeeze()
+    high_series = df['High'].squeeze()
+    low_series = df['Low'].squeeze()
     
     # Calculate technical indicators
     try:
         if len(df) >= 9:
-            df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
+            df['EMA_9'] = EMAIndicator(close=close_series, window=9).ema_indicator()
         if len(df) >= 20:
-            df['EMA_20'] = EMAIndicator(close=close, window=20).ema_indicator()
+            df['EMA_20'] = EMAIndicator(close=close_series, window=20).ema_indicator()
         if len(df) >= 14:
-            df['RSI'] = RSIIndicator(close=close, window=14).rsi()
+            df['RSI'] = RSIIndicator(close=close_series, window=14).rsi()
             df['Stochastic'] = StochasticOscillator(
-                high=high, low=low, close=close, window=14, smooth_window=3
+                high=high_series, low=low_series, close=close_series, window=14, smooth_window=3
             ).stoch()
             df['ATR'] = AverageTrueRange(
-                high=high, low=low, close=close, window=14
+                high=high_series, low=low_series, close=close_series, window=14
             ).average_true_range()
-            df['ATR_pct'] = df['ATR'] / close
+            df['ATR_pct'] = df['ATR'] / close_series
     except Exception as e:
         st.warning(f"Indicator calculation warning: {str(e)}")
     
     # Calculate VWAP
     try:
+        # Simplified VWAP calculation
         df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
-        df['Cumulative_TPV'] = (df['Typical_Price'] * df['Volume']).cumsum()
+        df['TPV'] = df['Typical_Price'] * df['Volume']
+        df['Cumulative_TPV'] = df['TPV'].cumsum()
         df['Cumulative_Volume'] = df['Volume'].cumsum()
         df['VWAP'] = df['Cumulative_TPV'] / df['Cumulative_Volume']
     except Exception as e:
@@ -360,10 +367,15 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['price_momentum'] = df['Close'].pct_change(periods=lookback)
         df['range_high'] = df['High'].rolling(window=lookback).max()
         df['range_low'] = df['Low'].rolling(window=lookback).min()
-        df['breakout_up'] = (df['Close'] > df['range_high'].shift(1) * 
-                            (1 + CONFIG['PRICE_ACTION']['breakout_threshold']))
-        df['breakout_down'] = (df['Close'] < df['range_low'].shift(1) * 
-                              (1 - CONFIG['PRICE_ACTION']['breakout_threshold']))
+        
+        # Fixed breakout calculations with proper alignment
+        shifted_range_high = df['range_high'].shift(1)
+        shifted_range_low = df['range_low'].shift(1)
+        
+        df['breakout_up'] = (df['Close'] > (shifted_range_high * 
+                            (1 + CONFIG['PRICE_ACTION']['breakout_threshold'])))
+        df['breakout_down'] = (df['Close'] < (shifted_range_low * 
+                              (1 - CONFIG['PRICE_ACTION']['breakout_threshold'])))
     except Exception as e:
         st.warning(f"Price momentum calculation warning: {str(e)}")
     
@@ -609,9 +621,14 @@ def generate_signal(option: pd.Series, side: str, stock_data: pd.Series, is_0dte
             ema20 = stock_data['EMA_20']
             close = stock_data['Close']
             if side == "call":
-                conditions.append((close > ema9 > ema20, "Price > EMA9 > EMA20"))
+                # Fixed chained comparison
+                condition1 = close > ema9
+                condition2 = ema9 > ema20
+                conditions.append((condition1 and condition2, "Price > EMA9 > EMA20"))
             else:
-                conditions.append((close < ema9 < ema20, "Price < EMA9 < EMA20"))
+                condition1 = close < ema9
+                condition2 = ema9 < ema20
+                conditions.append((condition1 and condition2, "Price < EMA9 < EMA20"))
                 
         if 'RSI' in stock_data:
             rsi = stock_data['RSI']
