@@ -177,13 +177,13 @@ SIGNAL_THRESHOLDS = {
         'gamma_base': 0.05,
         'gamma_vol_multiplier': 0.03,
         'theta_base': 0.05,
-        'rsi_base': 50,
-        'rsi_min': 50,
-        'rsi_max': 70,
-        'stoch_base': 60,
+        'rsi_base': 50.0,
+        'rsi_min': 50.0,
+        'rsi_max': 70.0,
+        'stoch_base': 60.0,
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.4,
-        'volume_min': 1000,
+        'volume_min': 1000.0,
         'price_momentum_min': 0.005
     },
     'put': {
@@ -192,13 +192,13 @@ SIGNAL_THRESHOLDS = {
         'gamma_base': 0.05,
         'gamma_vol_multiplier': 0.03,
         'theta_base': 0.05,
-        'rsi_base': 50,
-        'rsi_min': 30,
-        'rsi_max': 50,
-        'stoch_base': 40,
+        'rsi_base': 50.0,
+        'rsi_min': 30.0,
+        'rsi_max': 50.0,
+        'stoch_base': 40.0,
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.4,
-        'volume_min': 1000,
+        'volume_min': 1000.0,
         'price_momentum_min': -0.005
     }
 }
@@ -369,7 +369,7 @@ def get_current_price(ticker: str) -> float:
         stock = yf.Ticker(ticker)
         data = stock.history(period='1d', interval='1m', prepost=True)
         if not data.empty:
-            return data['Close'].iloc[-1]
+            return float(data['Close'].iloc[-1])
         st.warning(f"No current price data for {ticker}")
         return 0.0
     except Exception as e:
@@ -605,10 +605,11 @@ def validate_option_data(option: pd.Series, spot_price: float) -> bool:
 
 def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool) -> Dict[str, float]:
     thresholds = SIGNAL_THRESHOLDS[side].copy()
-    volatility = stock_data.get('ATR_pct', 0.02)
-    price_momentum = stock_data.get('price_momentum', 0.0)
-    breakout_up = stock_data.get('breakout_up', False)
-    breakout_down = stock_data.get('breakout_down', False)
+    # Ensure volatility and price_momentum are scalar floats, with fallbacks
+    volatility = float(stock_data.get('ATR_pct', 0.02)) if not pd.isna(stock_data.get('ATR_pct')) else 0.02
+    price_momentum = float(stock_data.get('price_momentum', 0.0)) if not pd.isna(stock_data.get('price_momentum')) else 0.0
+    breakout_up = bool(stock_data.get('breakout_up', False))
+    breakout_down = bool(stock_data.get('breakout_down', False))
     time_decay = calculate_time_decay_factor()
     
     vol_factor = 1 + (volatility * 100)
@@ -629,34 +630,44 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
     thresholds['theta_base'] = min(0.1, SIGNAL_THRESHOLDS[side]['theta_base'] * time_decay)
     
     if side == 'call':
-        thresholds['rsi_base'] = max(40, min(60, SIGNAL_THRESHOLDS['call']['rsi_min'] + (price_momentum * 1000)))
-        thresholds['rsi_min'] = thresholds['rsi_base']
-        thresholds['stoch_base'] = max(50, min(80, SIGNAL_THRESHOLDS['call']['stoch_base'] + (price_momentum * 1000)))
-        thresholds['volume_min'] = max(500, min(3000, SIGNAL_THRESHOLDS[side]['volume_min'] * vol_factor))
-        thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor))
+        rsi_base = float(max(40.0, min(60.0, SIGNAL_THRESHOLDS['call']['rsi_min'] + (price_momentum * 1000))))
+        thresholds['rsi_base'] = rsi_base
+        thresholds['rsi_min'] = rsi_base
+        stoch_base = float(max(50.0, min(80.0, SIGNAL_THRESHOLDS['call']['stoch_base'] + (price_momentum * 1000))))
+        thresholds['stoch_base'] = stoch_base
+        thresholds['volume_min'] = float(max(500.0, min(3000.0, SIGNAL_THRESHOLDS[side]['volume_min'] * vol_factor)))
+        thresholds['volume_multiplier'] = float(max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor)))
     else:
-        thresholds['rsi_base'] = max(30, min(50, SIGNAL_THRESHOLDS['put']['rsi_max'] + (price_momentum * 1000)))
-        thresholds['rsi_max'] = thresholds['rsi_base']
-        thresholds['stoch_base'] = max(20, min(50, SIGNAL_THRESHOLDS['put']['stoch_base'] - (price_momentum * 1000)))
-        thresholds['volume_min'] = max(500, min(3000, SIGNAL_THRESHOLDS[side]['volume_min'] * vol_factor))
-        thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor))
+        rsi_base = float(max(30.0, min(50.0, SIGNAL_THRESHOLDS['put']['rsi_max'] + (price_momentum * 1000))))
+        thresholds['rsi_base'] = rsi_base
+        thresholds['rsi_max'] = rsi_base
+        stoch_base = float(max(20.0, min(50.0, SIGNAL_THRESHOLDS['put']['stoch_base'] - (price_momentum * 1000))))
+        thresholds['stoch_base'] = stoch_base
+        thresholds['volume_min'] = float(max(500.0, min(3000.0, SIGNAL_THRESHOLDS[side]['volume_min'] * vol_factor)))
+        thresholds['volume_multiplier'] = float(max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor)))
     
     if is_premarket() or is_early_market():
         if side == 'call':
             thresholds['delta_min'] = max(0.35, thresholds['delta_min'])
         else:
             thresholds['delta_max'] = min(-0.35, thresholds['delta_max'])
-        thresholds['volume_multiplier'] *= 0.6
-        thresholds['gamma_base'] *= 0.8
-        thresholds['volume_min'] = max(300, thresholds['volume_min'] * 0.5)
+        thresholds['volume_multiplier'] = float(thresholds['volume_multiplier'] * 0.6)
+        thresholds['gamma_base'] = float(thresholds['gamma_base'] * 0.8)
+        thresholds['volume_min'] = float(max(300.0, thresholds['volume_min'] * 0.5))
 
     if is_0dte:
-        thresholds['volume_multiplier'] *= 0.7
-        thresholds['gamma_base'] *= 0.7
+        thresholds['volume_multiplier'] = float(thresholds['volume_multiplier'] * 0.7)
+        thresholds['gamma_base'] = float(thresholds['gamma_base'] * 0.7)
         if side == 'call':
             thresholds['delta_min'] = max(0.4, thresholds['delta_min'])
         else:
             thresholds['delta_max'] = min(-0.4, thresholds['delta_max'])
+    
+    # Ensure all threshold values are floats
+    for key, value in thresholds.items():
+        if not isinstance(value, (int, float)) or pd.isna(value):
+            st.warning(f"Invalid threshold value for {key}: {value}. Using default.")
+            thresholds[key] = float(SIGNAL_THRESHOLDS[side][key])
     
     return thresholds
 
@@ -912,22 +923,22 @@ with st.sidebar:
                         st.markdown('<div style="font-size: 0.9rem; margin-bottom: 8px;"><strong>Calls</strong></div>', unsafe_allow_html=True)
                         st.markdown('<div style="font-size: 0.85rem; padding: 5px; border-radius: 5px; background-color: #e6f4ea;">', unsafe_allow_html=True)
                         SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider(
-                            "Base Delta", 0.3, 0.8, call_thresholds['delta_base'], 0.01,
+                            "Base Delta", 0.3, 0.8, float(call_thresholds['delta_base']), 0.01,
                             key="call_delta_slider",
                             help="Minimum delta for call signals"
                         )
                         SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider(
-                            "Base Gamma", 0.02, 0.15, call_thresholds['gamma_base'], 0.001,
+                            "Base Gamma", 0.02, 0.15, float(call_thresholds['gamma_base']), 0.001,
                             key="call_gamma_slider",
                             help="Minimum gamma for call signals"
                         )
                         SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider(
-                            "Min RSI", 40.0, 70.0, call_thresholds['rsi_min'], 0.1,
+                            "Min RSI", 40.0, 70.0, float(call_thresholds['rsi_min']), 0.1,
                             key="call_rsi_slider",
                             help="Minimum RSI for call signals"
                         )
                         SIGNAL_THRESHOLDS['call']['stoch_base'] = st.slider(
-                            "Stochastic", 50.0, 80.0, call_thresholds['stoch_base'], 0.1,
+                            "Stochastic", 50.0, 80.0, float(call_thresholds['stoch_base']), 0.1,
                             key="call_stoch_slider",
                             help="Minimum stochastic for call signals"
                         )
@@ -936,22 +947,22 @@ with st.sidebar:
                         st.markdown('<div style="font-size: 0.9rem; margin-bottom: 8px;"><strong>Puts</strong></div>', unsafe_allow_html=True)
                         st.markdown('<div style="font-size: 0.85rem; padding: 5px; border-radius: 5px; background-color: #f8d7da;">', unsafe_allow_html=True)
                         SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider(
-                            "Base Delta", -0.8, -0.3, put_thresholds['delta_base'], 0.01,
+                            "Base Delta", -0.8, -0.3, float(put_thresholds['delta_base']), 0.01,
                             key="put_delta_slider",
                             help="Maximum delta for put signals"
                         )
                         SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider(
-                            "Base Gamma", 0.02, 0.15, put_thresholds['gamma_base'], 0.001,
+                            "Base Gamma", 0.02, 0.15, float(put_thresholds['gamma_base']), 0.001,
                             key="put_gamma_slider",
                             help="Minimum gamma for put signals"
                         )
                         SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider(
-                            "Max RSI", 30.0, 60.0, put_thresholds['rsi_max'], 0.1,
+                            "Max RSI", 30.0, 60.0, float(put_thresholds['rsi_max']), 0.1,
                             key="put_rsi_slider",
                             help="Maximum RSI for put signals"
                         )
                         SIGNAL_THRESHOLDS['put']['stoch_base'] = st.slider(
-                            "Stochastic", 20.0, 50.0, put_thresholds['stoch_base'], 0.1,
+                            "Stochastic", 20.0, 50.0, float(put_thresholds['stoch_base']), 0.1,
                             key="put_stoch_slider",
                             help="Maximum stochastic for put signals"
                         )
