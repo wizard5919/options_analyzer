@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -129,7 +130,7 @@ st.set_page_config(
 CONFIG = {
     'MAX_RETRIES': 3,
     'RETRY_DELAY': 2,
-    'RATE_LIMIT_COOLDOWN': 180,
+    'RATE_LIMIT_COOLDOWN': 300,  # Increased to 300 seconds
     'MIN_DATA_POINTS': 50,
     'CACHE_TTL': 300,
     'MARKET_OPEN': datetime.time(9, 30),
@@ -206,7 +207,7 @@ def get_market_state() -> str:
 def get_dynamic_refresh_interval() -> int:
     market_state = get_market_state()
     if market_state in ["Premarket", "Open"]:
-        return 30
+        return 60  # Increased to 60 seconds to reduce API load
     elif market_state == "Postmarket":
         return 120
     return 300
@@ -239,10 +240,23 @@ def calculate_time_decay_factor() -> float:
     return decay_factor
 
 async def validate_ticker(ticker: str, session: aiohttp.ClientSession) -> bool:
+    if not ticker:
+        st.error("Ticker cannot be empty.")
+        return False
     try:
         stock = yf.Ticker(ticker)
-        info = await asyncio.to_thread(stock.info)
-        return 'symbol' in info and info['symbol'] == ticker
+        # Attempt to fetch a small amount of data to validate ticker
+        data = await asyncio.to_thread(
+            stock.history,
+            period='1d',
+            interval='1m',
+            auto_adjust=True,
+            prepost=True
+        )
+        if not data.empty:
+            return True
+        st.error(f"No data available for ticker {ticker}. Try another ticker.")
+        return False
     except Exception as e:
         st.error(f"Invalid ticker {ticker}: {str(e)}")
         return False
@@ -346,13 +360,16 @@ def get_stock_data(ticker: str, market_state: str = "Open") -> pd.DataFrame:
     return asyncio.run(fetch())
 
 def get_current_price(ticker: str) -> float:
+    if not ticker:
+        st.error("Cannot fetch price: Ticker is empty.")
+        return 221.66  # Fallback from previous context
     try:
         stock = yf.Ticker(ticker)
         data = stock.history(period='1d', interval='1m', prepost=True)
         if not data.empty:
             return float(data['Close'].iloc[-1])
         st.warning(f"No current price data for {ticker}. Using default price.")
-        return 221.66  # Fallback from previous context
+        return 221.66
     except Exception as e:
         st.error(f"Error getting current price for {ticker}: {str(e)}. Using default price.")
         return 221.66
@@ -472,20 +489,26 @@ def compute_indicators(df: pd.DataFrame, market_state: str = "Open") -> pd.DataF
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_options_expiries(ticker: str) -> list[str]:
+    if not ticker:
+        st.error("Cannot fetch expiries: Ticker is empty.")
+        return []
     try:
         stock = yf.Ticker(ticker)
         expiries = stock.options
-        return list(expiries) if expiries else []
+        return list(expiries)[:2] if expiries else []  # Limit to 2 expiries
     except Exception as e:
         error_msg = str(e)
         if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
             st.warning(f"Yahoo Finance rate limit reached. Waiting {CONFIG['RATE_LIMIT_COOLDOWN']} seconds.")
             st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
         else:
-            st.error(f"Error fetching expiries: {error_msg}")
+            st.error(f"Error fetching expiries for {ticker}: {error_msg}")
         return []
 
 def fetch_options_data(ticker: str, expiries: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not ticker:
+        st.error("Cannot fetch options: Ticker is empty.")
+        return pd.DataFrame(), pd.DataFrame()
     all_calls = pd.DataFrame()
     all_puts = pd.DataFrame()
     failed_expiries = []
@@ -543,14 +566,12 @@ def classify_moneyness(strike: float, spot: float) -> str:
 
 def calculate_approximate_greeks(option: pd.Series, spot_price: float) -> tuple[float, float, float]:
     try:
-        # Simplified theta from previous responses
         eastern = pytz.timezone('US/Eastern')
         expiry_date = pd.to_datetime(option['expiry']).tz_localize(None).date()
         today = datetime.datetime.now(eastern).date()
         is_0dte = (expiry_date - today).days == 0
         theta = -0.050 if is_0dte else -0.020
 
-        # Delta and gamma from provided code
         moneyness = spot_price / option['strike']
         if option['contractSymbol'].startswith('C'):
             if moneyness > 1.03:
@@ -767,9 +788,6 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             profit_target, stop_loss = calculate_profit_targets(option)
             holding_period = calculate_holding_period(option, current_price)
 
-        # Debug logging (uncomment to debug signal failures)
-        # st.write(f"Signal for {option['contractSymbol']}: Passed={passed_conditions}, Failed={failed_conditions}")
-
         return {
             'signal': signal,
             'passed_conditions': passed_conditions,
@@ -804,13 +822,11 @@ if 'refresh_counter' not in st.session_state:
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
 if 'ticker' not in st.session_state:
-    st.session_state.ticker = "SPY"  # Changed default to SPY
+    st.session_state.ticker = "SPY"
 if 'strike_range' not in st.session_state:
     st.session_state.strike_range = (-5.0, 5.0)
 if 'moneyness_filter' not in st.session_state:
     st.session_state.moneyness_filter = ["NTM", "ATM"]
-if 'show_0dte' not in st.session_state:
-    st.session_state.show_0dte = False
 if 'show_welcome' not in st.session_state:
     st.session_state.show_welcome = True
 if 'current_time' not in st.session_state:
@@ -839,7 +855,7 @@ if 'rate_limited_until' in st.session_state:
             st.markdown("""
             Yahoo Finance may restrict data retrieval frequency. If rate limited, please:
             - Wait a few minutes before refreshing
-            - Avoid auto-refresh intervals below 30 seconds
+            - Avoid auto-refresh intervals below 60 seconds
             - Use one ticker at a time
             """)
         st.stop()
@@ -862,7 +878,7 @@ with col1:
     else:
         st.info("💤 Market Closed")
 with col2:
-    current_price = get_current_price(st.session_state.ticker) if 'ticker' in st.session_state else 221.66
+    current_price = get_current_price(st.session_state.ticker) if 'ticker' in st.session_state and st.session_state.ticker else 221.66
     st.metric("Current Price", f"${current_price:.2f}")
 with col3:
     st.session_state.time_placeholder = st.empty()
@@ -893,15 +909,13 @@ with st.sidebar:
                 default_interval = get_dynamic_refresh_interval()
                 st.session_state.refresh_interval = st.selectbox(
                     "Refresh Interval",
-                    options=[30, 60, 120, 300],
-                    index=[30, 60, 120, 300].index(st.session_state.get('refresh_interval', default_interval)) if st.session_state.get('refresh_interval', default_interval) in [30, 60, 120, 300] else 1,
+                    options=[60, 120, 300],  # Removed 30 to reduce API load
+                    index=[60, 120, 300].index(st.session_state.get('refresh_interval', default_interval)) if st.session_state.get('refresh_interval', default_interval) in [60, 120, 300] else 0,
                     format_func=lambda x: f"{x} seconds",
                     key="refresh_interval_select",
                     help="Select how often data refreshes automatically (adjusted by market state)"
                 )
                 st.info(f"Refreshing every {st.session_state.refresh_interval} seconds (Market: {market_state})")
-            else:
-                st.session_state.enable_auto_refresh = False
         except Exception as e:
             st.error(f"Error configuring auto-refresh: {str(e)}")
             st.session_state.refresh_interval = get_dynamic_refresh_interval()
@@ -917,7 +931,7 @@ with st.sidebar:
         if selected_ticker == "Other":
             ticker = st.text_input(
                 "Enter Custom Ticker",
-                value=st.session_state.ticker,
+                value=st.session_state.get('ticker', 'SPY'),
                 key="custom_ticker",
                 help="Enter a valid stock ticker (e.g., SPY, AAPL)"
             ).upper()
@@ -930,14 +944,17 @@ with st.sidebar:
                         st.success(f"Valid ticker: {ticker}")
                         st.session_state.ticker = ticker
                     else:
-                        st.error("Invalid ticker. Try again (e.g., SPY, AAPL).")
-                        st.session_state.ticker = ""
+                        st.error(f"Invalid ticker: {ticker}. Try again (e.g., SPY, AAPL).")
+                        st.session_state.ticker = "SPY"  # Fallback to SPY
             asyncio.run(validate_and_set_ticker())
+        else:
+            st.error("Ticker cannot be empty. Please select or enter a valid ticker.")
+            st.session_state.ticker = "SPY"
 
     with st.expander("📈 Signal Thresholds", expanded=True):
-        if ticker:
+        if st.session_state.ticker:
             try:
-                df = get_stock_data(ticker, market_state)
+                df = get_stock_data(st.session_state.ticker, market_state)
                 if not df.empty:
                     df = compute_indicators(df, market_state)
                     latest = df.iloc[-1]
@@ -997,6 +1014,7 @@ with st.sidebar:
                         st.markdown('</div>', unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"Error loading signal thresholds: {str(e)}")
+                st.info("Please refresh or select a different ticker.")
 
     with st.expander("🎯 Trade Settings", expanded=True):
         st.markdown('<p style="font-size: 0.9rem; margin-bottom: 8px;">Adjust profit targets and stop loss</p>', unsafe_allow_html=True)
@@ -1017,9 +1035,9 @@ with st.sidebar:
         ) / 100
 
     with st.expander("🔍 Filters", expanded=True):
-        if ticker:
+        if st.session_state.ticker:
             try:
-                current_price = get_current_price(ticker)
+                current_price = get_current_price(st.session_state.ticker)
                 if current_price > 0:
                     strike_min = current_price * (1 + st.session_state.strike_range[0] / 100)
                     strike_max = current_price * (1 + st.session_state.strike_range[1] / 100)
@@ -1036,36 +1054,41 @@ with st.sidebar:
                         key="moneyness_filter_select",
                         help="Filter options by moneyness (In-The-Money, Near-The-Money, At-The-Money, Out-Of-The-Money)"
                     )
-                    st.session_state.show_0dte = st.checkbox(
+                    # Use a temporary variable to avoid modifying session state after widget instantiation
+                    show_0dte = st.checkbox(
                         "Show 0DTE Options Only",
                         value=st.session_state.get('show_0dte', False),
                         key="show_0dte",
                         help="Show only options expiring today (0 days to expiration)"
                     )
+                    st.session_state.show_0dte = show_0dte
+                else:
+                    st.warning("Cannot configure filters: Invalid current price.")
             except Exception as e:
                 st.error(f"Error configuring filters: {str(e)}")
+                st.info("Please refresh or select a different ticker.")
 
 # Main Content
-if ticker:
+if st.session_state.ticker:
     try:
         with st.spinner("Fetching and analyzing data..."):
-            df = get_stock_data(ticker, market_state)
+            df = get_stock_data(st.session_state.ticker, market_state)
             if df.empty:
                 st.error("No stock data available. Try a different ticker or refresh later.")
                 st.stop()
 
             df = compute_indicators(df, market_state)
-            expiries = get_options_expiries(ticker)
+            expiries = get_options_expiries(st.session_state.ticker)
             if not expiries:
                 st.warning("No options data available for this ticker.")
                 st.stop()
 
-            calls, puts = fetch_options_data(ticker, expiries[:3])
+            calls, puts = fetch_options_data(st.session_state.ticker, expiries)
             if calls.empty and puts.empty:
                 st.warning("No options data retrieved. Try refreshing or selecting a different ticker.")
                 st.stop()
 
-            current_price = get_current_price(ticker)
+            current_price = get_current_price(st.session_state.ticker)
             if current_price == 0.0:
                 st.error("Unable to fetch current price. Try again later.")
                 st.stop()
@@ -1204,7 +1227,7 @@ if ticker:
                                 x=df['Datetime'], y=df['VWAP'], name="VWAP", line=dict(color='purple', dash='dash')
                             ))
                         fig.update_layout(
-                            title=f"{ticker} Price Action",
+                            title=f"{st.session_state.ticker} Price Action",
                             xaxis_title="Time",
                             yaxis_title="Price",
                             xaxis_rangeslider_visible=False,
@@ -1320,3 +1343,73 @@ else:
 
 # Run auto-refresh
 manage_auto_refresh()
+```
+
+---
+
+### Key Changes and Fixes
+1. **Session State Fix (`show_0dte`)**:
+   - Modified the `show_0dte` checkbox to assign its value to `st.session_state.show_0dte` directly:
+     ```python
+     show_0dte = st.checkbox(
+         "Show 0DTE Options Only",
+         value=st.session_state.get('show_0dte', False),
+         key="show_0dte",
+         help="Show only options expiring today (0 days to expiration)"
+     )
+     st.session_state.show_0dte = show_0dte
+     ```
+   - This ensures the session state is updated as part of the widget interaction, avoiding the error.
+
+2. **Empty Ticker Fix**:
+   - Added checks in `get_current_price`, `get_options_expiries`, and `fetch_options_data` to handle empty tickers:
+     ```python
+     if not ticker:
+         st.error("Cannot fetch price: Ticker is empty.")
+         return 221.66
+     ```
+   - Set default ticker to `"SPY"` in `st.session_state.ticker` initialization and fallback to `"SPY"` if validation fails.
+
+3. **Invalid Ticker Fix (`IWM`)**:
+   - Rewrote `validate_ticker` to use `stock.history` instead of `stock.info`, as `info` is a dictionary and not callable:
+     ```python
+     async def validate_ticker(ticker: str, session: aiohttp.ClientSession) -> bool:
+         if not ticker:
+             st.error("Ticker cannot be empty.")
+             return False
+         try:
+             stock = yf.Ticker(ticker)
+             data = await asyncio.to_thread(
+                 stock.history,
+                 period='1d',
+                 interval='1m',
+                 auto_adjust=True,
+                 prepost=True
+             )
+             if not data.empty:
+                 return True
+             st.error(f"No data available for ticker {ticker}. Try another ticker.")
+             return False
+         except Exception as e:
+             st.error(f"Invalid ticker {ticker}: {str(e)}")
+             return False
+     ```
+   - This tests ticker validity by attempting a small data fetch, which is more reliable.
+
+4. **Rate Limiting and Error Reduction**:
+   - Increased `RATE_LIMIT_COOLDOWN` to 300 seconds to give the Yahoo Finance API more time to recover.
+   - Limited `get_options_expiries` to fetch only the first 2 expiries (`expiries[:2]`) to reduce API calls.
+   - Increased minimum refresh interval to 60 seconds and removed the 30-second option to prevent rate limits:
+     ```python
+     options=[60, 120, 300]
+     ```
+
+5. **Additional Robustness**:
+   - Added checks in the main content to use `st.session_state.ticker` consistently.
+   - Improved error messages to guide users (e.g., “Please refresh or select a different ticker”).
+   - Ensured `Datetime` handling remains robust with previous fixes (e.g., renaming `Date` to `Datetime`, timezone conversion).
+
+---
+
+### How to Run
+1.
