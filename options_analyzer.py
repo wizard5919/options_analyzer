@@ -831,6 +831,9 @@ if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = get_dynamic_refresh_interval()
 if 'enable_auto_refresh' not in st.session_state:
     st.session_state.enable_auto_refresh = True
+# Initialize show_0dte_checkbox if not present
+if 'show_0dte_checkbox' not in st.session_state:
+    st.session_state.show_0dte_checkbox = False
 
 # Welcome Message
 if st.session_state.show_welcome:
@@ -1050,11 +1053,11 @@ with st.sidebar:
                         key="moneyness_filter_select",
                         help="Filter options by moneyness (In-The-Money, Near-The-Money, At-The-Money, Out-Of-The-Money)"
                     )
-                    # Bind checkbox value directly to session state
-                    st.session_state.show_0dte = st.checkbox(
+                    # Fixed: Use separate key for widget and session state
+                    st.session_state.show_0dte_checkbox = st.checkbox(
                         "Show 0DTE Options Only",
-                        value=st.session_state.get('show_0dte', False),
-                        key="show_0dte",
+                        value=st.session_state.get('show_0dte_checkbox', False),
+                        key="show_0dte_checkbox",
                         help="Show only options expiring today (0 days to expiration)"
                     )
                 else:
@@ -1094,7 +1097,8 @@ if st.session_state.ticker:
             calls['is_0dte'] = calls['expiry'].apply(lambda x: (pd.to_datetime(x).tz_localize(None).date() - datetime.date.today()).days == 0)
             puts['is_0dte'] = puts['expiry'].apply(lambda x: (pd.to_datetime(x).tz_localize(None).date() - datetime.date.today()).days == 0)
 
-            if st.session_state.get('show_0dte', False):
+            # Use the new checkbox state
+            if st.session_state.get('show_0dte_checkbox', False):
                 calls = calls[calls['is_0dte']]
                 puts = puts[puts['is_0dte']]
 
@@ -1266,7 +1270,8 @@ if st.session_state.ticker:
 
             with tab4:
                 st.subheader("0DTE Options Analytics")
-                if st.session_state.get('show_0dte', False):
+                # Use the new checkbox state
+                if st.session_state.get('show_0dte_checkbox', False):
                     call_0dte = call_signals_df[call_signals_df['Is 0DTE']] if not call_signals_df.empty else pd.DataFrame()
                     put_0dte = put_signals_df[put_signals_df['Is 0DTE']] if not put_signals_df.empty else pd.DataFrame()
                     
