@@ -12,7 +12,6 @@ from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 import plotly.graph_objects as go
-import uuid
 import aiohttp
 import asyncio
 
@@ -635,12 +634,18 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
         thresholds['stoch_base'] = max(50, min(80, SIGNAL_THRESHOLDS['call']['stoch_base'] + (price_momentum * 1000)))
         thresholds['volume_min'] = max(500, min(3000, SIGNAL_THRESHOLDS[side]['volume_min'] * vol_factor))
         thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor))
+    else:
+        thresholds['rsi_base'] = max(30, min(50, SIGNAL_THRESHOLDS['put']['rsi_max'] + (price_momentum * 1000)))
+        thresholds['rsi_max'] = thresholds['rsi_base']
+        thresholds['stoch_base'] = max(20, min(50, SIGNAL_THRESHOLDS['put']['stoch_base'] - (price_momentum * 1000)))
+        thresholds['volume_min'] = max(500, min(3000, SIGNAL_THRESHOLDS[side]['volume_min'] * vol_factor))
+        thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor))
     
     if is_premarket() or is_early_market():
         if side == 'call':
-            thresholds['delta_min'] = 0.35
+            thresholds['delta_min'] = max(0.35, thresholds['delta_min'])
         else:
-            thresholds['delta_max'] = -0.35
+            thresholds['delta_max'] = min(-0.35, thresholds['delta_max'])
         thresholds['volume_multiplier'] *= 0.6
         thresholds['gamma_base'] *= 0.8
         thresholds['volume_min'] = max(300, thresholds['volume_min'] * 0.5)
@@ -844,6 +849,7 @@ with col4:
 
 st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 
+# Sidebar Settings
 with st.sidebar:
     st.header("⚙️ Settings")
     with st.expander("🔄 Auto-Refresh", expanded=True):
@@ -889,17 +895,17 @@ with st.sidebar:
                 st.error("Invalid ticker. Try again (e.g., SPY, AAPL).")
                 ticker = ""
     
-    if ticker:
-        try:
-            df = get_stock_data(ticker, market_state)
-            if not df.empty:
-                df = compute_indicators(df, market_state)
-                latest = df.iloc[-1]
-                
-                call_thresholds = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
-                put_thresholds = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
-                
-                with st.expander("📈 Signal Thresholds", expanded=True):
+    with st.expander("📈 Signal Thresholds", expanded=True):
+        if ticker:
+            try:
+                df = get_stock_data(ticker, market_state)
+                if not df.empty:
+                    df = compute_indicators(df, market_state)
+                    latest = df.iloc[-1]
+                    
+                    call_thresholds = calculate_dynamic_thresholds(latest, "call", is_0dte=False)
+                    put_thresholds = calculate_dynamic_thresholds(latest, "put", is_0dte=False)
+                    
                     st.markdown('<p style="font-size: 0.9rem; margin-bottom: 8px;">Thresholds adapt to market volatility and momentum</p>', unsafe_allow_html=True)
                     col1, col2 = st.columns(2)
                     with col1:
@@ -923,15 +929,9 @@ with st.sidebar:
                         SIGNAL_THRESHOLDS['call']['stoch_base'] = st.slider(
                             "Stochastic", 50.0, 80.0, call_thresholds['stoch_base'], 0.1,
                             key="call_stoch_slider",
-                            help="Minimum stochastic value for calls"
-                        )
-                        SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider(
-                            "Min Volume", 500, 3000, int(call_thresholds['volume_min']), 1,
-                            key="call_volume_slider",
-                            help="Minimum option volume for signals"
+                            help="Minimum stochastic for call signals"
                         )
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
                     with col2:
                         st.markdown('<div style="font-size: 0.9rem; margin-bottom: 8px;"><strong>Puts</strong></div>', unsafe_allow_html=True)
                         st.markdown('<div style="font-size: 0.85rem; padding: 5px; border-radius: 5px; background-color: #f8d7da;">', unsafe_allow_html=True)
@@ -953,439 +953,239 @@ with st.sidebar:
                         SIGNAL_THRESHOLDS['put']['stoch_base'] = st.slider(
                             "Stochastic", 20.0, 50.0, put_thresholds['stoch_base'], 0.1,
                             key="put_stoch_slider",
-                            help="Maximum stochastic value for puts"
-                        )
-                        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider(
-                            "Min Volume", 500, 3000, int(put_thresholds['volume_min']), 1,
-                            key="put_volume_slider",
-                            help="Minimum option volume for signals"
+                            help="Maximum stochastic for put signals"
                         )
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    st.markdown('<div style="font-size: 0.9rem; margin-top: 10px;"><strong>Common</strong></div>', unsafe_allow_html=True)
-                    SIGNAL_THRESHOLDS['call']['theta_base'] = st.slider(
-                        "Max Theta", 0.01, 0.1, SIGNAL_THRESHOLDS['call']['theta_base'], key="theta_slider",
-                        help="Maximum theta for signals"
-                    )
-                    SIGNAL_THRESHOLDS['put']['theta_base'] = SIGNAL_THRESHOLDS['call']['theta_base']
+            except Exception as e:
+                st.error(f"Error loading signal thresholds: {str(e)}")
     
-    with st.expander("🎯 Trade Settings"):
+    with st.expander("🎯 Trade Settings", expanded=True):
+        st.markdown('<p style="font-size: 0.9rem; margin-bottom: 8px;">Adjust profit targets and stop loss</p>', unsafe_allow_html=True)
         CONFIG['PROFIT_TARGETS']['call'] = st.slider(
-            "Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, 
-            key="call_profit_target", help="Target profit percentage for calls"
-        )
+            "Call Profit Target (%)", 5.0, 50.0, CONFIG['PROFIT_TARGETS']['call'] * 100, 1.0,
+            key="call_profit_target",
+            help="Target profit percentage for call options"
+        ) / 100
         CONFIG['PROFIT_TARGETS']['put'] = st.slider(
-            "Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, 
-            key="put_profit_target", help="Target profit percentage for puts"
-        )
+            "Put Profit Target (%)", 5.0, 50.0, CONFIG['PROFIT_TARGETS']['put'] * 100, 1.0,
+            key="put_profit_target",
+            help="Target profit percentage for put options"
+        ) / 100
         CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider(
-            "Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, 
-            key="stop_loss", help="Stop loss percentage"
-        )
-
-# Main interface
-if 'ticker' in st.session_state and st.session_state.ticker:
-    ticker = st.session_state.ticker
-    tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
+            "Stop Loss (%)", 5.0, 20.0, CONFIG['PROFIT_TARGETS']['stop_loss'] * 100, 1.0,
+            key="stop_loss",
+            help="Stop loss percentage for all trades"
+        ) / 100
     
-    with tab1:
-        try:
-            with st.spinner("Fetching and analyzing data..."):
-                df = get_stock_data(ticker, market_state)
-                if df.empty:
-                    st.error("Unable to fetch stock data. Please check the ticker symbol.")
-                    st.stop()
-                
-                df = compute_indicators(df, market_state)
-                if df.empty:
-                    st.error("Unable to compute technical indicators.")
-                    st.stop()
-                
-                current_price = df.iloc[-1]['Close']
-                st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**")
-                
-                atr_pct = df.iloc[-1].get('ATR_pct', 0)
-                volatility_status = "Low"
-                if not pd.isna(atr_pct):
-                    if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
-                        volatility_status = "Extreme"
-                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['medium']:
-                        volatility_status = "High"
-                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
-                        volatility_status = "Medium"
-                    st.info(f"📈 Volatility (ATR%): {atr_pct*100:.2f}% - **{volatility_status}**")
-                
-                if is_premarket():
-                    st.warning("⚠️ PREMARKET: Volume and delta thresholds adjusted")
-                elif is_early_market():
-                    st.warning("⚠️ EARLY MARKET: Volume and delta thresholds adjusted")
-                
-                expiries = get_options_expiries(ticker)
-                if not expiries:
-                    st.error("No options expiries available. Please wait due to rate limits.")
-                    st.stop()
-                
-                expiry_mode = st.radio(
-                    "Expiration Filter",
-                    ["0DTE Only", "All Near-Term Expiries"],
-                    index=0,
-                    help="Choose to analyze only 0DTE or near-term expiries"
+    with st.expander("🔍 Filters", expanded=True):
+        if ticker:
+            current_price = get_current_price(ticker)
+            if current_price > 0:
+                strike_min = current_price * (1 + st.session_state.strike_range[0] / 100)
+                strike_max = current_price * (1 + st.session_state.strike_range[1] / 100)
+                st.session_state.strike_range = st.slider(
+                    "Strike Price Range (% from current)",
+                    -20.0, 20.0, st.session_state.strike_range, 0.5,
+                    key="strike_range_slider",
+                    help="Filter options by strike price relative to current stock price"
                 )
-                today = datetime.date.today()
-                if expiry_mode == "0DTE Only":
-                    expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
-                else:
-                    expiries_to_use = expiries[:3]
-                
-                if not expiries_to_use:
-                    st.warning("No options expiries available for the selected mode.")
-                    st.stop()
-                
-                st.info(f"Analyzing {len(expiries_to_use)} expiries: {', '.join(expiries_to_use)}")
-                
-                calls, puts = fetch_options_data(ticker, expiries_to_use)
-                if calls.empty and puts.empty:
-                    st.error("No options data available. Possible network issue or invalid ticker.")
-                    st.stop()
-                
-                for option_df in [calls, puts]:
-                    option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
-                
-                max_range = max(10, current_price * 0.1) if current_price > 0 else 10
-                strike_range = st.slider(
-                    "Strike Range ($)",
-                    -max_range, max_range, st.session_state.strike_range, 1.0,
-                    key="strike_range",
-                    help="Select the strike price range around the current price"
-                )
-                min_strike = current_price + strike_range[0]
-                max_strike = current_price + strike_range[1]
-                
-                calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)].copy()
-                puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)].copy()
-                
-                if not calls_filtered.empty:
-                    calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                    invalid_calls = calls_filtered[~calls_filtered.apply(lambda x: validate_option_data(x, current_price), axis=1)]
-                    if not invalid_calls.empty:
-                        st.warning(f"Skipped {len(invalid_calls)} call options due to insufficient data.")
-                if not puts_filtered.empty:
-                    puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                    invalid_puts = puts_filtered[~puts_filtered.apply(lambda x: validate_option_data(x, current_price), axis=1)]
-                    if not invalid_puts.empty:
-                        st.warning(f"Skipped {len(invalid_puts)} put options due to insufficient data.")
-                
-                moneyness_filter = st.multiselect(
+                st.session_state.moneyness_filter = st.multiselect(
                     "Moneyness Filter",
-                    options=["ITM", "NTM", "ATM", "OTM"],
+                    ["ITM", "NTM", "ATM", "OTM"],
                     default=st.session_state.moneyness_filter,
-                    key="moneyness_filter",
-                    help="Filter options by moneyness (ITM: In-The-Money, NTM: Near-The-Money, ATM: At-The-Money, OTM: Out-of-The-Money)"
+                    key="moneyness_filter_select",
+                    help="Filter options by moneyness (In-The-Money, Near-The-Money, At-The-Money, Out-Of-The-Money)"
                 )
-                if moneyness_filter != st.session_state.moneyness_filter:
-                    st.session_state.moneyness_filter = moneyness_filter
-                
-                if not calls_filtered.empty:
-                    calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(moneyness_filter)]
-                if not puts_filtered.empty:
-                    puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(moneyness_filter)]
-                
-                st.write(f"🔍 Filtered Options: {len(calls_filtered)} calls, {len(puts_filtered)} puts "
-                         f"(Strike range: ${min_strike:.2f}-${max_strike:.2f})")
-                
-                sort_by = st.selectbox(
-                    "Sort Signals By",
-                    ["signal_score", "strike", "lastPrice", "volume"],
-                    key="sort_signals",
-                    help="Sort signals by score, strike price, last price, or volume"
-                )
-                
+
+# Main Content
+if ticker:
+    try:
+        with st.spinner("Fetching and analyzing data..."):
+            df = get_stock_data(ticker, market_state)
+            if df.empty:
+                st.error("No stock data available. Try a different ticker or refresh later.")
+                st.stop()
+            
+            df = compute_indicators(df, market_state)
+            expiries = get_options_expiries(ticker)
+            if not expiries:
+                st.warning("No options data available for this ticker.")
+                st.stop()
+            
+            calls, puts = fetch_options_data(ticker, expiries[:3])
+            if calls.empty and puts.empty:
+                st.warning("No options data retrieved. Try refreshing or selecting a different ticker.")
+                st.stop()
+            
+            current_price = get_current_price(ticker)
+            if current_price == 0.0:
+                st.error("Unable to fetch current price. Try again later.")
+                st.stop()
+            
+            calls['moneyness'] = calls['strike'].apply(lambda x: classify_moneyness(x, current_price))
+            puts['moneyness'] = puts['strike'].apply(lambda x: classify_moneyness(x, current_price))
+            
+            calls['is_0dte'] = calls['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
+            puts['is_0dte'] = puts['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
+            
+            strike_min = current_price * (1 + st.session_state.strike_range[0] / 100)
+            strike_max = current_price * (1 + st.session_state.strike_range[1] / 100)
+            calls = calls[(calls['strike'] >= strike_min) & (calls['strike'] <= strike_max)]
+            puts = puts[(puts['strike'] >= strike_min) & (puts['strike'] <= strike_max)]
+            
+            if st.session_state.moneyness_filter:
+                calls = calls[calls['moneyness'].isin(st.session_state.moneyness_filter)]
+                puts = puts[puts['moneyness'].isin(st.session_state.moneyness_filter)]
+            
+            call_signals = []
+            put_signals = []
+            for _, call in calls.iterrows():
+                signal = generate_signal(call, "call", df, call['is_0dte'])
+                if signal['signal']:
+                    call_signals.append({
+                        'Contract': call['contractSymbol'],
+                        'Strike': call['strike'],
+                        'Expiry': call['expiry'],
+                        'Moneyness': call['moneyness'],
+                        'Last Price': call['lastPrice'],
+                        'Volume': call['volume'],
+                        'Delta': call['delta'],
+                        'Gamma': call['gamma'],
+                        'Theta': call['theta'],
+                        'Signal Score': signal['score'],
+                        'Profit Target': signal['profit_target'],
+                        'Stop Loss': signal['stop_loss'],
+                        'Holding Period': signal['holding_period'],
+                        'Conditions': "; ".join(signal['passed_conditions'])
+                    })
+            for _, put in puts.iterrows():
+                signal = generate_signal(put, "put", df, put['is_0dte'])
+                if signal['signal']:
+                    put_signals.append({
+                        'Contract': put['contractSymbol'],
+                        'Strike': put['strike'],
+                        'Expiry': put['expiry'],
+                        'Moneyness': put['moneyness'],
+                        'Last Price': put['lastPrice'],
+                        'Volume': put['volume'],
+                        'Delta': put['delta'],
+                        'Gamma': put['gamma'],
+                        'Theta': put['theta'],
+                        'Signal Score': signal['score'],
+                        'Profit Target': signal['profit_target'],
+                        'Stop Loss': signal['stop_loss'],
+                        'Holding Period': signal['holding_period'],
+                        'Conditions': "; ".join(signal['passed_conditions'])
+                    })
+            
+            call_signals_df = pd.DataFrame(call_signals)
+            put_signals_df = pd.DataFrame(put_signals)
+            
+            tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Chart", "🔍 Technicals"])
+            
+            with tab1:
+                st.subheader("Buy Signals")
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.subheader("📈 Call Option Signals")
-                    if not calls_filtered.empty:
-                        call_signals = []
-                        for _, row in calls_filtered.iterrows():
-                            is_0dte = row.get('is_0dte', False)
-                            signal_result = generate_signal(row, "call", df, is_0dte)
-                            if signal_result['signal']:
-                                row_dict = row.to_dict()
-                                row_dict['signal_score'] = signal_result['score']
-                                row_dict['thresholds'] = signal_result['thresholds']
-                                row_dict['passed_conditions'] = signal_result['passed_conditions']
-                                row_dict['is_0dte'] = is_0dte
-                                row_dict['profit_target'] = signal_result['profit_target']
-                                row_dict['stop_loss'] = signal_result['stop_loss']
-                                row_dict['holding_period'] = signal_result['holding_period']
-                                call_signals.append(row_dict)
-                        
-                        if call_signals:
-                            signals_df = pd.DataFrame(call_signals)
-                            signals_df = signals_df.sort_values(sort_by, ascending=False)
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta',
-                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period']
-                            available_cols = [col for col in display_cols if col in signals_df.columns]
-                            
-                            def style_signals(row):
-                                score = row['signal_score']
-                                color = '#e6f4ea' if score > 0.8 else '#fff3cd' if score > 0.6 else '#f8d7da'
-                                return [f'background-color: {color}' for _ in row]
-                            
-                            st.dataframe(
-                                signals_df[available_cols].style.format({
-                                    'strike': "${:.2f}",
-                                    'lastPrice': "${:.2f}",
-                                    'volume': "{:.0f}",
-                                    'delta': "{:.3f}",
-                                    'gamma': "{:.3f}",
-                                    'theta': "{:.3f}",
-                                    'signal_score': "{:.2%}",
-                                    'profit_target': "${:.2f}",
-                                    'stop_loss': "${:.2f}"
-                                }).apply(style_signals, axis=1),
-                                use_container_width=True,
-                                hide_index=True
-                            )
-                            
-                            top_signal = signals_df.iloc[0]
-                            st.markdown(
-                                f"""
-                                <div class="signal-alert" style="background-color: #e6f4ea;">
-                                    🚨 <strong>CALL SIGNAL DETECTED!</strong><br>
-                                    Contract: {top_signal['contractSymbol']}<br>
-                                    Strike: ${top_signal['strike']:.2f} | Price: ${top_signal['lastPrice']:.2f}<br>
-                                    Holding: {top_signal['holding_period']}
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
-                            
-                            st.markdown("""
-                            <script>
-                            var audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
-                            audio.play();
-                            </script>
-                            """, unsafe_allow_html=True)
-                            
-                            fig = go.Figure(go.Indicator(
-                                mode="gauge+number",
-                                value=top_signal['signal_score'] * 100,
-                                title={'text': "Call Signal Strength (%)"},
-                                gauge={
-                                    'axis': {'range': [0, 100]},
-                                    'bar': {'color': "#28a745"},
-                                    'steps': [
-                                        {'range': [0, 60], 'color': "#f8d7da"},
-                                        {'range': [60, 80], 'color': "#fff3cd"},
-                                        {'range': [80, 100], 'color': "#e6f4ea"}
-                                    ]
-                                }
-                            ))
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            if top_signal['thresholds']:
-                                th = top_signal['thresholds']
-                                st.info(f"Thresholds: Δ ≥ {th['delta_min']:.2f} | "
-                                        f"Γ ≥ {th['gamma_base']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
-                                        f"RSI > {th['rsi_min']:.1f} | Stoch > {th['stoch_base']:.1f}")
-                            
-                            with st.expander("View Conditions"):
-                                for condition in top_signal['passed_conditions']:
-                                    st.write(f"✅ {condition}")
-                            
-                            st.success(f"Found {len(call_signals)} call signals!")
-                        else:
-                            st.info("No call signals found.")
-                            if not calls_filtered.empty:
-                                sample_call = calls_filtered.iloc[0]
-                                is_0dte = sample_call.get('is_0dte', False)
-                                result = generate_signal(sample_call, "call", df, is_0dte)
-                                if result:
-                                    st.write("Failed conditions for top call:")
-                                    for condition in result['failed_conditions']:
-                                        st.write(f"❌ {condition}")
+                    st.markdown("### Call Signals")
+                    if not call_signals_df.empty:
+                        for _, signal in call_signals_df.iterrows():
+                            with st.container():
+                                st.markdown(f'<div class="signal-alert call-metric">', unsafe_allow_html=True)
+                                st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
+                                st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
+                                st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f}")
+                                st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                                st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
+                                st.markdown(f"Holding: {signal['Holding Period']}")
+                                st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
+                                st.markdown('</div>', unsafe_allow_html=True)
                     else:
-                        st.info("No call options available.")
+                        st.info("No call signals found with current settings.")
                 
                 with col2:
-                    st.subheader("📉 Put Option Signals")
-                    if not puts_filtered.empty:
-                        put_signals = []
-                        for _, row in puts_filtered.iterrows():
-                            is_0dte = row.get('is_0dte', False)
-                            signal_result = generate_signal(row, "put", df, is_0dte)
-                            if signal_result['signal']:
-                                row_dict = row.to_dict()
-                                row_dict['signal_score'] = signal_result['score']
-                                row_dict['thresholds'] = signal_result['thresholds']
-                                row_dict['passed_conditions'] = signal_result['passed_conditions']
-                                row_dict['is_0dte'] = is_0dte
-                                row_dict['profit_target'] = signal_result['profit_target']
-                                row_dict['stop_loss'] = signal_result['stop_loss']
-                                row_dict['holding_period'] = signal_result['holding_period']
-                                put_signals.append(row_dict)
-                        
-                        if put_signals:
-                            signals_df = pd.DataFrame(put_signals)
-                            signals_df = signals_df.sort_values(sort_by, ascending=False)
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta',
-                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period']
-                            available_cols = [col for col in display_cols if col in signals_df.columns]
-                            
-                            def style_signals(row):
-                                score = row['signal_score']
-                                color = '#e6f4ea' if score > 0.8 else '#fff3cd' if score > 0.6 else '#f8d7da'
-                                return [f'background-color: {color}' for _ in row]
-                            
-                            st.dataframe(
-                                signals_df[available_cols].style.format({
-                                    'strike': "${:.2f}",
-                                    'lastPrice': "${:.2f}",
-                                    'volume': "{:.0f}",
-                                    'delta': "{:.3f}",
-                                    'gamma': "{:.3f}",
-                                    'theta': "{:.3f}",
-                                    'signal_score': "{:.2%}",
-                                    'profit_target': "${:.2f}",
-                                    'stop_loss': "${:.2f}"
-                                }).apply(style_signals, axis=1),
-                                use_container_width=True,
-                                hide_index=True
-                            )
-                            
-                            top_signal = signals_df.iloc[0]
-                            st.markdown(
-                                f"""
-                                <div class="signal-alert" style="background-color: #f8d7da;">
-                                    🚨 <strong>PUT SIGNAL DETECTED!</strong><br>
-                                    Contract: {top_signal['contractSymbol']}<br>
-                                    Strike: ${top_signal['strike']:.2f} | Price: ${top_signal['lastPrice']:.2f}<br>
-                                    Holding: {top_signal['holding_period']}
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
-                            
-                            st.markdown("""
-                            <script>
-                            var audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
-                            audio.play();
-                            </script>
-                            """, unsafe_allow_html=True)
-                            
-                            fig = go.Figure(go.Indicator(
-                                mode="gauge+number",
-                                value=top_signal['signal_score'] * 100,
-                                title={'text': "Put Signal Strength (%)"},
-                                gauge={
-                                    'axis': {'range': [0, 100]},
-                                    'bar': {'color': "#dc3545"},
-                                    'steps': [
-                                        {'range': [0, 60], 'color': "#f8d7da"},
-                                        {'range': [60, 80], 'color': "#fff3cd"},
-                                        {'range': [80, 100], 'color': "#e6f4ea"}
-                                    ]
-                                }
-                            ))
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            if top_signal['thresholds']:
-                                th = top_signal['thresholds']
-                                st.info(f"Thresholds: Δ ≤ {th['delta_max']:.2f} | "
-                                        f"Γ ≥ {th['gamma_base']:.3f} | Θ ≤ {th['theta_base']:.3f} | "
-                                        f"RSI < {th['rsi_max']:.1f} | Stoch < {th['stoch_base']:.1f}")
-                            
-                            with st.expander("View Conditions"):
-                                for condition in top_signal['passed_conditions']:
-                                    st.write(f"✅ {condition}")
-                            
-                            st.success(f"Found {len(put_signals)} put signals!")
-                        else:
-                            st.info("No put signals found.")
-                            if not puts_filtered.empty:
-                                sample_put = puts_filtered.iloc[0]
-                                is_0dte = sample_put.get('is_0dte', False)
-                                result = generate_signal(sample_put, "put", df, is_0dte)
-                                if result:
-                                    st.write("Failed conditions for top put:")
-                                    for condition in result['failed_conditions']:
-                                        st.write(f"❌ {condition}")
+                    st.markdown("### Put Signals")
+                    if not put_signals_df.empty:
+                        for _, signal in put_signals_df.iterrows():
+                            with st.container():
+                                st.markdown(f'<div class="signal-alert put-metric">', unsafe_allow_html=True)
+                                st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
+                                st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
+                                st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f}")
+                                st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                                st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
+                                st.markdown(f"Holding: {signal['Holding Period']}")
+                                st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
+                                st.markdown('</div>', unsafe_allow_html=True)
                     else:
-                        st.info("No put options available.")
-                
-                with tab2:
-                    st.subheader("📊 Stock Data & Indicators")
-                    if not df.empty:
-                        if is_premarket():
-                            st.info("🔔 Showing premarket data")
-                        elif not is_market_open():
-                            st.info("🔔 Showing after-hours data")
-                        
-                        latest = df.iloc[-1]
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Current Price", f"${latest['Close']:.2f}")
-                        with col2:
-                            ema_9 = latest['EMA_9']
-                            st.metric("EMA 9", f"${ema_9:.2f}" if not pd.isna(ema_9) else "N/A")
-                        with col3:
-                            rsi = latest['RSI']
-                            st.metric("RSI", f"{rsi:.1f}" if not pd.isna(rsi) else "N/A")
-                        with col4:
-                            atr_pct = latest['ATR_pct']
-                            st.metric("Volatility (ATR%)", f"{atr_pct*100:.2f}%" if not pd.isna(atr_pct) else "N/A")
-                        
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Close'], name='Close Price', line=dict(color='#1a3c6e')))
-                        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_9'], name='EMA 9', line=dict(color='#28a745')))
-                        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_20'], name='EMA 20', line=dict(color='#dc3545')))
-                        fig.update_layout(
-                            title=f"{ticker} Price and EMAs",
-                            xaxis_title="Date",
-                            yaxis_title="Price ($)",
-                            template="plotly_white",
-                            height=400
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        st.subheader("Recent Data")
-                        display_df = df.tail(10)[['Datetime', 'Close', 'EMA_9', 'EMA_20', 'RSI', 'Stochastic', 'ATR_pct', 'Volume']].round(2)
-                        st.dataframe(
-                            display_df.rename(columns={
-                                'Close': 'Close ($)',
-                                'EMA_9': 'EMA 9 ($)',
-                                'EMA_20': 'EMA 20 ($)',
-                                'RSI': 'RSI',
-                                'Stochastic': 'Stochastic',
-                                'ATR_pct': 'ATR%',
-                                'Volume': 'Volume'
-                            }).style.format({
-                                'Close ($)': "${:.2f}",
-                                'EMA_9 ($)': "${:.2f}",
-                                'EMA_20 ($)': "${:.2f}",
-                                'RSI': "{:.1f}",
-                                'Stochastic': "{:.1f}",
-                                'ATR%': "{:.2f}%",
-                                'Volume': "{:.0f}"
-                            }),
-                            use_container_width=True
-                        )
-                
-                with tab3:
-                    st.subheader("🔍 Analysis Details")
-                    if enable_auto_refresh:
-                        st.info(f"🔄 Auto-refresh: Every {refresh_interval} seconds")
-                    st.write("**Current Thresholds**")
-                    st.json({'call': call_thresholds, 'put': put_thresholds})
-                    st.write("**Profit Targets**")
-                    st.json(CONFIG['PROFIT_TARGETS'])
-                
-                with st.expander("ℹ️ How to Use"):
-                    st.markdown("""
-                    **Steps to Analyze Options:**
-                    1. Select a stock ticker (e.g., SPY, IWM)
-                    2. Configure auto-refresh and trade settings
-                    3. Filter by expiration and moneyness
-                    4. Adjust strike range
-                    5. View signals and charts
-                    """)
+                        st.info("No put signals found with current settings.")
+            
+            with tab2:
+                st.subheader("Price Chart")
+                if not df.empty:
+                    fig = go.Figure()
+                    fig.add_trace(go.Candlestick(
+                        x=df['Datetime'],
+                        open=df['Open'],
+                        high=df['High'],
+                        low=df['Low'],
+                        close=df['Close'],
+                        name="OHLC"
+                    ))
+                    if 'EMA_9' in df.columns and not df['EMA_9'].isna().all():
+                        fig.add_trace(go.Scatter(
+                            x=df['Datetime'], y=df['EMA_9'], name="EMA 9", line=dict(color='blue')
+                        ))
+                    if 'EMA_20' in df.columns and not df['EMA_20'].isna().all():
+                        fig.add_trace(go.Scatter(
+                            x=df['Datetime'], y=df['EMA_20'], name="EMA 20", line=dict(color='orange')
+                        ))
+                    if 'VWAP' in df.columns and not df['VWAP'].isna().all():
+                        fig.add_trace(go.Scatter(
+                            x=df['Datetime'], y=df['VWAP'], name="VWAP", line=dict(color='purple', dash='dash')
+                        ))
+                    fig.update_layout(
+                        title=f"{ticker} Price Action",
+                        xaxis_title="Time",
+                        yaxis_title="Price",
+                        xaxis_rangeslider_visible=False,
+                        height=600
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with tab3:
+                st.subheader("Technical Indicators")
+                if not df.empty:
+                    latest = df.iloc[-1]
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("RSI", f"{latest['RSI']:.1f}" if not pd.isna(latest['RSI']) else "N/A")
+                        st.metric("Stochastic", f"{latest['Stochastic']:.1f}" if not pd.isna(latest['Stochastic']) else "N/A")
+                    with col2:
+                        st.metric("ATR %", f"{latest['ATR_pct']*100:.2f}%" if not pd.isna(latest['ATR_pct']) else "N/A")
+                        st.metric("Price Momentum", f"{latest['price_momentum']*100:.2f}%" if not pd.isna(latest['price_momentum']) else "N/A")
+                    with col3:
+                        st.metric("Volume", f"{latest['Volume']:.0f}")
+                        st.metric("Avg Volume", f"{latest['avg_vol']:.0f}" if not pd.isna(latest['avg_vol']) else "N/A")
+                    
+                    if not call_signals_df.empty or not put_signals_df.empty:
+                        st.markdown("### Signal Summary")
+                        if not call_signals_df.empty:
+                            st.markdown("#### Call Signals")
+                            st.dataframe(call_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
+                                'Strike': "${:.2f}",
+                                'Last Price': "${:.2f}",
+                                'Signal Score': "{:.2%}"
+                            }))
+                        if not put_signals_df.empty:
+                            st.markdown("#### Put Signals")
+                            st.dataframe(put_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
+                                'Strike': "${:.2f}",
+                                'Last Price': "${:.2f}",
+                                'Signal Score': "{:.2%}"
+                            }))
+    except Exception as e:
+        st.error(f"Error processing data: {str(e)}")
+        st.info("Please try refreshing or selecting a different ticker.")
+else:
+    st.info("Please select a ticker in the sidebar to begin analysis.")
