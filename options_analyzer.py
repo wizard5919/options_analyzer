@@ -266,6 +266,24 @@ def calculate_time_decay_factor() -> float:
     decay_factor = 1.0 + (elapsed_seconds / total_market_seconds) * 0.5
     return decay_factor
 
+def calculate_time_decay_impact(option: pd.Series, holding_period: str) -> float:
+    theta = float(option['theta'])
+    time_decay_factor = calculate_time_decay_factor()
+    days = 1.0
+    if "Intraday" in holding_period:
+        eastern = pytz.timezone('US/Eastern')
+        now = datetime.datetime.now(eastern)
+        market_close = datetime.datetime.combine(now.date(), CONFIG['MARKET_CLOSE'], tzinfo=eastern)
+        hours_to_close = (market_close - now).total_seconds() / 3600
+        days = hours_to_close / 24  # Approximate intraday theta impact
+    elif "1-2 days" in holding_period:
+        days = 1.5
+    elif "3-5 days" in holding_period:
+        days = 4.0
+    elif "3-7 days" in holding_period:
+        days = 5.0
+    return abs(theta * time_decay_factor * days)
+
 async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) -> pd.DataFrame:
     try:
         market_state = get_market_state()
@@ -718,9 +736,11 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
         profit_target = None
         stop_loss = None
         holding_period = None
+        time_decay_impact = None
         if signal:
             profit_target, stop_loss = calculate_profit_targets(option)
             holding_period = calculate_holding_period(option, current_price)
+            time_decay_impact = calculate_time_decay_impact(option, holding_period)
         
         return {
             'signal': signal,
@@ -730,7 +750,8 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             'thresholds': thresholds,
             'profit_target': profit_target,
             'stop_loss': stop_loss,
-            'holding_period': holding_period
+            'holding_period': holding_period,
+            'time_decay_impact': time_decay_impact
         }
     except Exception as e:
         return {'signal': False, 'reason': f'Error in signal generation: {str(e)}'}
@@ -1050,6 +1071,7 @@ if ticker:
                         'Profit Target': signal['profit_target'],
                         'Stop Loss': signal['stop_loss'],
                         'Holding Period': signal['holding_period'],
+                        'Time Decay Impact': signal['time_decay_impact'],
                         'Conditions': "; ".join(signal['passed_conditions']),
                         'Is 0DTE': call['is_0dte']
                     })
@@ -1071,6 +1093,7 @@ if ticker:
                         'Profit Target': signal['profit_target'],
                         'Stop Loss': signal['stop_loss'],
                         'Holding Period': signal['holding_period'],
+                        'Time Decay Impact': signal['time_decay_impact'],
                         'Conditions': "; ".join(signal['passed_conditions']),
                         'Is 0DTE': put['is_0dte']
                     })
@@ -1093,6 +1116,7 @@ if ticker:
                                 st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
                                 st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
                                 st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                                st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
                                 st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
                                 st.markdown(f"Holding: {signal['Holding Period']}")
                                 st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
@@ -1110,6 +1134,7 @@ if ticker:
                                 st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
                                 st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
                                 st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                                st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
                                 st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
                                 st.markdown(f"Holding: {signal['Holding Period']}")
                                 st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
@@ -1169,16 +1194,20 @@ if ticker:
                         st.markdown("### Signal Summary")
                         if not call_signals_df.empty:
                             st.markdown("#### Call Signals")
-                            st.dataframe(call_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
+                            st.dataframe(call_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
+                                'Theta': "{:.3f}",
+                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
                         if not put_signals_df.empty:
                             st.markdown("#### Put Signals")
-                            st.dataframe(put_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
+                            st.dataframe(put_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
+                                'Theta': "{:.3f}",
+                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
             
@@ -1196,25 +1225,31 @@ if ticker:
                             if not call_0dte.empty:
                                 st.metric("Avg Call IV", f"{call_0dte['Implied Volatility'].mean():.2%}")
                                 st.metric("Max Call Premium", f"${call_0dte['Last Price'].max():.2f}")
+                                st.metric("Avg Call Time Decay Impact", f"-${call_0dte['Time Decay Impact'].mean():.2f}")
                         with col2:
                             st.metric("Total 0DTE Put Signals", len(put_0dte))
                             if not put_0dte.empty:
                                 st.metric("Avg Put IV", f"{put_0dte['Implied Volatility'].mean():.2%}")
                                 st.metric("Max Put Premium", f"${put_0dte['Last Price'].max():.2f}")
+                                st.metric("Avg Put Time Decay Impact", f"-${put_0dte['Time Decay Impact'].mean():.2f}")
                         
                         if not call_0dte.empty:
                             st.markdown("#### 0DTE Call Signals")
-                            st.dataframe(call_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
+                            st.dataframe(call_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
+                                'Theta': "{:.3f}",
+                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
                         
                         if not put_0dte.empty:
                             st.markdown("#### 0DTE Put Signals")
-                            st.dataframe(put_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
+                            st.dataframe(put_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
+                                'Theta': "{:.3f}",
+                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
                         
