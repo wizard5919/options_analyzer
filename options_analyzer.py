@@ -819,6 +819,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
 # =============================
 # STREAMLIT INTERFACE
 # =============================
+# Initialize only non-widget session state variables
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0
 if 'last_refresh' not in st.session_state:
@@ -829,16 +830,12 @@ if 'strike_range' not in st.session_state:
     st.session_state.strike_range = (-5.0, 5.0)
 if 'moneyness_filter' not in st.session_state:
     st.session_state.moneyness_filter = ["NTM", "ATM"]
-if 'show_0dte' not in st.session_state:
-    st.session_state.show_0dte = False
 if 'show_welcome' not in st.session_state:
     st.session_state.show_welcome = True
 if 'current_time' not in st.session_state:
     st.session_state.current_time = datetime.datetime.now(pytz.timezone('US/Eastern'))
 if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = get_dynamic_refresh_interval()
-if 'enable_auto_refresh' not in st.session_state:
-    st.session_state.enable_auto_refresh = True
 
 # Welcome Modal
 if st.session_state.show_welcome:
@@ -908,24 +905,27 @@ with st.sidebar:
     st.header("⚙️ Settings")
     with st.expander("🔄 Auto-Refresh", expanded=True):
         try:
-            st.session_state.enable_auto_refresh = st.checkbox(
+            st.checkbox(
                 "Enable Auto-Refresh",
-                value=st.session_state.get('enable_auto_refresh', True),
-                key="auto_refresh"
+                value=True,  # Default value
+                key="enable_auto_refresh",
+                help="Enable automatic refreshing of data"
             )
             if st.session_state.enable_auto_refresh:
                 default_interval = get_dynamic_refresh_interval()
-                st.session_state.refresh_interval = st.selectbox(
+                options = [30, 60, 120, 300]
+                current_interval = st.session_state.get('refresh_interval', default_interval)
+                if current_interval not in options:
+                    current_interval = default_interval
+                st.selectbox(
                     "Refresh Interval",
-                    options=[30, 60, 120, 300],
-                    index=[30, 60, 120, 300].index(st.session_state.get('refresh_interval', default_interval)) if st.session_state.get('refresh_interval', default_interval) in [30, 60, 120, 300] else 1,
+                    options=options,
+                    index=options.index(current_interval),
                     format_func=lambda x: f"{x} seconds",
-                    key="refresh_interval_select",
-                    help="Select how often data refreshes automatically (adjusted by market state)"
+                    key="refresh_interval",
+                    help="Select refresh frequency"
                 )
                 st.info(f"Refreshing every {st.session_state.refresh_interval} seconds (Market: {market_state})")
-            else:
-                st.session_state.enable_auto_refresh = False
         except Exception as e:
             st.error(f"Error configuring auto-refresh: {str(e)}")
             st.session_state.refresh_interval = get_dynamic_refresh_interval()
@@ -1058,9 +1058,9 @@ with st.sidebar:
                         key="moneyness_filter_select",
                         help="Filter options by moneyness (In-The-Money, Near-The-Money, At-The-Money, Out-Of-The-Money)"
                     )
-                    st.session_state.show_0dte = st.checkbox(
+                    st.checkbox(
                         "Show 0DTE Options Only",
-                        value=st.session_state.get('show_0dte', False),
+                        value=False,  # Default value
                         key="show_0dte",
                         help="Show only options expiring today (0 days to expiration)"
                     )
