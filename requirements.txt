@@ -6,3 +6,5 @@ plotly
 matplotlib
 ta
 polygon-api-client
+aiohttp
+asyncio
