@@ -270,7 +270,13 @@ async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) ->
     try:
         market_state = get_market_state()
         end = datetime.datetime.now()
-        start = end - datetime.timedelta(days=10 if market_state != "Premarket" else 1)
+        if market_state == "Premarket":
+            days = 1
+        elif market_state == "Open":
+            days = 7  # Changed from 10 to 7 to align with yfinance 1-minute data limit
+        else:
+            days = 10
+        start = end - datetime.timedelta(days=days)
         interval = "1m" if market_state in ["Premarket", "Open"] else "5m"
         data = await asyncio.to_thread(
             yf.download,
