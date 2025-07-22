@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -1343,73 +1343,3 @@ else:
 
 # Run auto-refresh
 manage_auto_refresh()
-```
-
----
-
-### Key Changes and Fixes
-1. **Session State Fix (`show_0dte`)**:
-   - Modified the `show_0dte` checkbox to assign its value to `st.session_state.show_0dte` directly:
-     ```python
-     show_0dte = st.checkbox(
-         "Show 0DTE Options Only",
-         value=st.session_state.get('show_0dte', False),
-         key="show_0dte",
-         help="Show only options expiring today (0 days to expiration)"
-     )
-     st.session_state.show_0dte = show_0dte
-     ```
-   - This ensures the session state is updated as part of the widget interaction, avoiding the error.
-
-2. **Empty Ticker Fix**:
-   - Added checks in `get_current_price`, `get_options_expiries`, and `fetch_options_data` to handle empty tickers:
-     ```python
-     if not ticker:
-         st.error("Cannot fetch price: Ticker is empty.")
-         return 221.66
-     ```
-   - Set default ticker to `"SPY"` in `st.session_state.ticker` initialization and fallback to `"SPY"` if validation fails.
-
-3. **Invalid Ticker Fix (`IWM`)**:
-   - Rewrote `validate_ticker` to use `stock.history` instead of `stock.info`, as `info` is a dictionary and not callable:
-     ```python
-     async def validate_ticker(ticker: str, session: aiohttp.ClientSession) -> bool:
-         if not ticker:
-             st.error("Ticker cannot be empty.")
-             return False
-         try:
-             stock = yf.Ticker(ticker)
-             data = await asyncio.to_thread(
-                 stock.history,
-                 period='1d',
-                 interval='1m',
-                 auto_adjust=True,
-                 prepost=True
-             )
-             if not data.empty:
-                 return True
-             st.error(f"No data available for ticker {ticker}. Try another ticker.")
-             return False
-         except Exception as e:
-             st.error(f"Invalid ticker {ticker}: {str(e)}")
-             return False
-     ```
-   - This tests ticker validity by attempting a small data fetch, which is more reliable.
-
-4. **Rate Limiting and Error Reduction**:
-   - Increased `RATE_LIMIT_COOLDOWN` to 300 seconds to give the Yahoo Finance API more time to recover.
-   - Limited `get_options_expiries` to fetch only the first 2 expiries (`expiries[:2]`) to reduce API calls.
-   - Increased minimum refresh interval to 60 seconds and removed the 30-second option to prevent rate limits:
-     ```python
-     options=[60, 120, 300]
-     ```
-
-5. **Additional Robustness**:
-   - Added checks in the main content to use `st.session_state.ticker` consistently.
-   - Improved error messages to guide users (e.g., “Please refresh or select a different ticker”).
-   - Ensured `Datetime` handling remains robust with previous fixes (e.g., renaming `Date` to `Datetime`, timezone conversion).
-
----
-
-### How to Run
-1.
