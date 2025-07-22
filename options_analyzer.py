@@ -273,7 +273,7 @@ async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) ->
         if market_state == "Premarket":
             days = 1
         elif market_state == "Open":
-            days = 7  # Changed from 10 to 7 to align with yfinance 1-minute data limit
+            days = 7
         else:
             days = 10
         start = end - datetime.timedelta(days=days)
@@ -812,7 +812,7 @@ with col1:
         st.info("💤 Market Closed")
 with col2:
     current_price = get_current_price(st.session_state.ticker) if 'ticker' in st.session_state else 0.0
-    st.metric("Current Price", f"${current_price:.2f}")
+    st.metric("Current Price", f"${current_price:.2f}", help=f"Price for {st.session_state.ticker}")
 with col3:
     st.session_state.time_placeholder = st.empty()
     st.session_state.time_placeholder.metric(
@@ -860,13 +860,14 @@ with st.sidebar:
         selected_ticker = st.selectbox(
             "Select Stock Ticker",
             ticker_options,
+            index=ticker_options.index(st.session_state.get('ticker', 'IWM')),
             key="ticker_select",
             help="Choose a stock or select 'Other' for a custom ticker"
         )
         if selected_ticker == "Other":
             ticker = st.text_input(
                 "Enter Custom Ticker",
-                value=st.session_state.ticker,
+                value=st.session_state.get('ticker', ''),
                 key="custom_ticker",
                 help="Enter a valid stock ticker (e.g., SPY, AAPL)"
             ).upper()
@@ -876,10 +877,15 @@ with st.sidebar:
             try:
                 ticker_info = yf.Ticker(ticker).info
                 st.success(f"Valid ticker: {ticker} ({ticker_info.get('shortName', ticker)})")
-                st.session_state.ticker = ticker
+                if st.session_state.get('ticker') != ticker:  # Force refresh if ticker changes
+                    st.session_state.ticker = ticker
+                    st.cache_data.clear()
+                    st.rerun()
             except:
                 st.error("Invalid ticker. Try again (e.g., SPY, AAPL).")
-                ticker = ""
+                ticker = st.session_state.get('ticker', 'IWM')
+        else:
+            ticker = st.session_state.get('ticker', 'IWM')
     
     with st.expander("📈 Signal Thresholds", expanded=True):
         if ticker:
