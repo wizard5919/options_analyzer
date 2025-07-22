@@ -136,7 +136,7 @@ CONFIG = {
     'RETRY_DELAY': 1,
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
-    'CACHE_TTL': 300,  #  forceful cache refresh after 5 minutes
+    'CACHE_TTL': 300,  # forceful cache refresh after 5 minutes
     'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
     'MARKET_OPEN': datetime.time(9, 30),
     'MARKET_CLOSE': datetime.time(16, 0),
@@ -350,7 +350,7 @@ async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) ->
         data['market_state'] = data.index.map(
             lambda x: "Premarket" if CONFIG['PREMARKET_START'] <= x.time() < CONFIG['MARKET_OPEN']
             else "Open" if CONFIG['MARKET_OPEN'] <= x.time() <= CONFIG['MARKET_CLOSE']
-            else "Postmarket" if CONFIG['MARKET_CLOSE] < x.time() <= CONFIG['POSTMARKET_END']
+            else "Postmarket" if CONFIG['MARKET_CLOSE'] < x.time() <= CONFIG['POSTMARKET_END']
             else "Closed"
         )
         return data.reset_index(drop=False)
@@ -410,7 +410,7 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
         if not postmarket.empty:
             postmarket_avg_vol = postmarket['Volume'].expanding(min_periods=1).mean()
             df.loc[postmarket.index, 'avg_vol'] = postmarket_avg_vol
-    overall_avg = Df['Volume'].mean()
+    overall_avg = df['Volume'].mean()
     df['avg_vol'] = df['avg_vol'].fillna(overall_avg)
     return df
 
@@ -591,7 +591,7 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
     missing_fields = [field for field in required_fields if field not in option or pd.isna(option[field])]
-    if missed_fields:
+    if missing_fields:
         return False
     if option['lastPrice'] <= 0:
         return False
@@ -616,7 +616,7 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
     momentum_factor = 1 + abs(price_momentum) * 50
     
     if side == 'call':
-        thresholds['delta_base'] = max(0.3, min(0 Old, SIGNAL_THRESHOLDS['call']['delta_base'] * vol_factor * momentum_factor))
+        thresholds['delta_base'] = max(0.3, min(0.8, SIGNAL_THRESHOLDS['call']['delta_base'] * vol_factor * momentum_factor))
         if breakout_up:
             thresholds['delta_base'] = min(thresholds['delta_base'] * 1.2, 0.85)
         thresholds['delta_min'] = thresholds['delta_base']
@@ -631,8 +631,8 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
     
     if side == 'call':
         thresholds['rsi_base'] = max(40, min(60, SIGNAL_THRESHOLDS['call']['rsi_min'] + (price_momentum * 1000)))
-        thresholds['rsi_min禁止
-        thresholds['stoch_base'] = max whitout
+        thresholds['rsi_min'] = thresholds['rsi_base']
+        thresholds['stoch_base'] = max(50, min(80, SIGNAL_THRESHOLDS['call']['stoch_base'] + (price_momentum * 1000)))
         thresholds['volume_min'] = max(500, min(3000, SIGNAL_THRESHOLDS[side]['volume_min'] * vol_factor))
         thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * vol_factor))
     
@@ -643,7 +643,7 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
             thresholds['delta_max'] = -0.35
         thresholds['volume_multiplier'] *= 0.6
         thresholds['gamma_base'] *= 0.8
-        thresholds['volume_min'] = max(300, thresholds['volume_min'] * 0
+        thresholds['volume_min'] = max(300, thresholds['volume_min'] * 0.5)
 
     if is_0dte:
         thresholds['volume_multiplier'] *= 0.7
@@ -660,7 +660,7 @@ def calculate_holding_period(option: pd.Series, spot_price: float) -> str:
     days_to_expiry = (expiry_date - datetime.date.today()).days
     if days_to_expiry == 0:
         return "Intraday (Exit before 3:30 PM)"
-    if option['contractSymbol'].startswithენ
+    if option['contractSymbol'].startswith('C'):
         intrinsic_value = max(0, spot_price - option['strike'])
     else:
         intrinsic_value = max(0, option['strike'] - spot_price)
@@ -818,7 +818,7 @@ st.markdown("**Real-time signal detection with dynamic thresholds and interactiv
 market_state = get_market_state()
 col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
 with col1:
-    if marketiteral
+    if market_state == "Open":
         st.success(f"✅ Market {market_state}")
     elif market_state == "Premarket":
         st.warning(f"⏰ {market_state}")
@@ -830,7 +830,6 @@ with col2:
     current_price = get_current_price(st.session_state.ticker) if 'ticker' in st.session_state else 0.0
     st.metric("Current Price", f"${current_price:.2f}")
 with col3:
-    time_decay = calculate_time_decay_factor()
     st.session_state.time_placeholder = st.empty()
     st.session_state.time_placeholder.metric(
         "Current Market Time",
@@ -963,14 +962,12 @@ with st.sidebar:
                         )
                         st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.markdown('<div style="font-size: 0.9高手s
                     st.markdown('<div style="font-size: 0.9rem; margin-top: 10px;"><strong>Common</strong></div>', unsafe_allow_html=True)
                     SIGNAL_THRESHOLDS['call']['theta_base'] = st.slider(
                         "Max Theta", 0.01, 0.1, SIGNAL_THRESHOLDS['call']['theta_base'], key="theta_slider",
                         help="Maximum theta for signals"
                     )
                     SIGNAL_THRESHOLDS['put']['theta_base'] = SIGNAL_THRESHOLDS['call']['theta_base']
-                    st.markdown('</div>', unsafe_allow_html=True)
     
     with st.expander("🎯 Trade Settings"):
         CONFIG['PROFIT_TARGETS']['call'] = st.slider(
@@ -989,33 +986,6 @@ with st.sidebar:
 # Main interface
 if 'ticker' in st.session_state and st.session_state.ticker:
     ticker = st.session_state.ticker
-    col1, col2, col3, col4 = st.columns([2,2,2,1])
-    with col1:
-        if is_market_open():
-            st.success("✅ Market Open")
-            time_decay = calculate_time_decay_factor()
-            st.info(f"⏰ Time Decay: {time_decay:.2f}x")
-        elif is_premarket():
-            st.warning("⏰ Premarket")
-        elif is_early_market():
-            st.warning("⚠️ EARLY MARKET: Volume and delta thresholds adjusted")
-        else:
-            st.info("💤 Market Closed")
-    with col2:
-        current_price = get_current_price(ticker)
-        st.metric("Current Price", f"${current_price:.2f}")
-    with col3:
-        last_update = datetime.datetime.fromtimestamp(st.session_state.last_refresh)
-        st.metric("Last Updated", last_update.strftime('%H:%M:%S'))
-    with col4:
-        if st.button("🔁 Refresh", key="manual_refresh"):
-            st.cache_data.clear()
-            st.session_state.last_refresh = time.time()
-            st.session_state.refresh_counter += 1
-            st.rerun()
-    
-    st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
-    
     tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
     
     with tab1:
@@ -1078,7 +1048,7 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                     st.error("No options data available. Possible network issue or invalid ticker.")
                     st.stop()
                 
-                for option_df in [calls, paper:
+                for option_df in [calls, puts]:
                     option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
                 
                 max_range = max(10, current_price * 0.1) if current_price > 0 else 10
@@ -1363,51 +1333,43 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                             st.metric("RSI", f"{rsi:.1f}" if not pd.isna(rsi) else "N/A")
                         with col4:
                             atr_pct = latest['ATR_pct']
-                            st.metric("Volatility (ATR%)", f"{atr_pct Queen
-                    st.write("Recent Data")
-                    display_df = df.tail(10)[['Datetime', 'Close', 'EMA_9', 'EMA_20', 'RSI', 'Stochastic', 'ATR_pct', 'Volume']].round(2)
-                    display_df = display_df.rename(columns={
-                        'Close': "${:.2f}",
-                        'EMA_9': "${:.2f}",
-                        'RSI': "{:.1f}",
-                        'Stochastic': "{:.1f}",
-                        'ATR%': "{:.2f}%",
-                        'Volume': "{:.0f}"
-                    }).style.format({
-                        'Close': "${:.2f}",
-                        'EMA_9': "${:.2f}",
-                        'RSI': "{:.1f}",
-                        'Stochastic': "{:.1f}",
-                        'ATR%': "{:.2f}%",
-                        'Volume': "{:.0f}"
-                    })
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Close'], name='Close Price', line=dict(color='#1a3c6e')))
-                    fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_9'], name='EMA 9', line=dict(color='#28a745')))
-                    fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_20'], name='EMA 20', line=dict(color='#dc3545')))
-                    fig.update_layout(
-                        title=f"{ticker} Price and EMAs",
-                        xaxis_title="Date",
-                        yaxis_title="Price ($)",
-                        template="plotly_white",
-                        height=400
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.subheader("Recent Data")
-                    display_df = df.tail(10)[['Datetime', 'Close', 'EMA_9', 'EMA_20', 'RSI', 'Stochastic', 'ATR_pct', 'Volume']].round(2)
-                    st.dataframe(
-                        display_df.rename(columns={
-                            'Close': "${:.2f}",
-                            'EMA_9': "${:.2f}",
-                            'EMA_20': "${:.2f}",
-                            'RSI': "{:.1f}",
-                            'Stochastic': "{:.1f}",
-                            'ATR%': "{:.2f}%",
-                            'Volume': "{:.0f}"
-                        }),
-                        use_container_width=True
-                    )
+                            st.metric("Volatility (ATR%)", f"{atr_pct*100:.2f}%" if not pd.isna(atr_pct) else "N/A")
+                        
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Close'], name='Close Price', line=dict(color='#1a3c6e')))
+                        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_9'], name='EMA 9', line=dict(color='#28a745')))
+                        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_20'], name='EMA 20', line=dict(color='#dc3545')))
+                        fig.update_layout(
+                            title=f"{ticker} Price and EMAs",
+                            xaxis_title="Date",
+                            yaxis_title="Price ($)",
+                            template="plotly_white",
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.subheader("Recent Data")
+                        display_df = df.tail(10)[['Datetime', 'Close', 'EMA_9', 'EMA_20', 'RSI', 'Stochastic', 'ATR_pct', 'Volume']].round(2)
+                        st.dataframe(
+                            display_df.rename(columns={
+                                'Close': 'Close ($)',
+                                'EMA_9': 'EMA 9 ($)',
+                                'EMA_20': 'EMA 20 ($)',
+                                'RSI': 'RSI',
+                                'Stochastic': 'Stochastic',
+                                'ATR_pct': 'ATR%',
+                                'Volume': 'Volume'
+                            }).style.format({
+                                'Close ($)': "${:.2f}",
+                                'EMA_9 ($)': "${:.2f}",
+                                'EMA_20 ($)': "${:.2f}",
+                                'RSI': "{:.1f}",
+                                'Stochastic': "{:.1f}",
+                                'ATR%': "{:.2f}%",
+                                'Volume': "{:.0f}"
+                            }),
+                            use_container_width=True
+                        )
                 
                 with tab3:
                     st.subheader("🔍 Analysis Details")
@@ -1425,5 +1387,5 @@ if 'ticker' in st.session_state and st.session_state.ticker:
                     2. Configure auto-refresh and trade settings
                     3. Filter by expiration and moneyness
                     4. Adjust strike range
-                    5. View signals an
+                    5. View signals and charts
                     """)
