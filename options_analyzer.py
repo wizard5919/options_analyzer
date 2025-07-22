@@ -12,7 +12,6 @@ from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 import plotly.graph_objects as go
-import uuid
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -267,152 +266,75 @@ def calculate_time_decay_factor() -> float:
     decay_factor = 1.0 + (elapsed_seconds / total_market_seconds) * 0.5
     return decay_factor
 
-def calculate_time_decay_impact(option: pd.Series, holding_period: str) -> float:
-    theta = float(option['theta'])
-    time_decay_factor = calculate_time_decay_factor()
-    days = 1.0
-    if "Intraday" in holding_period:
-        eastern = pytz.timezone('US/Eastern')
-        now = datetime.datetime.now(eastern)
-        market_close = datetime.datetime.combine(now.date(), CONFIG['MARKET_CLOSE'], tzinfo=eastern)
-        hours_to_close = (market_close - now).total_seconds() / 3600
-        days = hours_to_close / 24  # Approximate intraday theta impact
-    elif "1-2 days" in holding_period:
-        days = 1.5
-    elif "3-5 days" in holding_period:
-        days = 4.0
-    elif "3-7 days" in holding_period:
-        days = 5.0
-    return abs(theta * time_decay_factor * days)
-
 async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) -> pd.DataFrame:
-    for attempt in range(CONFIG['MAX_RETRIES']):
-        try:
-            market_state = get_market_state()
-            end = datetime.datetime.now()
-            start = end - datetime.timedelta(days=10 if market_state != "Premarket" else 1)
-            interval = "1m" if market_state in ["Premarket", "Open"] else "5m"
-            data = await asyncio.to_thread(
-                yf.download,
-                ticker,
-                start=start,
-                end=end,
-                interval=interval,
-                auto_adjust=True,
-                progress=False,
-                prepost=True
-            )
-            if data.empty:
-                st.warning(f"No data for {ticker} on attempt {attempt + 1}")
-                if attempt < CONFIG['MAX_RETRIES'] - 1:
-                    time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
-                    continue
-                return pd.DataFrame()
-
-            # Log raw data for debugging
-            st.info(f"Raw data columns for {ticker}: {list(data.columns)}")
-            data.columns = data.columns.droplevel(1) if isinstance(data.columns, pd.MultiIndex) else data.columns
-            if 'Close' not in data.columns:
-                st.error(f"'Close' column missing for {ticker}. Available columns: {list(data.columns)}")
-                if attempt < CONFIG['MAX_RETRIES'] - 1:
-                    time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
-                    continue
-                return pd.DataFrame()
-
-            data = data.dropna(how='all')
-            required_cols = ['Close', 'High', 'Low', 'Volume']
-            for col in required_cols:
-                data[col] = pd.to_numeric(data[col], errors='coerce')
-            data = data.dropna(subset=required_cols)
-
-            if len(data) < CONFIG['MIN_DATA_POINTS']:
-                st.warning(f"Insufficient data points ({len(data)}). Need at least {CONFIG['MIN_DATA_POINTS']}.")
-                if attempt < CONFIG['MAX_RETRIES'] - 1:
-                    time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
-                    continue
-                return pd.DataFrame()
-
-            eastern = pytz.timezone('US/Eastern')
-            if data.index.tz is None:
-                data.index = data.index.tz_localize(pytz.utc)
-            data.index = data.index.tz_convert(eastern)
-            data['market_state'] = data.index.map(
-                lambda x: "Premarket" if CONFIG['PREMARKET_START'] <= x.time() < CONFIG['MARKET_OPEN']
-                else "Open" if CONFIG['MARKET_OPEN'] <= x.time() <= CONFIG['MARKET_CLOSE']
-                else "Postmarket" if CONFIG['MARKET_CLOSE'] < x.time() <= CONFIG['POSTMARKET_END']
-                else "Closed"
-            )
-            return data.reset_index(drop=False)
-        except Exception as e:
-            error_msg = str(e)
-            if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
-                st.warning(f"Yahoo Finance rate limit reached on attempt {attempt + 1}. Waiting {CONFIG['RATE_LIMIT_COOLDOWN']} seconds.")
-                st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-                return pd.DataFrame()
-            st.error(f"Fetch error for {ticker} on attempt {attempt + 1}: {error_msg}")
-            if attempt < CONFIG['MAX_RETRIES'] - 1:
-                time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
-                continue
+    try:
+        market_state = get_market_state()
+        end = datetime.datetime.now()
+        start = end - datetime.timedelta(days=10 if market_state != "Premarket" else 1)
+        interval = "1m" if market_state in ["Premarket", "Open"] else "5m"
+        data = await asyncio.to_thread(
+            yf.download,
+            ticker,
+            start=start,
+            end=end,
+            interval=interval,
+            auto_adjust=True,
+            progress=False,
+            prepost=True
+        )
+        if data.empty:
+            st.warning(f"No data found for ticker {ticker}")
             return pd.DataFrame()
-    return pd.DataFrame()
+
+        data.columns = data.columns.droplevel(1) if isinstance(data.columns, pd.MultiIndex) else data.columns
+        required_cols = ['Close', 'High', 'Low', 'Volume']
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            st.error(f"Missing required columns: {missing_cols}")
+            return pd.DataFrame()
+
+        data = data.dropna(how='all')
+        for col in required_cols:
+            data[col] = pd.to_numeric(data[col], errors='coerce')
+        data = data.dropna(subset=required_cols)
+
+        if len(data) < CONFIG['MIN_DATA_POINTS']:
+            st.warning(f"Insufficient data points ({len(data)}). Need at least {CONFIG['MIN_DATA_POINTS']}.")
+            return pd.DataFrame()
+
+        eastern = pytz.timezone('US/Eastern')
+        if data.index.tz is None:
+            data.index = data.index.tz_localize(pytz.utc)
+        data.index = data.index.tz_convert(eastern)
+        data['market_state'] = data.index.map(
+            lambda x: "Premarket" if CONFIG['PREMARKET_START'] <= x.time() < CONFIG['MARKET_OPEN']
+            else "Open" if CONFIG['MARKET_OPEN'] <= x.time() <= CONFIG['MARKET_CLOSE']
+            else "Postmarket" if CONFIG['MARKET_CLOSE'] < x.time() <= CONFIG['POSTMARKET_END']
+            else "Closed"
+        )
+        return data.reset_index(drop=False)
+    except Exception as e:
+        st.error(f"Error fetching stock data for {ticker}: {str(e)}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data(ticker: str, market_state: str = "Open") -> pd.DataFrame:
-    async def run_fetch():
+    async def fetch():
         async with aiohttp.ClientSession() as session:
             return await async_fetch_stock_data(ticker, session)
-    
-    try:
-        # Get or create an event loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        # Run the coroutine in the current thread if possible, or use run_coroutine_threadsafe
-        if loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(run_fetch(), loop)
-            df = future.result(timeout=CONFIG['DATA_TIMEOUT'])
-        else:
-            df = loop.run_until_complete(run_fetch())
-        
-        if df.empty:
-            st.error(f"Failed to fetch valid stock data for {ticker} after {CONFIG['MAX_RETRIES']} attempts.")
-        else:
-            st.info(f"Successfully fetched {len(df)} data points for {ticker}.")
-        return df
-    except Exception as e:
-        st.error(f"Error fetching stock data: {str(e)}")
-        return pd.DataFrame()
+    return asyncio.run(fetch())
 
 def get_current_price(ticker: str) -> float:
-    for attempt in range(CONFIG['MAX_RETRIES']):
-        try:
-            stock = yf.Ticker(ticker)
-            data = stock.history(period='1d', interval='1m', prepost=True)
-            if not data.empty and 'Close' in data.columns:
-                return float(data['Close'].iloc[-1])
-            st.warning(f"No current price data for {ticker} on attempt {attempt + 1}")
-            if attempt < CONFIG['MAX_RETRIES'] - 1:
-                time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
-                continue
-            return 0.0
-        except Exception as e:
-            error_msg = str(e)
-            if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
-                st.warning(f"Yahoo Finance rate limit reached on attempt {attempt + 1}. Waiting {CONFIG['RATE_LIMIT_COOLDOWN']} seconds.")
-                st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-                return 0.0
-            st.error(f"Error getting current price for {ticker} on attempt {attempt + 1}: {error_msg}")
-            if attempt < CONFIG['MAX_RETRIES'] - 1:
-                time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
-                continue
-            return 0.0
-    return 0.0
+    try:
+        stock = yf.Ticker(ticker)
+        data = stock.history(period='1d', interval='1m', prepost=True)
+        if not data.empty:
+            return float(data['Close'].iloc[-1])
+        st.warning(f"No current price data for {ticker}")
+        return 0.0
+    except Exception as e:
+        st.error(f"Error getting current price for {ticker}: {str(e)}")
+        return 0.0
 
 def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
     for attempt in range(max_retries):
@@ -421,11 +343,11 @@ def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
         except Exception as e:
             error_msg = str(e)
             if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
-                st.warning(f"Yahoo Finance rate limit reached. Waiting {CONFIG['RATE_LIMIT_COOLDOWN']} seconds.")
+                st.warning("Yahoo Finance rate limit reached. Please wait a few minutes.")
                 st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
                 return None
             if attempt == max_retries - 1:
-                st.error(f"API call failed after {max_retries} attempts: {error_msg}")
+                st.error(f"API call failed after {max_retries} attempts: {str(e)}")
                 return None
             time.sleep(CONFIG['RETRY_DELAY'] * (attempt + 1))
     return None
@@ -468,10 +390,10 @@ def compute_indicators(df: pd.DataFrame, market_state: str = "Open") -> pd.DataF
         return df
     df = df.copy()
     required_cols = ['Close', 'High', 'Low', 'Volume']
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        st.error(f"Cannot compute indicators: missing columns {missing_cols}")
-        return df
+    for col in required_cols:
+        if col not in df.columns:
+            st.error(f"Missing required column: {col}")
+            return pd.DataFrame()
 
     close = df['Close'].astype(float)
     high = df['High'].astype(float)
@@ -544,12 +466,19 @@ def fetch_options_data(ticker: str, expiries: list[str]) -> tuple[pd.DataFrame, 
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 if missing_cols:
                     st.warning(f"Missing columns in {df_name} for {expiry}: {missing_cols}")
-                if 'delta' not in df.columns:
-                    df['delta'] = np.nan
-                if 'gamma' not in df.columns:
-                    df['gamma'] = np.nan
-                if 'theta' not in df.columns:
-                    df['theta'] = np.nan
+                    if 'delta' not in df.columns:
+                        df['delta'] = np.nan
+                    if 'gamma' not in df.columns:
+                        df['gamma'] = np.nan
+                    if 'theta' not in df.columns:
+                        df['theta'] = np.nan
+                else:
+                    if 'delta' not in df.columns:
+                        df['delta'] = np.nan
+                    if 'gamma' not in df.columns:
+                        df['gamma'] = np.nan
+                    if 'theta' not in df.columns:
+                        df['theta'] = np.nan
             all_calls = pd.concat([all_calls, calls], ignore_index=True)
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
             time.sleep(0.5)
@@ -615,18 +544,15 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> tuple[float
     
     expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
     days_to_expiry = (expiry_date - datetime.date.today()).days
-    theta = (-0.05 if days_to_expiry == 0 else -0.02) * time_decay
-    st.info(f"Calculated approximate theta for {option['contractSymbol']}: {theta:.3f}")
+    theta = (0.05 if days_to_expiry == 0 else 0.02) * time_decay
     return delta, gamma, theta
 
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
     missing_fields = [field for field in required_fields if field not in option or pd.isna(option[field])]
     if missing_fields:
-        st.warning(f"Missing required fields for {option['contractSymbol']}: {missing_fields}")
         return False
     if option['lastPrice'] <= 0:
-        st.warning(f"Invalid lastPrice for {option['contractSymbol']}: {option['lastPrice']}")
         return False
     if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
         delta, gamma, theta = calculate_approximate_greeks(option, spot_price)
@@ -634,7 +560,6 @@ def validate_option_data(option: pd.Series, spot_price: float) -> bool:
         option['gamma'] = gamma
         option['theta'] = theta
     if pd.isna(option['delta']) or pd.isna(option['gamma']) or pd.isna(option['theta']):
-        st.warning(f"Failed to calculate greeks for {option['contractSymbol']}")
         return False
     return True
 
@@ -735,10 +660,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
     if stock_df.empty:
         return {'signal': False, 'reason': 'No stock data available'}
     
-    current_price = stock_df.iloc[-1]['Close'] if not stock_df.empty and 'Close' in stock_df.columns else 0.0
-    if current_price == 0.0:
-        return {'signal': False, 'reason': 'Invalid current price'}
-    
+    current_price = stock_df.iloc[-1]['Close']
     if not validate_option_data(option, current_price):
         return {'signal': False, 'reason': 'Insufficient option data'}
     
@@ -767,7 +689,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             conditions = [
                 (delta >= thresholds['delta_min'], f"Delta ≥ {thresholds['delta_min']:.2f}", delta),
                 (gamma >= thresholds['gamma_base'], f"Gamma ≥ {thresholds['gamma_base']:.3f}", gamma),
-                (theta <= thresholds['theta_base'], f"Theta ≤ {thresholds['theta_base']:.3f}", theta),
+                (theta <= thresholds['theta_base'], f"Theta ≤ {theta:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']:.1f}", rsi),
                 (stochastic is not None and stochastic > thresholds['stoch_base'], f"Stochastic > {thresholds['stoch_base']:.1f}", stochastic),
@@ -780,7 +702,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             conditions = [
                 (delta <= thresholds['delta_max'], f"Delta ≤ {thresholds['delta_max']:.2f}", delta),
                 (gamma >= thresholds['gamma_base'], f"Gamma ≥ {thresholds['gamma_base']:.3f}", gamma),
-                (theta <= thresholds['theta_base'], f"Theta ≤ {thresholds['theta_base']:.3f}", theta),
+                (theta <= thresholds['theta_base'], f"Theta ≤ {theta:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (stochastic is not None and stochastic < thresholds['stoch_base'], f"Stochastic < {thresholds['stoch_base']:.1f}", stochastic),
@@ -796,11 +718,9 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
         profit_target = None
         stop_loss = None
         holding_period = None
-        time_decay_impact = None
         if signal:
             profit_target, stop_loss = calculate_profit_targets(option)
             holding_period = calculate_holding_period(option, current_price)
-            time_decay_impact = calculate_time_decay_impact(option, holding_period)
         
         return {
             'signal': signal,
@@ -810,8 +730,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             'thresholds': thresholds,
             'profit_target': profit_target,
             'stop_loss': stop_loss,
-            'holding_period': holding_period,
-            'time_decay_impact': time_decay_impact
+            'holding_period': holding_period
         }
     except Exception as e:
         return {'signal': False, 'reason': f'Error in signal generation: {str(e)}'}
@@ -819,7 +738,6 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
 # =============================
 # STREAMLIT INTERFACE
 # =============================
-# Initialize only non-widget session state variables
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0
 if 'last_refresh' not in st.session_state:
@@ -830,12 +748,16 @@ if 'strike_range' not in st.session_state:
     st.session_state.strike_range = (-5.0, 5.0)
 if 'moneyness_filter' not in st.session_state:
     st.session_state.moneyness_filter = ["NTM", "ATM"]
+if 'show_0dte' not in st.session_state:
+    st.session_state.show_0dte = False
 if 'show_welcome' not in st.session_state:
     st.session_state.show_welcome = True
 if 'current_time' not in st.session_state:
     st.session_state.current_time = datetime.datetime.now(pytz.timezone('US/Eastern'))
 if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = get_dynamic_refresh_interval()
+if 'enable_auto_refresh' not in st.session_state:
+    st.session_state.enable_auto_refresh = True
 
 # Welcome Modal
 if st.session_state.show_welcome:
@@ -892,7 +814,7 @@ with col3:
         st.session_state.current_time.strftime('%H:%M:%S %Z')
     )
 with col4:
-    if st.button("🔁 Clear Cache & Refresh", key="manual_refresh"):
+    if st.button("🔁 Refresh", key="manual_refresh"):
         st.cache_data.clear()
         st.session_state.last_refresh = time.time()
         st.session_state.refresh_counter += 1
@@ -905,27 +827,24 @@ with st.sidebar:
     st.header("⚙️ Settings")
     with st.expander("🔄 Auto-Refresh", expanded=True):
         try:
-            st.checkbox(
+            st.session_state.enable_auto_refresh = st.checkbox(
                 "Enable Auto-Refresh",
-                value=True,  # Default value
-                key="enable_auto_refresh",
-                help="Enable automatic refreshing of data"
+                value=st.session_state.get('enable_auto_refresh', True),
+                key="auto_refresh"
             )
             if st.session_state.enable_auto_refresh:
                 default_interval = get_dynamic_refresh_interval()
-                options = [30, 60, 120, 300]
-                current_interval = st.session_state.get('refresh_interval', default_interval)
-                if current_interval not in options:
-                    current_interval = default_interval
-                st.selectbox(
+                st.session_state.refresh_interval = st.selectbox(
                     "Refresh Interval",
-                    options=options,
-                    index=options.index(current_interval),
+                    options=[30, 60, 120, 300],
+                    index=[30, 60, 120, 300].index(st.session_state.get('refresh_interval', default_interval)) if st.session_state.get('refresh_interval', default_interval) in [30, 60, 120, 300] else 1,
                     format_func=lambda x: f"{x} seconds",
-                    key="refresh_interval",
-                    help="Select refresh frequency"
+                    key="refresh_interval_select",
+                    help="Select how often data refreshes automatically (adjusted by market state)"
                 )
                 st.info(f"Refreshing every {st.session_state.refresh_interval} seconds (Market: {market_state})")
+            else:
+                st.session_state.enable_auto_refresh = False
         except Exception as e:
             st.error(f"Error configuring auto-refresh: {str(e)}")
             st.session_state.refresh_interval = get_dynamic_refresh_interval()
@@ -1060,7 +979,7 @@ with st.sidebar:
                     )
                     st.checkbox(
                         "Show 0DTE Options Only",
-                        value=False,  # Default value
+                        value=st.session_state.get('show_0dte', False),
                         key="show_0dte",
                         help="Show only options expiring today (0 days to expiration)"
                     )
@@ -1072,99 +991,45 @@ if ticker:
     try:
         with st.spinner("Fetching and analyzing data..."):
             df = get_stock_data(ticker, market_state)
-            if df.empty or 'Close' not in df.columns:
-                st.error("No valid stock data available (missing 'Close' column). Try refreshing or selecting a different ticker.")
-                st.stop()
-
-            df = compute_indicators(df, market_state)
             if df.empty:
-                st.error("Failed to compute indicators due to invalid data.")
+                st.error("No stock data available. Try a different ticker or refresh later.")
                 st.stop()
-
-            current_price = get_current_price(ticker)
-            if current_price == 0.0:
-                st.error("Unable to fetch current price. Try again later.")
-                st.stop()
-
+            
+            df = compute_indicators(df, market_state)
             expiries = get_options_expiries(ticker)
             if not expiries:
                 st.warning("No options data available for this ticker.")
                 st.stop()
-
+            
             calls, puts = fetch_options_data(ticker, expiries[:3])
             if calls.empty and puts.empty:
                 st.warning("No options data retrieved. Try refreshing or selecting a different ticker.")
                 st.stop()
-
-            # Ensure theta and time decay impact are calculated
+            
+            current_price = get_current_price(ticker)
+            if current_price == 0.0:
+                st.error("Unable to fetch current price. Try again later.")
+                st.stop()
+            
             calls['moneyness'] = calls['strike'].apply(lambda x: classify_moneyness(x, current_price))
             puts['moneyness'] = puts['strike'].apply(lambda x: classify_moneyness(x, current_price))
+            
             calls['is_0dte'] = calls['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
             puts['is_0dte'] = puts['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
-
-            for df in [calls, puts]:
-                for idx, option in df.iterrows():
-                    if pd.isna(option['theta']):
-                        delta, gamma, theta = calculate_approximate_greeks(option, current_price)
-                        df.loc[idx, 'delta'] = delta
-                        df.loc[idx, 'gamma'] = gamma
-                        df.loc[idx, 'theta'] = theta
-                        st.info(f"Assigned theta {theta:.3f} for {option['contractSymbol']}")
-
-            calls['holding_period'] = calls.apply(lambda x: calculate_holding_period(x, current_price), axis=1)
-            puts['holding_period'] = puts.apply(lambda x: calculate_holding_period(x, current_price), axis=1)
-            calls['time_decay_impact'] = calls.apply(lambda x: calculate_time_decay_impact(x, x['holding_period']), axis=1)
-            puts['time_decay_impact'] = puts.apply(lambda x: calculate_time_decay_impact(x, x['holding_period']), axis=1)
-
-            # Log filter settings for debugging
-            st.info(f"Applying filters: Strike Range {st.session_state.strike_range}, Moneyness {st.session_state.moneyness_filter}, 0DTE {st.session_state.get('show_0dte', False)}")
-
-            # Apply filters
+            
             if st.session_state.get('show_0dte', False):
                 calls = calls[calls['is_0dte']]
                 puts = puts[puts['is_0dte']]
+            
             strike_min = current_price * (1 + st.session_state.strike_range[0] / 100)
             strike_max = current_price * (1 + st.session_state.strike_range[1] / 100)
             calls = calls[(calls['strike'] >= strike_min) & (calls['strike'] <= strike_max)]
             puts = puts[(puts['strike'] >= strike_min) & (puts['strike'] <= strike_max)]
+            
             if st.session_state.moneyness_filter:
                 calls = calls[calls['moneyness'].isin(st.session_state.moneyness_filter)]
                 puts = puts[puts['moneyness'].isin(st.session_state.moneyness_filter)]
-
-            # Log number of options after filtering
-            st.info(f"Post-filter: {len(calls)} call options, {len(puts)} put options")
-
-            # Display Time Decay Overview
-            st.markdown("### Time Decay Overview")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("#### All Calls")
-                if not calls.empty:
-                    calls_display = calls[['contractSymbol', 'strike', 'expiry', 'moneyness', 'lastPrice', 'theta', 'time_decay_impact']].copy()
-                    calls_display.columns = ['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact']
-                    st.dataframe(calls_display.style.format({
-                        'Strike': "${:.2f}",
-                        'Last Price': "${:.2f}",
-                        'Theta': "{:.3f}",
-                        'Time Decay Impact': "-${:.2f}"
-                    }))
-                else:
-                    st.info("No call options available with current filters.")
-            with col2:
-                st.markdown("#### All Puts")
-                if not puts.empty:
-                    puts_display = puts[['contractSymbol', 'strike', 'expiry', 'moneyness', 'lastPrice', 'theta', 'time_decay_impact']].copy()
-                    puts_display.columns = ['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact']
-                    st.dataframe(puts_display.style.format({
-                        'Strike': "${:.2f}",
-                        'Last Price': "${:.2f}",
-                        'Theta': "{:.3f}",
-                        'Time Decay Impact': "-${:.2f}"
-                    }))
-                else:
-                    st.info("No put options available with current filters.")
-
-            # Signal generation and other tabs
+            
             call_signals = []
             put_signals = []
             for _, call in calls.iterrows():
@@ -1185,7 +1050,6 @@ if ticker:
                         'Profit Target': signal['profit_target'],
                         'Stop Loss': signal['stop_loss'],
                         'Holding Period': signal['holding_period'],
-                        'Time Decay Impact': signal['time_decay_impact'],
                         'Conditions': "; ".join(signal['passed_conditions']),
                         'Is 0DTE': call['is_0dte']
                     })
@@ -1207,7 +1071,6 @@ if ticker:
                         'Profit Target': signal['profit_target'],
                         'Stop Loss': signal['stop_loss'],
                         'Holding Period': signal['holding_period'],
-                        'Time Decay Impact': signal['time_decay_impact'],
                         'Conditions': "; ".join(signal['passed_conditions']),
                         'Is 0DTE': put['is_0dte']
                     })
@@ -1219,39 +1082,40 @@ if ticker:
             
             with tab1:
                 st.subheader("Buy Signals")
-                st.markdown("### Call Signals")
-                if not call_signals_df.empty:
-                    for _, signal in call_signals_df.iterrows():
-                        with st.container():
-                            st.markdown(f'<div class="signal-alert call-metric">', unsafe_allow_html=True)
-                            st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
-                            st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
-                            st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
-                            st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
-                            st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
-                            st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
-                            st.markdown(f"Holding: {signal['Holding Period']}")
-                            st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
-                            st.markdown('</div>', unsafe_allow_html=True)
-                else:
-                    st.info("No call signals found with current settings.")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("### Call Signals")
+                    if not call_signals_df.empty:
+                        for _, signal in call_signals_df.iterrows():
+                            with st.container():
+                                st.markdown(f'<div class="signal-alert call-metric">', unsafe_allow_html=True)
+                                st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
+                                st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
+                                st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
+                                st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                                st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
+                                st.markdown(f"Holding: {signal['Holding Period']}")
+                                st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
+                                st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.info("No call signals found with current settings.")
                 
-                st.markdown("### Put Signals")
-                if not put_signals_df.empty:
-                    for _, signal in put_signals_df.iterrows():
-                        with st.container():
-                            st.markdown(f'<div class="signal-alert put-metric">', unsafe_allow_html=True)
-                            st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
-                            st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
-                            st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
-                            st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
-                            st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
-                            st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
-                            st.markdown(f"Holding: {signal['Holding Period']}")
-                            st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
-                            st.markdown('</div>', unsafe_allow_html=True)
-                else:
-                    st.info("No put signals found with current settings.")
+                with col2:
+                    st.markdown("### Put Signals")
+                    if not put_signals_df.empty:
+                        for _, signal in put_signals_df.iterrows():
+                            with st.container():
+                                st.markdown(f'<div class="signal-alert put-metric">', unsafe_allow_html=True)
+                                st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
+                                st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
+                                st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
+                                st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                                st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
+                                st.markdown(f"Holding: {signal['Holding Period']}")
+                                st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
+                                st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.info("No put signals found with current settings.")
             
             with tab2:
                 st.subheader("Price Chart")
@@ -1305,20 +1169,16 @@ if ticker:
                         st.markdown("### Signal Summary")
                         if not call_signals_df.empty:
                             st.markdown("#### Call Signals")
-                            st.dataframe(call_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
+                            st.dataframe(call_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
-                                'Theta': "{:.3f}",
-                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
                         if not put_signals_df.empty:
                             st.markdown("#### Put Signals")
-                            st.dataframe(put_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
+                            st.dataframe(put_signals_df[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
-                                'Theta': "{:.3f}",
-                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
             
@@ -1336,39 +1196,63 @@ if ticker:
                             if not call_0dte.empty:
                                 st.metric("Avg Call IV", f"{call_0dte['Implied Volatility'].mean():.2%}")
                                 st.metric("Max Call Premium", f"${call_0dte['Last Price'].max():.2f}")
-                                st.metric("Avg Call Time Decay Impact", f"-${call_0dte['Time Decay Impact'].mean():.2f}")
                         with col2:
                             st.metric("Total 0DTE Put Signals", len(put_0dte))
                             if not put_0dte.empty:
                                 st.metric("Avg Put IV", f"{put_0dte['Implied Volatility'].mean():.2%}")
                                 st.metric("Max Put Premium", f"${put_0dte['Last Price'].max():.2f}")
-                                st.metric("Avg Put Time Decay Impact", f"-${put_0dte['Time Decay Impact'].mean():.2f}")
                         
                         if not call_0dte.empty:
                             st.markdown("#### 0DTE Call Signals")
-                            st.dataframe(call_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
+                            st.dataframe(call_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
-                                'Theta': "{:.3f}",
-                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
                         
                         if not put_0dte.empty:
                             st.markdown("#### 0DTE Put Signals")
-                            st.dataframe(put_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact', 'Signal Score']].style.format({
+                            st.dataframe(put_0dte[['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Signal Score']].style.format({
                                 'Strike': "${:.2f}",
                                 'Last Price': "${:.2f}",
-                                'Theta': "{:.3f}",
-                                'Time Decay Impact': "-${:.2f}",
                                 'Signal Score': "{:.2%}"
                             }))
+                        
+                        if not call_0dte.empty or not put_0dte.empty:
+                            st.markdown("#### Premium Distribution")
+                            fig = go.Figure()
+                            if not call_0dte.empty:
+                                fig.add_trace(go.Histogram(
+                                    x=call_0dte['Last Price'],
+                                    name="Call Premiums",
+                                    marker_color='green',
+                                    opacity=0.5
+                                ))
+                            if not put_0dte.empty:
+                                fig.add_trace(go.Histogram(
+                                    x=put_0dte['Last Price'],
+                                    name="Put Premiums",
+                                    marker_color='red',
+                                    opacity=0.5
+                                ))
+                            fig.update_layout(
+                                title="0DTE Options Premium Distribution",
+                                xaxis_title="Premium ($)",
+                                yaxis_title="Count",
+                                barmode='overlay',
+                                height=400
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No 0DTE signals found with current settings.")
                 else:
-                    st.info("Enable 'Show 0DTE Options Only' in Filters to view 0DTE analytics.")
+                    st.info("Enable 'Show 0DTE Options Only' in the sidebar to view 0DTE analytics.")
+            
     except Exception as e:
         st.error(f"Error processing data: {str(e)}")
-        st.stop()
+        st.info("Please try refreshing or selecting a different ticker.")
+else:
+    st.info("Please select a ticker in the sidebar to begin analysis.")
 
-# Auto-refresh management
-if st.session_state.get('enable_auto_refresh', False):
-    manage_auto_refresh()
+# Run auto-refresh
+manage_auto_refresh()
