@@ -12,6 +12,7 @@ from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 import plotly.graph_objects as go
+import uuid
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -484,19 +485,12 @@ def fetch_options_data(ticker: str, expiries: list[str]) -> tuple[pd.DataFrame, 
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 if missing_cols:
                     st.warning(f"Missing columns in {df_name} for {expiry}: {missing_cols}")
-                    if 'delta' not in df.columns:
-                        df['delta'] = np.nan
-                    if 'gamma' not in df.columns:
-                        df['gamma'] = np.nan
-                    if 'theta' not in df.columns:
-                        df['theta'] = np.nan
-                else:
-                    if 'delta' not in df.columns:
-                        df['delta'] = np.nan
-                    if 'gamma' not in df.columns:
-                        df['gamma'] = np.nan
-                    if 'theta' not in df.columns:
-                        df['theta'] = np.nan
+                if 'delta' not in df.columns:
+                    df['delta'] = np.nan
+                if 'gamma' not in df.columns:
+                    df['gamma'] = np.nan
+                if 'theta' not in df.columns:
+                    df['theta'] = np.nan
             all_calls = pd.concat([all_calls, calls], ignore_index=True)
             all_puts = pd.concat([all_puts, puts], ignore_index=True)
             time.sleep(0.5)
@@ -562,15 +556,18 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> tuple[float
     
     expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
     days_to_expiry = (expiry_date - datetime.date.today()).days
-    theta = (0.05 if days_to_expiry == 0 else 0.02) * time_decay
+    theta = (-0.05 if days_to_expiry == 0 else -0.02) * time_decay
+    st.info(f"Calculated approximate theta for {option['contractSymbol']}: {theta:.3f}")
     return delta, gamma, theta
 
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
     missing_fields = [field for field in required_fields if field not in option or pd.isna(option[field])]
     if missing_fields:
+        st.warning(f"Missing required fields for {option['contractSymbol']}: {missing_fields}")
         return False
     if option['lastPrice'] <= 0:
+        st.warning(f"Invalid lastPrice for {option['contractSymbol']}: {option['lastPrice']}")
         return False
     if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
         delta, gamma, theta = calculate_approximate_greeks(option, spot_price)
@@ -578,6 +575,7 @@ def validate_option_data(option: pd.Series, spot_price: float) -> bool:
         option['gamma'] = gamma
         option['theta'] = theta
     if pd.isna(option['delta']) or pd.isna(option['gamma']) or pd.isna(option['theta']):
+        st.warning(f"Failed to calculate greeks for {option['contractSymbol']}")
         return False
     return True
 
@@ -707,7 +705,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             conditions = [
                 (delta >= thresholds['delta_min'], f"Delta ≥ {thresholds['delta_min']:.2f}", delta),
                 (gamma >= thresholds['gamma_base'], f"Gamma ≥ {thresholds['gamma_base']:.3f}", gamma),
-                (theta <= thresholds['theta_base'], f"Theta ≤ {theta:.3f}", theta),
+                (theta <= thresholds['theta_base'], f"Theta ≤ {thresholds['theta_base']:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi > thresholds['rsi_min'], f"RSI > {thresholds['rsi_min']:.1f}", rsi),
                 (stochastic is not None and stochastic > thresholds['stoch_base'], f"Stochastic > {thresholds['stoch_base']:.1f}", stochastic),
@@ -720,7 +718,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             conditions = [
                 (delta <= thresholds['delta_max'], f"Delta ≤ {thresholds['delta_max']:.2f}", delta),
                 (gamma >= thresholds['gamma_base'], f"Gamma ≥ {thresholds['gamma_base']:.3f}", gamma),
-                (theta <= thresholds['theta_base'], f"Theta ≤ {theta:.3f}", theta),
+                (theta <= thresholds['theta_base'], f"Theta ≤ {thresholds['theta_base']:.3f}", theta),
                 (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
                 (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (stochastic is not None and stochastic < thresholds['stoch_base'], f"Stochastic < {thresholds['stoch_base']:.1f}", stochastic),
@@ -1038,6 +1036,21 @@ if ticker:
             calls['is_0dte'] = calls['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
             puts['is_0dte'] = puts['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
             
+            # Ensure theta is calculated for all options
+            for df in [calls, puts]:
+                for idx, option in df.iterrows():
+                    if pd.isna(option['theta']):
+                        delta, gamma, theta = calculate_approximate_greeks(option, current_price)
+                        df.loc[idx, 'delta'] = delta
+                        df.loc[idx, 'gamma'] = gamma
+                        df.loc[idx, 'theta'] = theta
+            
+            # Calculate time decay impact for all options
+            calls['holding_period'] = calls.apply(lambda x: calculate_holding_period(x, current_price), axis=1)
+            puts['holding_period'] = puts.apply(lambda x: calculate_holding_period(x, current_price), axis=1)
+            calls['time_decay_impact'] = calls.apply(lambda x: calculate_time_decay_impact(x, x['holding_period']), axis=1)
+            puts['time_decay_impact'] = puts.apply(lambda x: calculate_time_decay_impact(x, x['holding_period']), axis=1)
+            
             if st.session_state.get('show_0dte', False):
                 calls = calls[calls['is_0dte']]
                 puts = puts[puts['is_0dte']]
@@ -1105,42 +1118,69 @@ if ticker:
             
             with tab1:
                 st.subheader("Buy Signals")
+                st.markdown("### Time Decay Overview")
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.markdown("### Call Signals")
-                    if not call_signals_df.empty:
-                        for _, signal in call_signals_df.iterrows():
-                            with st.container():
-                                st.markdown(f'<div class="signal-alert call-metric">', unsafe_allow_html=True)
-                                st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
-                                st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
-                                st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
-                                st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
-                                st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
-                                st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
-                                st.markdown(f"Holding: {signal['Holding Period']}")
-                                st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
-                                st.markdown('</div>', unsafe_allow_html=True)
+                    st.markdown("#### All Calls")
+                    if not calls.empty:
+                        calls_display = calls[['contractSymbol', 'strike', 'expiry', 'moneyness', 'lastPrice', 'theta', 'time_decay_impact']].copy()
+                        calls_display.columns = ['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact']
+                        st.dataframe(calls_display.style.format({
+                            'Strike': "${:.2f}",
+                            'Last Price': "${:.2f}",
+                            'Theta': "{:.3f}",
+                            'Time Decay Impact': "-${:.2f}"
+                        }))
                     else:
-                        st.info("No call signals found with current settings.")
+                        st.info("No call options available with current filters.")
                 
                 with col2:
-                    st.markdown("### Put Signals")
-                    if not put_signals_df.empty:
-                        for _, signal in put_signals_df.iterrows():
-                            with st.container():
-                                st.markdown(f'<div class="signal-alert put-metric">', unsafe_allow_html=True)
-                                st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
-                                st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
-                                st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
-                                st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
-                                st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
-                                st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
-                                st.markdown(f"Holding: {signal['Holding Period']}")
-                                st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
-                                st.markdown('</div>', unsafe_allow_html=True)
+                    st.markdown("#### All Puts")
+                    if not puts.empty:
+                        puts_display = puts[['contractSymbol', 'strike', 'expiry', 'moneyness', 'lastPrice', 'theta', 'time_decay_impact']].copy()
+                        puts_display.columns = ['Contract', 'Strike', 'Expiry', 'Moneyness', 'Last Price', 'Theta', 'Time Decay Impact']
+                        st.dataframe(puts_display.style.format({
+                            'Strike': "${:.2f}",
+                            'Last Price': "${:.2f}",
+                            'Theta': "{:.3f}",
+                            'Time Decay Impact': "-${:.2f}"
+                        }))
                     else:
-                        st.info("No put signals found with current settings.")
+                        st.info("No put options available with current filters.")
+                
+                st.markdown("### Call Signals")
+                if not call_signals_df.empty:
+                    for _, signal in call_signals_df.iterrows():
+                        with st.container():
+                            st.markdown(f'<div class="signal-alert call-metric">', unsafe_allow_html=True)
+                            st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
+                            st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
+                            st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
+                            st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                            st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
+                            st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
+                            st.markdown(f"Holding: {signal['Holding Period']}")
+                            st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
+                            st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.info("No call signals found with current settings.")
+                
+                st.markdown("### Put Signals")
+                if not put_signals_df.empty:
+                    for _, signal in put_signals_df.iterrows():
+                        with st.container():
+                            st.markdown(f'<div class="signal-alert put-metric">', unsafe_allow_html=True)
+                            st.markdown(f"**{signal['Contract']}** (Score: {signal['Signal Score']:.2%})")
+                            st.markdown(f"Strike: ${signal['Strike']:.2f} | Expiry: {signal['Expiry']} | Moneyness: {signal['Moneyness']}")
+                            st.markdown(f"Price: ${signal['Last Price']:.2f} | Volume: {signal['Volume']:.0f} | IV: {signal['Implied Volatility']:.2%}")
+                            st.markdown(f"Delta: {signal['Delta']:.2f} | Gamma: {signal['Gamma']:.3f} | Theta: {signal['Theta']:.3f}")
+                            st.markdown(f"Time Decay Impact: -${signal['Time Decay Impact']:.2f} (over holding period)")
+                            st.markdown(f"Profit Target: ${signal['Profit Target']:.2f} | Stop Loss: ${signal['Stop Loss']:.2f}")
+                            st.markdown(f"Holding: {signal['Holding Period']}")
+                            st.markdown('<div class="tooltip">ℹ️ Details<span class="tooltiptext">' + signal['Conditions'] + '</span></div>', unsafe_allow_html=True)
+                            st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.info("No put signals found with current settings.")
             
             with tab2:
                 st.subheader("Price Chart")
@@ -1253,35 +1293,64 @@ if ticker:
                                 'Signal Score': "{:.2%}"
                             }))
                         
-                        if not call_0dte.empty or not put_0dte.empty:
-                            st.markdown("#### Premium Distribution")
-                            fig = go.Figure()
-                            if not call_0dte.empty:
-                                fig.add_trace(go.Histogram(
-                                    x=call_0dte['Last Price'],
-                                    name="Call Premiums",
-                                    marker_color='green',
-                                    opacity=0.5
-                                ))
-                            if not put_0dte.empty:
-                                fig.add_trace(go.Histogram(
-                                    x=put_0dte['Last Price'],
-                                    name="Put Premiums",
-                                    marker_color='red',
-                                    opacity=0.5
-                                ))
-                            fig.update_layout(
-                                title="0DTE Options Premium Distribution",
-                                xaxis_title="Premium ($)",
-                                yaxis_title="Count",
-                                barmode='overlay',
-                                height=400
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
+                        st.markdown("#### Time Decay Impact Distribution")
+                        fig = go.Figure()
+                        if not call_0dte.empty:
+                            fig.add_trace(go.Histogram(
+                                x=call_0dte['Time Decay Impact'],
+                                name="Call Time Decay Impact",
+                                marker_color='green',
+                                opacity=0.5
+                            ))
+                        if not put_0dte.empty:
+                            fig.add_trace(go.Histogram(
+                                x=put_0dte['Time Decay Impact'],
+                                name="Put Time Decay Impact",
+                                marker_color='red',
+                                opacity=0.5
+                            ))
+                        fig.update_layout(
+                            title="0DTE Options Time Decay Impact Distribution",
+                            xaxis_title="Time Decay Impact ($)",
+                            yaxis_title="Count",
+                            barmode='overlay',
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.info("No 0DTE signals found with current settings.")
                 else:
                     st.info("Enable 'Show 0DTE Options Only' in the sidebar to view 0DTE analytics.")
+                    # Show time decay for non-0DTE options
+                    if not calls.empty or not puts.empty:
+                        st.markdown("### Non-0DTE Time Decay Overview")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if not calls.empty:
+                                st.markdown("#### Call Options")
+                                non_0dte_calls = calls[~calls['is_0dte']]
+                                if not non_0dte_calls.empty:
+                                    st.dataframe(non_0dte_calls[['contractSymbol', 'strike', 'expiry', 'moneyness', 'lastPrice', 'theta', 'time_decay_impact']].style.format({
+                                        'strike': "${:.2f}",
+                                        'lastPrice': "${:.2f}",
+                                        'theta': "{:.3f}",
+                                        'time_decay_impact': "-${:.2f}"
+                                    }))
+                                else:
+                                    st.info("No non-0DTE call options available.")
+                        with col2:
+                            if not puts.empty:
+                                st.markdown("#### Put Options")
+                                non_0dte_puts = puts[~puts['is_0dte']]
+                                if not non_0dte_puts.empty:
+                                    st.dataframe(non_0dte_puts[['contractSymbol', 'strike', 'expiry', 'moneyness', 'lastPrice', 'theta', 'time_decay_impact']].style.format({
+                                        'strike': "${:.2f}",
+                                        'lastPrice': "${:.2f}",
+                                        'theta': "{:.3f}",
+                                        'time_decay_impact': "-${:.2f}"
+                                    }))
+                                else:
+                                    st.info("No non-0DTE put options available.")
             
     except Exception as e:
         st.error(f"Error processing data: {str(e)}")
