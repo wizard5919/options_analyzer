@@ -358,7 +358,11 @@ async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) ->
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
 def get_stock_data(ticker: str, market_state: str = "Open") -> pd.DataFrame:
-    df = asyncio.run(async_fetch_stock_data(ticker, aiohttp.ClientSession()))
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        df = loop.run_until_complete(async_fetch_stock_data(ticker, aiohttp.ClientSession()))
+    else:
+        df = asyncio.run(async_fetch_stock_data(ticker, aiohttp.ClientSession()))
     if df.empty:
         st.error(f"Failed to fetch valid stock data for {ticker} after {CONFIG['MAX_RETRIES']} attempts.")
     else:
@@ -1140,6 +1144,7 @@ if ticker:
                 else:
                     st.info("No put options available with current filters.")
 
+            # Signal generation and other tabs
             call_signals = []
             put_signals = []
             for _, call in calls.iterrows():
