@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -6,13 +5,13 @@ import numpy as np
 import datetime
 import time
 import warnings
-import pytz
 import aiohttp
 import asyncio
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 import plotly.graph_objects as go
+import uuid
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -245,7 +244,6 @@ async def validate_ticker(ticker: str, session: aiohttp.ClientSession) -> bool:
         return False
     try:
         stock = yf.Ticker(ticker)
-        # Attempt to fetch a small amount of data to validate ticker
         data = await asyncio.to_thread(
             stock.history,
             period='1d',
@@ -396,9 +394,6 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
         return df
     if 'Datetime' not in df.columns:
         st.error(f"'Datetime' column missing in DataFrame. Available columns: {list(df.columns)}")
-        return df
-    if not pd.api.types.is_datetime64_any_dtype(df['Datetime']):
-        st.error("'Datetime' column is not in datetime format.")
         return df
     df = df.copy()
     df['avg_vol'] = np.nan
@@ -598,6 +593,7 @@ def calculate_approximate_greeks(option: pd.Series, spot_price: float) -> tuple[
                 gamma = 0.08
             else:
                 delta = -0.35
+               率先
                 gamma = 0.05
         return delta, gamma, theta
     except Exception as e:
@@ -1054,14 +1050,13 @@ with st.sidebar:
                         key="moneyness_filter_select",
                         help="Filter options by moneyness (In-The-Money, Near-The-Money, At-The-Money, Out-Of-The-Money)"
                     )
-                    # Use a temporary variable to avoid modifying session state after widget instantiation
-                    show_0dte = st.checkbox(
+                    # Bind checkbox value directly to session state
+                    st.session_state.show_0dte = st.checkbox(
                         "Show 0DTE Options Only",
                         value=st.session_state.get('show_0dte', False),
                         key="show_0dte",
                         help="Show only options expiring today (0 days to expiration)"
                     )
-                    st.session_state.show_0dte = show_0dte
                 else:
                     st.warning("Cannot configure filters: Invalid current price.")
             except Exception as e:
