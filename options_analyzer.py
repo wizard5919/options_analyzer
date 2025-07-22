@@ -12,6 +12,7 @@ from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 import plotly.graph_objects as go
 import uuid
+import pytz  # Added explicitly for clarity
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -593,7 +594,6 @@ def calculate_approximate_greeks(option: pd.Series, spot_price: float) -> tuple[
                 gamma = 0.08
             else:
                 delta = -0.35
-               率先
                 gamma = 0.05
         return delta, gamma, theta
     except Exception as e:
