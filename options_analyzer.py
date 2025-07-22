@@ -133,7 +133,7 @@ CONFIG = {
     'RETRY_DELAY': 1,
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
-    'CACHE_TTL': 300,  # forceful cache refresh after 5 minutes
+    'CACHE_TTL': 300,  # 5 minutes
     'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
     'MARKET_OPEN': datetime.time(9, 30),
     'MARKET_CLOSE': datetime.time(16, 0),
@@ -208,11 +208,15 @@ def manage_auto_refresh():
     if st.session_state.get('enable_auto_refresh', False) and 'refresh_interval' in st.session_state:
         refresh_interval = st.session_state['refresh_interval']
         last_refresh = st.session_state.get('last_refresh', time.time())
-        if time.time() - last_refresh >= refresh_interval:
+        if time.time() - last_refresh >= refresh_interval and not st.session_state.get('rerun_pending', False):
             st.session_state.last_refresh = time.time()
-            st.session_state.refresh_counter += 1
-            st.cache_data.clear()
-            st.rerun()
+            st.session_state.rerun_pending = True
+            st.experimental_rerun()
+            st.session_state.rerun_pending = False
+
+def get_dynamic_refresh_interval() -> int:
+    market_state = get_market_state()
+    return 30 if market_state in ["Premarket", "Open"] else 120 if market_state == "Postmarket" else 300
 
 # =============================
 # UTILITY FUNCTIONS
@@ -230,14 +234,6 @@ def get_market_state() -> str:
     elif CONFIG['MARKET_CLOSE'] < now_time <= CONFIG['POSTMARKET_END']:
         return "Postmarket"
     return "Closed"
-
-def get_dynamic_refresh_interval() -> int:
-    market_state = get_market_state()
-    if market_state in ["Premarket", "Open"]:
-        return 30
-    elif market_state == "Postmarket":
-        return 120
-    return 300
 
 def is_market_open() -> bool:
     return get_market_state() == "Open"
@@ -270,44 +266,25 @@ async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) ->
     try:
         market_state = get_market_state()
         end = datetime.datetime.now()
-        if market_state == "Premarket":
-            days = 1
-        elif market_state == "Open":
-            days = 7
-        else:
-            days = 10
-        start = end - datetime.timedelta(days=days)
+        days = 1 if market_state == "Premarket" else 7 if market_state == "Open" else 10
         interval = "1m" if market_state in ["Premarket", "Open"] else "5m"
         data = await asyncio.to_thread(
             yf.download,
             ticker,
-            start=start,
+            start=end - datetime.timedelta(days=days),
             end=end,
             interval=interval,
             auto_adjust=True,
             progress=False,
             prepost=True
         )
-        if data.empty:
-            st.warning(f"No data found for ticker {ticker}")
+        if data.empty or len(data) < CONFIG['MIN_DATA_POINTS']:
+            st.warning(f"Insufficient data for {ticker}")
             return pd.DataFrame()
-
         data.columns = data.columns.droplevel(1) if isinstance(data.columns, pd.MultiIndex) else data.columns
         required_cols = ['Close', 'High', 'Low', 'Volume']
-        missing_cols = [col for col in required_cols if col not in data.columns]
-        if missing_cols:
-            st.error(f"Missing required columns: {missing_cols}")
-            return pd.DataFrame()
-
-        data = data.dropna(how='all')
-        for col in required_cols:
-            data[col] = pd.to_numeric(data[col], errors='coerce')
-        data = data.dropna(subset=required_cols)
-
-        if len(data) < CONFIG['MIN_DATA_POINTS']:
-            st.warning(f"Insufficient data points ({len(data)}). Need at least {CONFIG['MIN_DATA_POINTS']}.")
-            return pd.DataFrame()
-
+        data = data[required_cols].dropna()
+        data = data.astype(float)
         eastern = pytz.timezone('US/Eastern')
         if data.index.tz is None:
             data.index = data.index.tz_localize(pytz.utc)
@@ -323,7 +300,7 @@ async def async_fetch_stock_data(ticker: str, session: aiohttp.ClientSession) ->
         st.error(f"Error fetching stock data for {ticker}: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=CONFIG['CACHE_TTL'])
+@st.cache_data(ttl=CONFIG['CACHE_TTL'], persist=True)
 def get_stock_data(ticker: str, market_state: str = "Open") -> pd.DataFrame:
     async def fetch():
         async with aiohttp.ClientSession() as session:
@@ -359,7 +336,8 @@ def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
     return None
 
 def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty: return df
+    if df.empty:
+        return df
     df = df.copy()
     df['avg_vol'] = np.nan
     for date, group in df.groupby(df['Datetime'].dt.date):
@@ -400,12 +378,10 @@ def compute_indicators(df: pd.DataFrame, market_state: str = "Open") -> pd.DataF
         if col not in df.columns:
             st.error(f"Missing required column: {col}")
             return pd.DataFrame()
-
     close = df['Close'].astype(float)
     high = df['High'].astype(float)
     low = df['Low'].astype(float)
     volume = df['Volume'].astype(float)
-
     if market_state in ["Premarket", "Open"]:
         if len(close) >= 9:
             df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
@@ -424,19 +400,16 @@ def compute_indicators(df: pd.DataFrame, market_state: str = "Open") -> pd.DataF
         df['Stochastic'] = np.nan
         df['ATR'] = np.nan
         df['ATR_pct'] = np.nan
-
     df['VWAP'] = np.nan
     for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
-        if group.empty:
-            continue
-        session_vwap = ((group['High'] + group['Low'] + group['Close']) / 3 * group['Volume']).cumsum() / group['Volume'].cumsum()
-        df.loc[group.index, 'VWAP'] = session_vwap
-
+        if not group.empty:
+            session_vwap = ((group['High'] + group['Low'] + group['Close']) / 3 * group['Volume']).cumsum() / group['Volume'].cumsum()
+            df.loc[group.index, 'VWAP'] = session_vwap
     df = calculate_volume_averages(df)
     df = compute_price_action(df)
     return df
 
-@st.cache_data(ttl=CONFIG['CACHE_TTL'])
+@st.cache_data(ttl=CONFIG['CACHE_TTL'], persist=True)
 def get_options_expiries(ticker: str) -> list[str]:
     try:
         stock = yf.Ticker(ticker)
@@ -457,7 +430,7 @@ def fetch_options_data(ticker: str, expiries: list[str]) -> tuple[pd.DataFrame, 
     failed_expiries = []
     stock = yf.Ticker(ticker)
     
-    for expiry in expiries:
+    for expiry in expiries[:3]:
         try:
             chain = safe_api_call(stock.option_chain, expiry)
             if chain is None:
@@ -638,8 +611,6 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
 def calculate_holding_period(option: pd.Series, spot_price: float) -> str:
     expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
     days_to_expiry = (expiry_date - datetime.date.today()).days
-    if days_to_expiry == 0:
-        return "Intraday (Exit before 3:30 PM)"
     if option['contractSymbol'].startswith('C'):
         intrinsic_value = max(0, spot_price - option['strike'])
     else:
@@ -764,6 +735,8 @@ if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = get_dynamic_refresh_interval()
 if 'enable_auto_refresh' not in st.session_state:
     st.session_state.enable_auto_refresh = True
+if 'rerun_pending' not in st.session_state:
+    st.session_state.rerun_pending = False
 
 # Welcome Modal
 if st.session_state.show_welcome:
@@ -824,7 +797,7 @@ with col4:
         st.cache_data.clear()
         st.session_state.last_refresh = time.time()
         st.session_state.refresh_counter += 1
-        st.rerun()
+        st.experimental_rerun()
 
 st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 
@@ -843,7 +816,7 @@ with st.sidebar:
                 st.session_state.refresh_interval = st.selectbox(
                     "Refresh Interval",
                     options=[30, 60, 120, 300],
-                    index=[30, 60, 120, 300].index(st.session_state.get('refresh_interval', default_interval)) if st.session_state.get('refresh_interval', default_interval) in [30, 60, 120, 300] else 1,
+                    index=[30, 60, 120, 300].index(st.session_state.get('refresh_interval', default_interval)) if st.session_state.get('refresh_interval', default_interval) in [30, 60, 120, 300] else 2,
                     format_func=lambda x: f"{x} seconds",
                     key="refresh_interval_select",
                     help="Select how often data refreshes automatically (adjusted by market state)"
@@ -880,7 +853,7 @@ with st.sidebar:
                 if st.session_state.get('ticker') != ticker:  # Force refresh if ticker changes
                     st.session_state.ticker = ticker
                     st.cache_data.clear()
-                    st.rerun()
+                    st.experimental_rerun()
             except:
                 st.error("Invalid ticker. Try again (e.g., SPY, AAPL).")
                 ticker = st.session_state.get('ticker', 'IWM')
@@ -1268,3 +1241,18 @@ else:
 
 # Run auto-refresh
 manage_auto_refresh()
+
+# Dynamic time update in a non-blocking manner (simplified for main thread)
+def update_time():
+    while True:
+        st.session_state.current_time = datetime.datetime.now(pytz.timezone('US/Eastern'))
+        st.session_state.time_placeholder.metric(
+            "Current Market Time",
+            st.session_state.current_time.strftime('%H:%M:%S %Z')
+        )
+        time.sleep(1)
+
+import threading
+if __name__ == "__main__":
+    time_thread = threading.Thread(target=update_time, daemon=True)
+    time_thread.start()
