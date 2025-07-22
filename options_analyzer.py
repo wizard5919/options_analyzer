@@ -205,12 +205,13 @@ SIGNAL_THRESHOLDS = {
 # AUTO-REFRESH SYSTEM
 # =============================
 def manage_auto_refresh():
-    if 'refresh_interval' in st.session_state and st.session_state.get('enable_auto_refresh', False):
+    if st.session_state.get('enable_auto_refresh', False) and 'refresh_interval' in st.session_state:
         refresh_interval = st.session_state.refresh_interval
         last_refresh = st.session_state.get('last_refresh', time.time())
         if time.time() - last_refresh >= refresh_interval:
             st.session_state.last_refresh = time.time()
             st.session_state.refresh_counter += 1
+            st.cache_data.clear()
             st.rerun()
 
 # =============================
@@ -753,6 +754,8 @@ if 'show_welcome' not in st.session_state:
     st.session_state.show_welcome = True
 if 'current_time' not in st.session_state:
     st.session_state.current_time = datetime.datetime.now(pytz.timezone('US/Eastern'))
+if 'refresh_interval' not in st.session_state:
+    st.session_state.refresh_interval = get_dynamic_refresh_interval()
 
 # Welcome Modal
 if st.session_state.show_welcome:
@@ -821,20 +824,22 @@ st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 with st.sidebar:
     st.header("⚙️ Settings")
     with st.expander("🔄 Auto-Refresh", expanded=True):
-        enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=True, key="auto_refresh")
-        if enable_auto_refresh:
+        st.session_state.enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=st.session_state.get('enable_auto_refresh', True), key="auto_refresh")
+        if st.session_state.enable_auto_refresh:
             default_interval = get_dynamic_refresh_interval()
-            refresh_interval = st.selectbox(
-                "Refresh Interval",
-                options=[30, 60, 120, 300],
-                index=[30, 60, 120, 300].index(default_interval) if default_interval in [30, 60, 120, 300] else 1,
-                format_func=lambda x: f"{x} seconds",
-                key="refresh_interval",
-                help="Select how often data refreshes automatically (adjusted by market state)"
-            )
-            st.session_state.enable_auto_refresh = True
-            st.session_state.refresh_interval = refresh_interval
-            st.info(f"Refreshing every {refresh_interval} seconds (Market: {market_state})")
+            try:
+                st.session_state.refresh_interval = st.selectbox(
+                    "Refresh Interval",
+                    options=[30, 60, 120, 300],
+                    index=[30, 60, 120, 300].index(st.session_state.get('refresh_interval', default_interval)) if st.session_state.get('refresh_interval', default_interval) in [30, 60, 120, 300] else 1,
+                    format_func=lambda x: f"{x} seconds",
+                    key="refresh_interval_select",
+                    help="Select how often data refreshes automatically (adjusted by market state)"
+                )
+                st.info(f"Refreshing every {st.session_state.refresh_interval} seconds (Market: {market_state})")
+            except Exception as e:
+                st.error(f"Error setting refresh interval: {str(e)}")
+                st.session_state.refresh_interval = default_interval
         else:
             st.session_state.enable_auto_refresh = False
     
