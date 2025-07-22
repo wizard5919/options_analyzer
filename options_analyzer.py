@@ -206,7 +206,7 @@ SIGNAL_THRESHOLDS = {
 # =============================
 def manage_auto_refresh():
     if st.session_state.get('enable_auto_refresh', False) and 'refresh_interval' in st.session_state:
-        refresh_interval = st.session_state.refresh_interval
+        refresh_interval = st.session_state['refresh_interval']
         last_refresh = st.session_state.get('last_refresh', time.time())
         if time.time() - last_refresh >= refresh_interval:
             st.session_state.last_refresh = time.time()
@@ -756,6 +756,8 @@ if 'current_time' not in st.session_state:
     st.session_state.current_time = datetime.datetime.now(pytz.timezone('US/Eastern'))
 if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = get_dynamic_refresh_interval()
+if 'enable_auto_refresh' not in st.session_state:
+    st.session_state.enable_auto_refresh = True
 
 # Welcome Modal
 if st.session_state.show_welcome:
@@ -824,10 +826,14 @@ st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 with st.sidebar:
     st.header("⚙️ Settings")
     with st.expander("🔄 Auto-Refresh", expanded=True):
-        st.session_state.enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=st.session_state.get('enable_auto_refresh', True), key="auto_refresh")
-        if st.session_state.enable_auto_refresh:
-            default_interval = get_dynamic_refresh_interval()
-            try:
+        try:
+            st.session_state.enable_auto_refresh = st.checkbox(
+                "Enable Auto-Refresh",
+                value=st.session_state.get('enable_auto_refresh', True),
+                key="auto_refresh"
+            )
+            if st.session_state.enable_auto_refresh:
+                default_interval = get_dynamic_refresh_interval()
                 st.session_state.refresh_interval = st.selectbox(
                     "Refresh Interval",
                     options=[30, 60, 120, 300],
@@ -837,11 +843,11 @@ with st.sidebar:
                     help="Select how often data refreshes automatically (adjusted by market state)"
                 )
                 st.info(f"Refreshing every {st.session_state.refresh_interval} seconds (Market: {market_state})")
-            except Exception as e:
-                st.error(f"Error setting refresh interval: {str(e)}")
-                st.session_state.refresh_interval = default_interval
-        else:
-            st.session_state.enable_auto_refresh = False
+            else:
+                st.session_state.enable_auto_refresh = False
+        except Exception as e:
+            st.error(f"Error configuring auto-refresh: {str(e)}")
+            st.session_state.refresh_interval = get_dynamic_refresh_interval()
     
     with st.expander("📊 Stock Selection", expanded=True):
         ticker_options = ["SPY", "QQQ", "AAPL", "IWM", "TSLA", "GLD", "TLT", "Other"]
@@ -953,29 +959,32 @@ with st.sidebar:
     
     with st.expander("🔍 Filters", expanded=True):
         if ticker:
-            current_price = get_current_price(ticker)
-            if current_price > 0:
-                strike_min = current_price * (1 + st.session_state.strike_range[0] / 100)
-                strike_max = current_price * (1 + st.session_state.strike_range[1] / 100)
-                st.session_state.strike_range = st.slider(
-                    "Strike Price Range (% from current)",
-                    -20.0, 20.0, st.session_state.strike_range, 0.5,
-                    key="strike_range_slider",
-                    help="Filter options by strike price relative to current stock price"
-                )
-                st.session_state.moneyness_filter = st.multiselect(
-                    "Moneyness Filter",
-                    ["ITM", "NTM", "ATM", "OTM"],
-                    default=st.session_state.moneyness_filter,
-                    key="moneyness_filter_select",
-                    help="Filter options by moneyness (In-The-Money, Near-The-Money, At-The-Money, Out-Of-The-Money)"
-                )
-                st.session_state.show_0dte = st.checkbox(
-                    "Show 0DTE Options Only",
-                    value=st.session_state.show_0dte,
-                    key="show_0dte",
-                    help="Show only options expiring today (0 days to expiration)"
-                )
+            try:
+                current_price = get_current_price(ticker)
+                if current_price > 0:
+                    strike_min = current_price * (1 + st.session_state.strike_range[0] / 100)
+                    strike_max = current_price * (1 + st.session_state.strike_range[1] / 100)
+                    st.session_state.strike_range = st.slider(
+                        "Strike Price Range (% from current)",
+                        -20.0, 20.0, st.session_state.strike_range, 0.5,
+                        key="strike_range_slider",
+                        help="Filter options by strike price relative to current stock price"
+                    )
+                    st.session_state.moneyness_filter = st.multiselect(
+                        "Moneyness Filter",
+                        ["ITM", "NTM", "ATM", "OTM"],
+                        default=st.session_state.moneyness_filter,
+                        key="moneyness_filter_select",
+                        help="Filter options by moneyness (In-The-Money, Near-The-Money, At-The-Money, Out-Of-The-Money)"
+                    )
+                    st.checkbox(
+                        "Show 0DTE Options Only",
+                        value=st.session_state.get('show_0dte', False),
+                        key="show_0dte",
+                        help="Show only options expiring today (0 days to expiration)"
+                    )
+            except Exception as e:
+                st.error(f"Error configuring filters: {str(e)}")
 
 # Main Content
 if ticker:
@@ -1008,7 +1017,7 @@ if ticker:
             calls['is_0dte'] = calls['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
             puts['is_0dte'] = puts['expiry'].apply(lambda x: (datetime.datetime.strptime(x, "%Y-%m-%d").date() - datetime.date.today()).days == 0)
             
-            if st.session_state.show_0dte:
+            if st.session_state.get('show_0dte', False):
                 calls = calls[calls['is_0dte']]
                 puts = puts[puts['is_0dte']]
             
@@ -1175,7 +1184,7 @@ if ticker:
             
             with tab4:
                 st.subheader("0DTE Options Analytics")
-                if st.session_state.show_0dte:
+                if st.session_state.get('show_0dte', False):
                     call_0dte = call_signals_df[call_signals_df['Is 0DTE']] if not call_signals_df.empty else pd.DataFrame()
                     put_0dte = put_signals_df[put_signals_df['Is 0DTE']] if not put_signals_df.empty else pd.DataFrame()
                     
