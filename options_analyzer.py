@@ -60,7 +60,7 @@ SIGNAL_THRESHOLDS = {
         'rsi_max': 50,
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.3,
-        'volume_min': 1000,  # Minimum volume threshold
+        'volume_min': 1000,
         'macd_above_signal': True,
         'price_above_keltner': True,
         'ema_50_above_200': True
@@ -76,7 +76,7 @@ SIGNAL_THRESHOLDS = {
         'rsi_max': 50,
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.3,
-        'volume_min': 1000,  # Minimum volume threshold
+        'volume_min': 1000,
         'macd_below_signal': True,
         'price_below_keltner': True,
         'ema_50_below_200': True
@@ -125,11 +125,9 @@ def is_market_open() -> bool:
     now = datetime.datetime.now(eastern)
     now_time = now.time()
     
-    # Check if weekday (Monday=0, Sunday=6)
     if now.weekday() >= 5:  # Saturday or Sunday
         return False
     
-    # Check time
     return CONFIG['MARKET_OPEN'] <= now_time <= CONFIG['MARKET_CLOSE']
 
 def is_premarket() -> bool:
@@ -138,7 +136,6 @@ def is_premarket() -> bool:
     now = datetime.datetime.now(eastern)
     now_time = now.time()
     
-    # Only consider weekdays
     if now.weekday() >= 5:  # Saturday or Sunday
         return False
     
@@ -295,7 +292,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         volume = df['Volume'].astype(float)
 
         try:
-            # EMA indicators
             if len(close) >= 9:
                 ema_9 = EMAIndicator(close=close, window=9)
                 df['EMA_9'] = ema_9.ema_indicator()
@@ -320,14 +316,12 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 df['EMA_200'] = np.nan
                 
-            # RSI
             if len(close) >= 14:
                 rsi = RSIIndicator(close=close, window=14)
                 df['RSI'] = rsi.rsi()
             else:
                 df['RSI'] = np.nan
 
-            # MACD
             if len(close) >= 26:
                 macd = MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
                 df['MACD'] = macd.macd()
@@ -338,7 +332,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 df['MACD_Signal'] = np.nan
                 df['MACD_Hist'] = np.nan
 
-            # Keltner Channels
             if len(close) >= 20:
                 keltner = KeltnerChannel(high=high, low=low, close=close, window=20, window_atr=10)
                 df['Keltner_Upper'] = keltner.keltner_channel_hband()
@@ -349,7 +342,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 df['Keltner_Middle'] = np.nan
                 df['Keltner_Lower'] = np.nan
 
-            # VWAP
             df['VWAP'] = np.nan
             for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
                 if group.empty:
@@ -375,7 +367,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                     premarket_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
                     df.loc[premarket.index, 'VWAP'] = premarket_vwap
                 
-            # ATR for volatility measurement
             if len(close) >= 14:
                 atr = AverageTrueRange(high=high, low=low, close=close, window=14)
                 df['ATR'] = atr.average_true_range()
@@ -406,7 +397,7 @@ def get_options_expiries(ticker: str) -> List[str]:
     except Exception as e:
         error_msg = str(e)
         if "Too Many Requests" in error_msg or "rate limit" in error_msg.lower():
-            st.warning("Yahoo Finance rate limit reached. Please wait a few minutes before retrying.")
+            st.warning("Yahoo Finance rate limit reached. Please-wait a few minutes before retrying.")
             st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
         else:
             st.error(f"Error fetching expiries: {error_msg}")
@@ -759,7 +750,7 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
             if keltner_lower and close < keltner_lower:
                 score += 1.0
         
-        return (score / max_score) * 100  # Return as percentage
+        return (score / max_score) * 100
     except Exception as e:
         st.error(f"Error in scanner score calculation: {str(e)}")
         return 0.0
@@ -919,7 +910,6 @@ if ticker:
     
     st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
 
-    # Add Call/Put Scanner Bar
     st.subheader("📊 Call/Put Scanner")
     df = get_stock_data(ticker)
     if not df.empty:
@@ -1026,8 +1016,7 @@ if ticker:
                 puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)].copy()
                 
                 if not calls_filtered.empty:
-                    calls_filtered['moneyness'] = calls_filtere
-d['strike'].apply(lambda x: classify_moneyness(x, current_price))
+                    calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 if not puts_filtered.empty:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 
