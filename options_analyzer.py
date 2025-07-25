@@ -36,7 +36,7 @@ CONFIG = {
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
     'CACHE_TTL': 60,  # Reduced for fresher data
-    'RATE_LIMIT_COOLDOWN': 180,
+    'RATE_LIMIT_COOLDOWN': 300,  # Increased to avoid frequent rate limits
     'MARKET_OPEN': datetime.time(9, 30),
     'MARKET_CLOSE': datetime.time(16, 0),
     'PREMARKET_START': datetime.time(4, 0),
@@ -112,7 +112,7 @@ class AutoRefreshSystem:
             while self.running:
                 start_time = time.time()
                 if 'rate_limited_until' in st.session_state and time.time() < st.session_state['rate_limited_until']:
-                    logger.warning("Skipping refresh due to rate limit")
+                    logger.warning(f"Skipping refresh due to rate limit. Cooldown until {datetime.datetime.fromtimestamp(st.session_state['rate_limited_until'])}")
                     time.sleep(1)
                     continue
                 try:
@@ -161,10 +161,13 @@ def get_current_price(ticker: str) -> float:
     try:
         stock = yf.Ticker(ticker)
         data = stock.history(period='1d', interval='1m', prepost=True)
-        return float(data['Close'].iloc[-1]) if not data.empty else 0.0
+        if data.empty:
+            logger.warning(f"No price data for {ticker}")
+            return 0.0
+        return float(data['Close'].iloc[-1])
     except Exception as e:
         logger.error(f"Price error for {ticker}: {str(e)}")
-        st.error(f"Error getting price: {str(e)}")
+        st.error(f"Error getting price for {ticker}: {str(e)}")
         return 0.0
 
 def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
@@ -311,10 +314,15 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def get_options_expiries(ticker: str) -> List[str]:
     try:
         stock = yf.Ticker(ticker)
-        expiries = safe_api_call(stock.options)
-        return list(expiries) if expiries else []
+        expiries = stock.options  # Direct access instead of safe_api_call
+        if not expiries:
+            logger.warning(f"No options expiries for {ticker}. Possible rate limit or non-optionable ticker.")
+            st.warning(f"No options expiries for {ticker}. Check ticker or wait if recently refreshed.")
+            return []
+        return list(expiries)
     except Exception as e:
         logger.error(f"Expiries error for {ticker}: {str(e)}")
+        st.error(f"Error fetching expiries for {ticker}: {str(e)}")
         return []
 
 def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -349,7 +357,7 @@ def fetch_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, 
             failed_expiries.append(expiry)
             continue
     if failed_expiries:
-        st.info(f"Failed to fetch data for expiries: {failed_expiries}")
+        st.info(f"Failed to fetch data for expiries: {', '.join(failed_expiries)}")
     return all_calls, all_puts
 
 def classify_moneyness(strike: float, spot: float) -> str:
@@ -700,7 +708,7 @@ if ticker:
         with tab1:
             with st.spinner("Fetching and analyzing data..."):
                 if df.empty:
-                    st.error("No stock data. Check ticker.")
+                    st.error(f"No stock data for {ticker}. Check ticker or try again.")
                     st.stop()
                 df = compute_indicators(df)
                 if df.empty:
@@ -735,7 +743,7 @@ if ticker:
                               f"Vol > {SIGNAL_THRESHOLDS['put']['volume_min']}")
                 expiries = get_options_expiries(ticker)
                 if not expiries:
-                    st.error("No options expiries. Wait if recently refreshed.")
+                    st.error(f"No options expiries for {ticker}. Possible causes: rate limit, non-optionable ticker, or API issue. Try another ticker or wait.")
                     st.stop()
                 expiry_mode = st.radio("Expiration Filter:", ["0DTE Only", "All Near-Term"], index=1)
                 today = datetime.date.today()
@@ -921,7 +929,7 @@ if ticker:
             st.json(CONFIG)
     except Exception as e:
         logger.error(f"Main interface error: {str(e)}")
-        st.error(f"Error: {str(e)}. Refresh page.")
+        st.error(f"Error: {str(e)}. Refresh page or try another ticker.")
 else:
     st.info("Enter a ticker to begin.")
     with st.expander("ℹ️ How to use this app"):
