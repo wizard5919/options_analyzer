@@ -1294,41 +1294,41 @@ if ticker:
         st.write("**System Configuration:**")
         st.json(CONFIG)
     
-   with tab4:
-    st.subheader("📰 News & Events")
-    stock = yf.Ticker(ticker)
-    
-    # News with comprehensive error handling
-    try:
-        news = stock.news
-        if news:
-            st.subheader("Recent News")
-            for item in news[:10]:
-                # Safely get all values
-                title = item.get('title', 'Untitled News Item')
-                publisher = item.get('publisher', 'Unknown Publisher')
-                link = item.get('link', 'No link available')
-                summary = item.get('summary', 'No summary available')
-                
-                with st.expander(title):
-                    st.write(f"**Publisher:** {publisher}")
-                    st.write(f"**Link:** {link}")
-                    st.write(f"**Summary:** {summary}")
-        else:
-            st.info("No recent news available.")
-    except Exception as e:
-        st.warning(f"Couldn't fetch news: {str(e)}")
-    
-    # Calendar/Events
-    try:
-        calendar = stock.calendar
-        if not calendar.empty:
-            st.subheader("Upcoming Events/Earnings")
-            st.dataframe(calendar)
-        else:
-            st.info("No upcoming events available.")
-    except Exception as e:
-        st.warning(f"Couldn't fetch calendar events: {str(e)}")
+    with tab4:
+        st.subheader("📰 News & Events")
+        stock = yf.Ticker(ticker)
+        
+        # News with comprehensive error handling
+        try:
+            news = stock.news
+            if news:
+                st.subheader("Recent News")
+                for item in news[:10]:
+                    # Safely get all values using .get() with default
+                    title = item.get('title', 'Untitled News Item')
+                    publisher = item.get('publisher', 'Unknown Publisher')
+                    link = item.get('link', 'No link available')
+                    summary = item.get('summary', 'No summary available')
+                    
+                    with st.expander(title):
+                        st.write(f"**Publisher:** {publisher}")
+                        st.write(f"**Link:** {link}")
+                        st.write(f"**Summary:** {summary}")
+            else:
+                st.info("No recent news available.")
+        except Exception as e:
+            st.warning(f"Couldn't fetch news: {str(e)}")
+        
+        # Calendar/Events
+        try:
+            calendar = stock.calendar
+            if not calendar.empty:
+                st.subheader("Upcoming Events/Earnings")
+                st.dataframe(calendar)
+            else:
+                st.info("No upcoming events available.")
+        except Exception as e:
+            st.warning(f"Couldn't fetch calendar events: {str(e)}")
         
 else:
     st.info("Please enter a stock ticker to begin analysis.")
