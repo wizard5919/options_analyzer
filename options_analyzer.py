@@ -168,16 +168,15 @@ def calculate_remaining_trading_hours() -> float:
     return (close_time - now).total_seconds() / 3600
 
 def get_polygon_realtime_price(ticker: str) -> float:
-    """Get real-time price from Polygon.io"""
+    """Get real-time price from Polygon.io without context manager"""
     if not CONFIG['POLYGON_API_KEY']:
         st.warning("Polygon API key missing. Using Yahoo Finance fallback.")
         return get_current_price(ticker)
     
     try:
-        with RESTClient(CONFIG['POLYGON_API_KEY']) as client:
-            # Get the last trade price
-            trade = client.stocks_equities_last_trade(ticker)
-            return trade.last.price
+        client = RESTClient(CONFIG['POLYGON_API_KEY'])
+        trade = client.stocks_equities_last_trade(ticker)
+        return trade.last.price
     except Exception as e:
         st.error(f"Polygon error: {str(e)}. Falling back to Yahoo Finance.")
         return get_current_price(ticker)
@@ -429,20 +428,20 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 def get_polygon_options_expiries(ticker: str) -> List[str]:
-    """Get options expiries from Polygon.io"""
+    """Get options expiries from Polygon.io without context manager"""
     try:
-        with RESTClient(CONFIG['POLYGON_API_KEY']) as client:
-            # Get upcoming expirations
-            expirations = client.options_contracts(
-                underlying_ticker=ticker,
-                limit=1000
-            )
-            
-            # Extract unique expiration dates
-            expiries = sorted(set(
-                contract.expiration_date for contract in expirations.results
-            ))
-            return expiries
+        client = RESTClient(CONFIG['POLYGON_API_KEY'])
+        # Get upcoming expirations
+        expirations = client.options_contracts(
+            underlying_ticker=ticker,
+            limit=1000
+        )
+        
+        # Extract unique expiration dates
+        expiries = sorted(set(
+            contract.expiration_date for contract in expirations.results
+        ))
+        return expiries
     except Exception as e:
         st.warning(f"Polygon expiries error: {str(e)}. Falling back to Yahoo Finance.")
         return []
@@ -471,71 +470,68 @@ def get_options_expiries(ticker: str) -> List[str]:
         return []
 
 def get_polygon_options_data(ticker: str, expiries: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch options data from Polygon.io"""
+    """Fetch options data from Polygon.io without context manager"""
     all_calls = pd.DataFrame()
     all_puts = pd.DataFrame()
     
     try:
-        with RESTClient(CONFIG['POLYGON_API_KEY']) as client:
-            for expiry in expiries:
-                try:
-                    # Convert expiry date to proper format (YYYY-MM-DD)
-                    expiry_date = expiry
+        client = RESTClient(CONFIG['POLYGON_API_KEY'])
+        for expiry in expiries:
+            try:
+                # Get options chain
+                options_chain = client.options_contracts(
+                    underlying_ticker=ticker,
+                    expiration_date=expiry,
+                    limit=1000
+                )
+                
+                # Process contracts
+                calls = []
+                puts = []
+                
+                for contract in options_chain.results:
+                    # Get latest quote
+                    try:
+                        quote = client.options_last_trade(contract.ticker)
+                        last_price = quote.last.price if quote.last else 0.0
+                    except:
+                        last_price = 0.0
                     
-                    # Get options chain
-                    options_chain = client.options_contracts(
-                        underlying_ticker=ticker,
-                        expiration_date=expiry_date,
-                        limit=1000
-                    )
+                    # Get open interest
+                    try:
+                        oi = client.options_daily_open_close(contract.ticker, expiry)
+                        open_interest = oi.open_interest
+                    except:
+                        open_interest = 0
                     
-                    # Process contracts
-                    calls = []
-                    puts = []
+                    contract_data = {
+                        'contractSymbol': contract.ticker,
+                        'strike': contract.strike_price,
+                        'lastPrice': last_price,
+                        'volume': contract.day_trade_volume,
+                        'openInterest': open_interest,
+                        'impliedVolatility': contract.implied_volatility,
+                        'delta': contract.greeks.delta if contract.greeks else 0.0,
+                        'gamma': contract.greeks.gamma if contract.greeks else 0.0,
+                        'theta': contract.greeks.theta if contract.greeks else 0.0,
+                        'expiry': expiry
+                    }
                     
-                    for contract in options_chain.results:
-                        # Get latest quote
-                        try:
-                            quote = client.options_last_trade(contract.ticker)
-                            last_price = quote.last.price if quote.last else 0.0
-                        except:
-                            last_price = 0.0
-                        
-                        # Get open interest
-                        try:
-                            oi = client.options_daily_open_close(contract.ticker, expiry_date)
-                            open_interest = oi.open_interest
-                        except:
-                            open_interest = 0
-                        
-                        contract_data = {
-                            'contractSymbol': contract.ticker,
-                            'strike': contract.strike_price,
-                            'lastPrice': last_price,
-                            'volume': contract.day_trade_volume,
-                            'openInterest': open_interest,
-                            'impliedVolatility': contract.implied_volatility,
-                            'delta': contract.greeks.delta if contract.greeks else 0.0,
-                            'gamma': contract.greeks.gamma if contract.greeks else 0.0,
-                            'theta': contract.greeks.theta if contract.greeks else 0.0,
-                            'expiry': expiry
-                        }
-                        
-                        if contract.contract_type == 'call':
-                            calls.append(contract_data)
-                        else:
-                            puts.append(contract_data)
+                    if contract.contract_type == 'call':
+                        calls.append(contract_data)
+                    else:
+                        puts.append(contract_data)
+                
+                if calls:
+                    all_calls = pd.concat([all_calls, pd.DataFrame(calls)], ignore_index=True)
+                if puts:
+                    all_puts = pd.concat([all_puts, pd.DataFrame(puts)], ignore_index=True)
                     
-                    if calls:
-                        all_calls = pd.concat([all_calls, pd.DataFrame(calls)], ignore_index=True)
-                    if puts:
-                        all_puts = pd.concat([all_puts, pd.DataFrame(puts)], ignore_index=True)
-                        
-                    time.sleep(0.2)  # Respect Polygon rate limits
-                    
-                except Exception as e:
-                    st.warning(f"Failed to fetch options for {expiry}: {str(e)}")
-                    continue
+                time.sleep(0.2)  # Respect Polygon rate limits
+                
+            except Exception as e:
+                st.warning(f"Failed to fetch options for {expiry}: {str(e)}")
+                continue
                 
         return all_calls, all_puts
                 
