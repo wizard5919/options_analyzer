@@ -1314,5 +1314,5 @@ with st.expander("ℹ️ About Rate Limiting"):
     - Avoid setting auto-refresh intervals lower than 1 minute
     - Use the app with one ticker at a time to reduce load
     - Consider upgrading to a premium data provider for higher limits
-    """) {thresholds['volume_min']}")
+    """) 
          
