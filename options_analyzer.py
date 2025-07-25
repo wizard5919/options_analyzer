@@ -15,7 +15,6 @@ from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient  # For real-time data
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -487,9 +486,8 @@ def classify_moneyness(strike: float, spot: float) -> str:
 def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float, float, float]:
     """Calculate approximate Greeks using simple formulas"""
     moneyness = spot_price / option['strike']
-    is_call = 'C' in option['contractSymbol']
     
-    if is_call:
+    if 'C' in option['contractSymbol']:
         if moneyness > 1.03:
             delta = 0.95
             gamma = 0.01
@@ -585,8 +583,7 @@ def calculate_holding_period(option: pd.Series, spot_price: float) -> str:
     if days_to_expiry == 0:
         return "Intraday (Exit before 3:30 PM)"
     
-    is_call = 'C' in option['contractSymbol']
-    if is_call:
+    if 'C' in option['contractSymbol']:
         intrinsic_value = max(0, spot_price - option['strike'])
     else:
         intrinsic_value = max(0, option['strike'] - spot_price)
@@ -605,13 +602,12 @@ def calculate_holding_period(option: pd.Series, spot_price: float) -> str:
 def calculate_profit_targets(option: pd.Series) -> Tuple[float, float]:
     """Calculate profit targets and stop loss levels"""
     entry_price = option['lastPrice']
-    is_call = 'C' in option['contractSymbol']
-    profit_target = entry_price * (1 + CONFIG['PROFIT_TARGETS']['call' if is_call else 'put'])
+    profit_target = entry_price * (1 + CONFIG['PROFIT_TARGETS']['call' if 'C' in option['contractSymbol'] else 'put'])
     stop_loss = entry_price * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
     return profit_target, stop_loss
 
 def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
-    """Generate trading signal with detailed analysis using dynamic thresholds"""
+    """Generate trading signal withdetailed analysis using dynamic thresholds"""
     if stock_df.empty:
         return {'signal': False, 'reason': 'No stock data available'}
     
@@ -1214,16 +1210,12 @@ if ticker:
         # News
         news = stock.news
         if news:
-            sentiment_analyzer = SentimentIntensityAnalyzer()
             st.subheader("Recent News")
             for item in news[:10]:  # Show more news
                 with st.expander(item.get('title', 'Untitled')):
                     st.write(item['link'])
                     summary = item.get('summary', 'No summary available')
                     st.write(summary)
-                    if summary != 'No summary available':
-                        sentiment = sentiment_analyzer.polarity_scores(summary)['compound']
-                        st.write(f"Sentiment Score: {sentiment:.2f}")
         else:
             st.info("No recent news available.")
         
