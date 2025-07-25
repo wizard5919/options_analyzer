@@ -1294,41 +1294,29 @@ if ticker:
         st.write("**System Configuration:**")
         st.json(CONFIG)
     
-  with tab4:
-    st.subheader("📰 News & Events")
-    stock = yf.Ticker(ticker)
-    
-    # News with comprehensive error handling
-    try:
+    with tab4:
+        st.subheader("📰 News & Events")
+        stock = yf.Ticker(ticker)
+        
+        # News
         news = stock.news
         if news:
             st.subheader("Recent News")
-            for item in news[:10]:
-                # Safely get all values
-                title = item.get('title', 'Untitled News Item')
-                publisher = item.get('publisher', 'Unknown Publisher')
-                link = item.get('link', 'No link available')
-                summary = item.get('summary', 'No summary available')
-                
-                with st.expander(title):
-                    st.write(f"**Publisher:** {publisher}")
-                    st.write(f"**Link:** {link}")
-                    st.write(f"**Summary:** {summary}")
+            for item in news[:10]:  # Show more news
+                with st.expander(item.get('title', 'Untitled')):
+                    st.write(item.get('publisher', 'Unknown'))
+                    st.write(item.get('link', 'No link available'))
+                    st.write(item.get('summary', 'No summary available'))
         else:
             st.info("No recent news available.")
-    except Exception as e:
-        st.warning(f"Couldn't fetch news: {str(e)}")
-    
-    # Calendar/Events
-    try:
+        
+        # Calendar/Events
         calendar = stock.calendar
         if not calendar.empty:
             st.subheader("Upcoming Events/Earnings")
             st.dataframe(calendar)
         else:
             st.info("No upcoming events available.")
-    except Exception as e:
-        st.warning(f"Couldn't fetch calendar events: {str(e)}")
         
 else:
     st.info("Please enter a stock ticker to begin analysis.")
