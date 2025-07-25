@@ -6,7 +6,6 @@ import datetime
 import time
 import warnings
 import pytz
-import math
 import threading
 import logging
 from typing import Optional, Tuple, Dict, List
@@ -53,7 +52,7 @@ CONFIG = {
     },
     'TIME_DECAY': {
         'theta_scalar': 0.0001,  # Base theta decay per second for 0DTE
-        'hours_to_close': 6.5    # Hours from open to close (9:30 AM to 4:00 PM)
+        'hours_to_close': 6.5    # Hours from open to close
     }
 }
 
@@ -101,14 +100,14 @@ class AutoRefreshSystem:
         self.running = False
         self.thread = None
         self.refresh_interval = 1  # Default to 1 second
-        
+
     def start(self, interval):
         if self.running and interval == self.refresh_interval:
             return
         self.stop()
         self.running = True
-        self.refresh_interval = max(1, interval)  # Ensure minimum 1 second
-        
+        self.refresh_interval = max(1, interval)
+
         def refresh_loop():
             while self.running:
                 start_time = time.time()
@@ -123,10 +122,10 @@ class AutoRefreshSystem:
                     logger.error(f"Refresh error: {str(e)}")
                 elapsed = time.time() - start_time
                 time.sleep(max(0, self.refresh_interval - elapsed))
-        
+
         self.thread = threading.Thread(target=refresh_loop, daemon=True)
         self.thread.start()
-    
+
     def stop(self):
         self.running = False
         if self.thread and self.thread.is_alive():
@@ -182,7 +181,7 @@ def safe_api_call(func, *args, max_retries=None, **kwargs):
             if attempt == max_retries - 1:
                 logger.error(f"API call failed after {max_retries} attempts: {str(e)}")
                 return None
-            time.sleep(CONFIG['RETRY_DELAY'] * (2 ** attempt))
+            time.sleep(CONFIG['RETRY_DELAY'] * (2 **くれ)
     return None
 
 @st.cache_data(ttl=CONFIG['CACHE_TTL'])
@@ -194,29 +193,27 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
         if data.empty:
             logger.warning(f"No data for {ticker}")
             return pd.DataFrame()
-        
+
         required_cols = ['Close', 'Open', 'High', 'Low', 'Volume']
         missing_cols = [col for col in required_cols if col not in data.columns]
         if missing_cols:
-            data = data.dropna(how='all')
-            for col in required_cols:
-                data[col] = pd.to_numeric(data[col], errors='coerce')
-            data = data.dropna(subset=required_cols)
-            
-            if len(data) < CONFIG['MIN_DATA_POINTS']:
-                logger.warning(f"Insufficient data points for {ticker}: {len(data)}")
-                return pd.DataFrame()
-                
-            eastern = pytz.timezone('US/Eastern')
-            if data.index.tz is None:
-                data.index = data.index.tz_localize(pytz.utc)
-                data.index = data.index.tz_convert(eastern)
-                
-            data['premarket'] = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
-            return data.reset_index(drop=False)
-        else:
             logger.error(f"Missing columns for {ticker}: {missing_cols}")
             return pd.DataFrame()
+
+        data = data.dropna(how='all')
+        for col in required_cols:
+            data[col] = pd.to_numeric(data[col], errors='coerce')
+        data = data.dropna(subset=required_cols)
+
+        if len(data) < CONFIG['MIN_DATA_POINTS']:
+            logger.warning(f"Insufficient data points for {ticker}: {len(data)}")
+            return pd.DataFrame()
+
+        eastern = pytz.timezone('US/Eastern')
+        if data.index.tz is None:
+            data.index = data.index.tz_localize(pytz.utc).tz_convert(eastern)
+        data['premarket'] = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
+        return data.reset_index(drop=False)
     except Exception as e:
         logger.error(f"Stock data error for {ticker}: {str(e)}")
         return pd.DataFrame()
@@ -230,13 +227,11 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
             regular = group[~group['premarket']]
             if not regular.empty:
                 regular_avg_vol = regular['Volume'].expanding(min_periods=1).mean()
-                df.loc[regular.loc[regular.index, 'avg_vol'] = regular_avg_vol]
-            
+                df.loc[regular.index, 'avg_vol'] = regular_avg_vol
             premarket = group[group['premarket']]
             if not premarket.empty:
                 premarket_avg_vol = premarket['Volume'].expanding(min_periods=1).mean()
-                df.loc[premarket.loc[premarket.index, 'avg_vol'] = premarket_avg_vol
-        
+                df.loc[premarket.index, 'avg_vol'] = premarket_avg_vol
         df['avg_vol'] = df['avg_vol'].fillna(df['Volume'].mean())
         return df
     except Exception as e:
@@ -252,19 +247,19 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         if any(col not in df.columns for col in required_cols):
             logger.error(f"Missing columns: {[col for col in required_cols if col not in df.columns]}")
             return pd.DataFrame()
-        
+
         for col in required_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         df = df.dropna(subset=required_cols)
-        
+
         if df.empty:
             return df
-            
+
         close = df['Close'].astype(float)
         high = df['High'].astype(float)
         low = df['Low'].astype(float)
         volume = df['Volume'].astype(float)
-        
+
         if len(close) >= 9:
             df['EMA_9'] = EMAIndicator(close=close, window=9).ema_indicator()
         if len(close) >= 20:
@@ -285,7 +280,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             df['Keltner_Upper'] = keltner.keltner_channel_hband()
             df['Keltner_Middle'] = keltner.keltner_channel_mband()
             df['Keltner_Lower'] = keltner.keltner_channel_lband()
-        
+
         df['VWAP'] = np.nan
         for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
             if group.empty:
@@ -304,11 +299,11 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 vwap_cumsum = (premarket['Volume'] * typical_price).cumsum()
                 volume_cumsum = premarket['Volume'].cumsum()
                 df.loc[premarket.index, 'VWAP'] = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
-        
+
         if len(close) >= 14:
             df['ATR'] = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
             df['ATR_pct'] = df['ATR'] / close
-        
+
         df = calculate_volume_averages(df)
         return df
     except Exception as e:
@@ -607,7 +602,7 @@ with st.sidebar:
         st.info(f"Refreshing every {refresh_interval} second{'s' if refresh_interval != 1 else ''}")
     else:
         st.session_state.refresh_system.stop()
-    
+
     st.subheader("Base Signal Thresholds")
     col1, col2 = st.columns(2)
     with col1:
@@ -661,7 +656,7 @@ if ticker:
                 st.session_state.refresh_counter += 1
                 st.rerun()
         st.caption(f"🔄 Refresh count: {st.session_state.refresh_counter}")
-        
+
         st.subheader("📊 Call/Put Scanner")
         df = get_stock_data(ticker)
         if not df.empty:
@@ -681,7 +676,7 @@ if ticker:
                 st.info("⚠️ Moderate Opportunity")
             else:
                 st.info("🛑 No Strong Opportunities")
-        
+
         tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
         with tab1:
             with st.spinner("Analyzing data..."):
@@ -803,11 +798,11 @@ if ticker:
                                 row_dict = row.to_dict()
                                 row_dict.update({
                                     'signal_score': signal_result['score'],
-                                    'thresholds': signal_result,
+                                    'thresholds': signal_result['thresholds'],
                                     'passed_conditions': signal_result['passed_conditions'],
                                     'is_0dte': is_0dte,
                                     'profit_target': signal_result['profit_target'],
-                                    'stop_loss': signal_result['stop_loss']
+                                    'stop_loss': signal_result['stop_loss'],
                                     'holding_period': signal_result['holding_period'],
                                     'time_decay': signal_result['time_decay']
                                 })
@@ -815,14 +810,13 @@ if ticker:
                         if put_signals:
                             signals_df = pd.DataFrame(put_signals).sort_values('signal_score', ascending=False)
                             display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte', 'time_decay']
-                            available_cols = [col for col in display_cols for col in display_cols if col in signals_df.columns]
+                            available_cols = [col for col in display_cols if col in signals_df.columns]
                             st.dataframe(signals_df[available_cols].round(4), use_container_width=True, hide_index=True)
                             if signals_df.iloc[0]['thresholds']:
                                 th = signals_df.iloc[0]['thresholds']
                                 st.info(f"Thresholds: Δ ≤ {th['delta_max']:.2f} | Γ ≥ {th['gamma_min']:.3f} | Θ ≤ {th['theta_base']:.3f} | RSI < {th['rsi_max']:.1f} | Vol > {th['volume_min']}")
                             with st.expander("Top Signal Conditions"):
                                 if signals_df.iloc[0]['passed_conditions']:
-                                    st.write("Conditions Passed:")
                                     for condition in signals_df.iloc[0]['passed_conditions']:
                                         st.write(f"- {condition}")
                             st.success(f"Found {len(put_signals)} put signals!")
@@ -831,7 +825,7 @@ if ticker:
                             if not puts_filtered.empty:
                                 sample_put = puts_filtered.iloc[0]
                                 is_0dte = sample_put.get('is_0dte', False)
-                                signal_result = generate_signal(sample_put, "put", df, is_0dte)
+                                result = generate_signal(sample_put, "put", df, is_0dte)
                                 if 'failed_conditions' in result:
                                     st.write("Top put failed conditions:")
                                     for condition in result['failed_conditions']:
@@ -868,7 +862,7 @@ if ticker:
                 with col4:
                     st.metric("Vol%", f"{latest['ATR_pct']*100:.2f}%" if not pd.isna(latest['ATR_pct']) else "N/A")
                 st.subheader("Recent Data")
-                display_df = df.tail(10)[['Close', 'RSI', 'EMA_9', 'EMA_20', 'EMA_50', 'EMA_200', 'VWAP', 'RSI', 'MACD', 'MACD_Signal', 'Keltner_Upper', 'Keltner_Lower', 'ATR_pct', 'Volume', 'avg_vol']].round(2)
+                display_df = df.tail(10)[['Close', 'RSI', 'EMA_9', 'EMA_20', 'EMA_50', 'EMA_200', 'VWAP', 'MACD', 'MACD_Signal', 'Keltner_Upper', 'Keltner_Lower', 'ATR_pct', 'Volume', 'avg_vol']].round(2)
                 display_df['ATR_pct'] = display_df['ATR_pct'] * 100
                 display_df['Volume Ratio'] = display_df['Volume'] / display_df['avg_vol']
                 st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%', 'avg_vol': 'Avg Vol'}), use_container_width=True)
