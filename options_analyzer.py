@@ -855,48 +855,79 @@ st.markdown("**Enhanced for volatile markets** with improved signal detection du
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    st.subheader("🔄 Auto-Refresh Settings")
-    enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
+    # Auto-refresh section with icon
+    with st.container():
+        st.subheader("🔄 Auto-Refresh Settings")
+        enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
+        
+        if enable_auto_refresh:
+            refresh_interval = st.selectbox(
+                "Refresh Interval",
+                options=[60, 120, 300],
+                index=1,
+                format_func=lambda x: f"{x} seconds"
+            )
+            st.session_state.refresh_system.start(refresh_interval)
+            st.info(f"Data will refresh every {refresh_interval} seconds")
+        else:
+            st.session_state.refresh_system.stop()
     
-    if enable_auto_refresh:
-        refresh_interval = st.selectbox(
-            "Refresh Interval",
-            options=[60, 120, 300],
-            index=1,
-            format_func=lambda x: f"{x} seconds"
-        )
-        st.session_state.refresh_system.start(refresh_interval)
-        st.info(f"Data will refresh every {refresh_interval} seconds")
-    else:
-        st.session_state.refresh_system.stop()
+    # Thresholds section with expanders and icons
+    with st.expander("📊 Base Signal Thresholds", expanded=True):
+        st.write("**Options Greeks Configuration**")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📈 Calls")
+            SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Delta", 0.1, 1.0, 0.5, 0.1, key="call_delta")
+            SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Gamma", 0.01, 0.2, 0.05, 0.01, key="call_gamma")
+            SIGNAL_THRESHOLDS['call']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5, key="call_rsi_base")
+            SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5, key="call_rsi_min")
+            SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider("Min Volume", 100, 5000, 1000, 100, key="call_vol_min")
+        
+        with col2:
+            st.markdown("#### 📉 Puts")
+            SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Delta", -1.0, -0.1, -0.5, 0.1, key="put_delta")
+            SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Gamma", 0.01, 0.2, 0.05, 0.01, key="put_gamma")
+            SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5, key="put_rsi_base")
+            SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5, key="put_rsi_max")
+            SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume", 100, 5000, 1000, 100, key="put_vol_min")
+        
+        st.markdown("---")
+        st.write("**Common Thresholds**")
+        SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01, key="theta")
+        SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.0, 0.1, key="vol_multiplier")
     
-    st.subheader("Base Signal Thresholds")
+    # Profit targets section
+    with st.expander("🎯 Profit Targets & Risk", expanded=True):
+        CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit")
+        CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="put_profit")
+        CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, key="stop_loss")
     
-    col1, col2 = st.columns(2)
+    # Market status section
+    with st.container():
+        st.subheader("ℹ️ Market Status")
+        if is_market_open():
+            st.success("✅ Market is OPEN")
+        elif is_premarket():
+            st.warning("⏰ PREMARKET Session")
+        else:
+            st.info("💤 Market is CLOSED")
+        
+        # Add current time
+        eastern = pytz.timezone('US/Eastern')
+        now = datetime.datetime.now(eastern)
+        st.caption(f"**Current Time (ET):** {now.strftime('%H:%M:%S')}")
     
-    with col1:
-        st.write("**Calls**")
-        SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Base Delta", 0.1, 1.0, 0.5, 0.1)
-        SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Base Gamma", 0.01, 0.2, 0.05, 0.01)
-        SIGNAL_THRESHOLDS['call']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider("Min Volume", 100, 5000, 1000, 100)
-    
-    with col2:
-        st.write("**Puts**")
-        SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta ", -1.0, -0.1, -0.5, 0.1)
-        SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
-        SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
-    
-    SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.0, 0.1)
-    
-    st.subheader("🎯 Profit Targets")
-    CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
-    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
-    CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01)
+    # Quick actions section
+    with st.container():
+        st.subheader("⚡ Quick Actions")
+        if st.button("Clear Cache", help="Reset all cached data"):
+            st.cache_data.clear()
+            st.session_state.last_refresh = time.time()
+            st.session_state.refresh_counter += 1
+            st.rerun()
 
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
@@ -1314,5 +1345,4 @@ with st.expander("ℹ️ About Rate Limiting"):
     - Avoid setting auto-refresh intervals lower than 1 minute
     - Use the app with one ticker at a time to reduce load
     - Consider upgrading to a premium data provider for higher limits
-    """) 
-         
+    """)
