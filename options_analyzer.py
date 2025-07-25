@@ -1294,25 +1294,37 @@ if ticker:
         st.write("**System Configuration:**")
         st.json(CONFIG)
     
-    with tab4:
+   with tab4:
         st.subheader("📰 News & Events")
-        stock = yf.Ticker(ticker)
         
         # News with comprehensive error handling
         try:
+            stock = yf.Ticker(ticker)
             news = stock.news
             if news:
                 st.subheader("Recent News")
                 for item in news[:10]:
-                    # Safely get all values using .get() with default
+                    # Safely get all values using .get() with defaults
                     title = item.get('title', 'Untitled News Item')
                     publisher = item.get('publisher', 'Unknown Publisher')
                     link = item.get('link', 'No link available')
                     summary = item.get('summary', 'No summary available')
+                    publish_time = item.get('providerPublishTime', 'Unknown time')
                     
-                    with st.expander(title):
+                    # Convert timestamp if available
+                    if isinstance(publish_time, (int, float)):
+                        try:
+                            publish_time = datetime.datetime.fromtimestamp(publish_time).strftime('%Y-%m-%d %H:%M:%S')
+                        except:
+                            publish_time = 'Unknown time'
+                    
+                    with st.expander(f"{title} - {publisher}"):
+                        if link != 'No link available':
+                            st.markdown(f"**Link:** [{link}]({link})")
+                        else:
+                            st.write("**Link:** No link available")
                         st.write(f"**Publisher:** {publisher}")
-                        st.write(f"**Link:** {link}")
+                        st.write(f"**Published:** {publish_time}")
                         st.write(f"**Summary:** {summary}")
             else:
                 st.info("No recent news available.")
@@ -1322,13 +1334,51 @@ if ticker:
         # Calendar/Events
         try:
             calendar = stock.calendar
-            if not calendar.empty:
+            if calendar is not None and not calendar.empty:
                 st.subheader("Upcoming Events/Earnings")
                 st.dataframe(calendar)
             else:
                 st.info("No upcoming events available.")
         except Exception as e:
             st.warning(f"Couldn't fetch calendar events: {str(e)}")
+        
+        # Additional company info
+        try:
+            info = stock.info
+            if info:
+                st.subheader("Company Information")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if 'longName' in info:
+                        st.metric("Company", info['longName'])
+                    if 'sector' in info:
+                        st.metric("Sector", info['sector'])
+                
+                with col2:
+                    if 'marketCap' in info and info['marketCap']:
+                        market_cap = info['marketCap']
+                        if market_cap > 1e12:
+                            st.metric("Market Cap", f"${market_cap/1e12:.2f}T")
+                        elif market_cap > 1e9:
+                            st.metric("Market Cap", f"${market_cap/1e9:.2f}B")
+                        else:
+                            st.metric("Market Cap", f"${market_cap/1e6:.2f}M")
+                    
+                    if 'averageVolume' in info:
+                        avg_vol = info['averageVolume']
+                        if avg_vol > 1e6:
+                            st.metric("Avg Volume", f"{avg_vol/1e6:.1f}M")
+                        else:
+                            st.metric("Avg Volume", f"{avg_vol/1e3:.0f}K")
+                
+                with col3:
+                    if 'beta' in info:
+                        st.metric("Beta", f"{info['beta']:.2f}")
+                    if 'trailingPE' in info and info['trailingPE']:
+                        st.metric("P/E Ratio", f"{info['trailingPE']:.2f}")
+        except Exception as e:
+            st.warning(f"Couldn't fetch company information: {str(e)}")
         
 else:
     st.info("Please enter a stock ticker to begin analysis.")
