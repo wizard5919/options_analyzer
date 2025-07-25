@@ -8,3 +8,4 @@ ta
 polygon-api-client
 aiohttp
 asyncio
+vaderSentiment
