@@ -518,7 +518,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
                 (keltner_upper and close > keltner_upper, "Price > Keltner Upper", f"{close:.2f} > {keltner_upper:.2f}" if keltner_upper else "N/A"),
                 (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f}")
             ]
-        else:
+        else:  # side == "put"
             volume_ok = option_volume > thresholds['volume_min']
             conditions = [
                 (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']:.2f}", delta),
@@ -528,7 +528,6 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
                 (ema_50 and ema_200 and ema_50 < ema_200, "EMA50 < EMA200", f"{ema_50:.2f} < {ema_200:.2f}" if ema_50 and ema_200 else "N/A"),
                 (rsi and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (vwap and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
-                "N/A"),
                 (macd and macd_signal and macd < macd_signal, "MACD < Signal", f"{macd:.2f} < {macd_signal:.2f}" if macd and macd_signal else "N/A"),
                 (keltner_lower and close < keltner_lower, "Price < Keltner Lower", f"{close:.2f} < {keltner_lower:.2f}" if keltner_lower else "N/A"),
                 (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f}")
@@ -576,7 +575,7 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
         macd = float(latest['MACD']) if not pd.isna(latest['MACD']) else None
         macd_signal = float(latest['MACD_Signal']) if not pd.isna(latest['MACD_Signal']) else None
         keltner_upper = float(latest['Keltner_Upper']) if not pd.isna(latest['Keltner_Upper']) else None
-        keltner_lower = float(latest['Keltner_Lower']) if not pd.isna(latest['Keltner_L']) else None
+        keltner_lower = float(latest['Keltner_Lower']) if not pd.isna(latest['Keltner_Lower']) else None
         if side == "call":
             if ema_9 and ema_20 and close > ema_9 > ema_20:
                 score += 1.0
@@ -652,16 +651,16 @@ with st.sidebar:
         SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider("Min Volume", 0, 1000, 500, 50)
     with col2:
         st.write("**Put Options:**")
-        SIGNAL_THRESHOLDS['put']['delta_base'] = -0.5, st.slider("Base Delta", -1.0, -0.1, -0.5, 0.1)
+        SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta", -1.0, -0.1, -0.5, 0.1)
         SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
         SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 60, 1)
         SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 0, 1000, 500, 50)
     st.write("**Common Settings:**")
     SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta ", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier'] = st.slider("Volume Multiplier ", 0.5, 3.0, 1.0, 0.1)
+    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier ", 0.5, 3.0, 1.0, 0.1)
     st.subheader("🎯 Profit Targets")
     CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
-    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target %)", 0.05, 0.50, 0.15, 0.01)
+    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
     CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01)
 
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
@@ -670,7 +669,7 @@ refresh_status = st.empty()
 if enable_auto_refresh:
     elapsed = time.time() - st.session_state['last_refresh']
     remaining = max(0, refresh_interval - elapsed)
-    refresh_status.info(f"⏱️ Next refresh in {int(remaining)} second{'s' if int(remaining) != 0 else ''}")
+    refresh_status.info(f"⏱️ Next refresh in {int(remaining)} second{'s' if int(remaining) != 1 else ''}")
 else:
     refresh_status.empty()
 
@@ -682,7 +681,7 @@ if ticker:
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.success("✅ Market is OPEN")
+            st.success("✅ Market is OPEN") if is_market_open() else st.info("💤 Market is CLOSED")
         with col2:
             current_price, fetch_time = get_current_price(ticker)
             st.metric("Current Price", f"${current_price:.2f}", delta=f"Fetched at {fetch_time}")
@@ -728,8 +727,8 @@ if ticker:
                     st.error("Cannot compute indicators.")
                     st.stop()
                 current_price = df.iloc[-1]['Close']
-                st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**)s")
-                atr_pct = df.iloc[-1].get('ATR_pct', '0')
+                st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**")
+                atr_pct = df.iloc[-1].get('ATR_pct', 0)
                 volatility_status = "Low"
                 if not pd.isna(atr_pct):
                     if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
@@ -741,18 +740,18 @@ if ticker:
                     st.info(f"📊 Volatility (ATR%): {atr_pct*100:.2f}% - {volatility_status}")
                 st.subheader("🧠 Diagnostics")
                 st.write("📏 Signal Thresholds:")
-                col1, col2 = st.columns Freshwater(2)
+                col1, col2 = st.columns(2)
                 with col1:
-                    st.caption(f"**Calls:** Δ ≥ {‘call’]['thresholds']['delta_base']:.2f} | Γ ≥ {SIGNAL_THRESHOLDS['call']['gamma_base']:.3f} | Vol > {‘call’]['volume_min']}")
+                    st.caption(f"**Calls:** Δ ≥ {SIGNAL_THRESHOLDS['call']['delta_base']:.2f} | Γ ≥ {SIGNAL_THRESHOLDS['call']['gamma_base']:.3f} | Vol > {SIGNAL_THRESHOLDS['call']['volume_min']}")
                 with col2:
-                    st.caption(f"Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | Γ ≥ {‘put’]:.3f} | Vol > {‘put’]}")
+                    st.caption(f"**Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | Γ ≥ {SIGNAL_THRESHOLDS['put']['gamma_base']:.3f} | Vol > {SIGNAL_THRESHOLDS['put']['volume_min']}")
                 expiries = get_options_expiries(ticker)
                 if not expiries:
                     st.error(f"No options expiries for {ticker}. Possible causes: rate limit, non-optionable ticker, or API issue.")
                     st.stop()
                 expiry_mode = st.radio("Expiration Filter:", ["0DTE Only", "All Near-Term"], index=1)
                 today = datetime.date.today()
-                expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today] [:1] if expiry_mode == "0DTE Only" else expiries[:3]  # Limit expiries
+                expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today][:1] if expiry_mode == "0DTE Only" else expiries[:3]
                 if not expiries_to_use:
                     st.warning("No expiries for selected mode.")
                     st.stop()
@@ -764,16 +763,16 @@ if ticker:
                 st.write(f"Before filtering: {len(calls)} calls, {len(puts)} puts")
                 for option_df in [calls, puts]:
                     option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
-                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-10, 10), 1)  # Wider range
+                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-10, 10), 1)
                 min_strike = current_price + strike_range[0]
                 max_strike = current_price + strike_range[1]
-                calls_filtered = calls[(calls['strike'][:] >= min_strike) & (calls['strike'] <= max_strike)].copy()
-                puts_filtered = puts[(puts['strike'][:] >= min_strike[:] & (puts['strike'] <= max_strike)].copy()
+                calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)].copy()
+                puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)].copy()
                 if not calls_filtered.empty:
                     calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 if not puts_filtered.empty:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                m_filter = st.multiselect("Filter by Moneyness:", ["ITM", "NTM", "ATM", "OTM"], default=["ITM", "NTM", "ATM", "OTM"])  # Include OTM
+                m_filter = st.multiselect("Filter by Moneyness:", ["ITM", "NTM", "ATM", "OTM"], default=["ITM", "NTM", "ATM", "OTM"])
                 if not calls_filtered.empty:
                     calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
                 if not puts_filtered.empty:
@@ -907,7 +906,7 @@ if ticker:
                 display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'EMA_50', 'RSI', 'VWAP', 'MACD', 'MACD_Signal', 'Keltner_Upper', 'Keltner_Lower', 'ATR_pct', 'Volume', 'avg_vol']].round(2)
                 display_df['ATR_pct'] = display_df['ATR_pct'] * 100
                 display_df['Volume Ratio'] = display_df['Volume'] / display_df['avg_vol']
-                st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%'}, 'avg_vol': 'Avg Vol'), use_container_width=True)
+                st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%', 'avg_vol': 'Avg Vol'}), use_container_width=True)
         with tab3:
             st.subheader("🔍 Analysis Details")
             if enable_auto_refresh:
