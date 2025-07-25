@@ -35,8 +35,8 @@ CONFIG = {
     'RETRY_DELAY': 1,
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
-    'CACHE_TTL': 60,  # Reduced for fresher data
-    'RATE_LIMIT_COOLDOWN': 300,  # Increased to avoid frequent rate limits
+    'CACHE_TTL': 0,  # Disabled caching for testing
+    'RATE_LIMIT_COOLDOWN': 600,  # Increased to avoid rate limits
     'MARKET_OPEN': datetime.time(9, 30),
     'MARKET_CLOSE': datetime.time(16, 0),
     'PREMARKET_START': datetime.time(4, 0),
@@ -63,12 +63,12 @@ SIGNAL_THRESHOLDS = {
         'gamma_base': 0.05,
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
-        'rsi_base': 50,
-        'rsi_min': 50,
+        'rsi_base': 40,  # Relaxed for low volatility
+        'rsi_min': 40,
         'rsi_max': 50,
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.3,
-        'volume_min': 1000,
+        'volume_min': 500,  # Relaxed for more signals
         'macd_above_signal': True,
         'price_above_keltner': True,
         'ema_50_above_200': True
@@ -79,12 +79,12 @@ SIGNAL_THRESHOLDS = {
         'gamma_base': 0.05,
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
-        'rsi_base': 50,
+        'rsi_base': 60,  # Relaxed for low volatility
         'rsi_min': 50,
-        'rsi_max': 50,
+        'rsi_max': 60,
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.3,
-        'volume_min': 1000,
+        'volume_min': 500,  # Relaxed for more signals
         'macd_below_signal': True,
         'price_below_keltner': True,
         'ema_50_below_200': True
@@ -99,24 +99,32 @@ class AutoRefreshSystem:
     def __init__(self):
         self.running = False
         self.thread = None
-        self.refresh_interval = 1  # Default to 1 second
+        self.refresh_interval = 15  # Default to 15 seconds
 
     def start(self, interval):
         if self.running and interval == self.refresh_interval:
             return
         self.stop()
         self.running = True
-        self.refresh_interval = max(1, interval)
+        self.refresh_interval = max(15, interval)  # Minimum 15 seconds
+        if not is_market_open():
+            logger.warning("Auto-refresh disabled outside market hours")
+            st.warning("Auto-refresh disabled outside market hours (9:30 AM–4:00 PM Eastern)")
+            self.running = False
+            return
 
         def refresh_loop():
             while self.running:
                 start_time = time.time()
                 if 'rate_limited_until' in st.session_state and time.time() < st.session_state['rate_limited_until']:
-                    logger.warning(f"Skipping refresh due to rate limit. Cooldown until {datetime.datetime.fromtimestamp(st.session_state['rate_limited_until'])}")
+                    remaining = int(st.session_state['rate_limited_until'] - time.time())
+                    logger.warning(f"Skipping refresh due to rate limit. Cooldown for {remaining} seconds")
+                    st.warning(f"Rate limit active. Try 30-second refresh interval. Wait {remaining} seconds.")
                     time.sleep(1)
                     continue
                 try:
                     with st.spinner("Refreshing data..."):
+                        st.cache_data.clear()  # Clear cache on refresh
                         st.rerun()
                 except Exception as e:
                     logger.error(f"Refresh error: {str(e)}")
@@ -157,18 +165,20 @@ def is_early_market() -> bool:
     market_open_today = datetime.datetime.combine(now.date(), CONFIG['MARKET_OPEN']).replace(tzinfo=eastern)
     return (now - market_open_today).total_seconds() < 1800
 
-def get_current_price(ticker: str) -> float:
+def get_current_price(ticker: str) -> Tuple[float, str]:
     try:
         stock = yf.Ticker(ticker)
-        data = stock.history(period='1d', interval='1m', prepost=True)
+        data = stock.history(period='1h', interval='1m', prepost=True)  # Shorter period
         if data.empty:
             logger.warning(f"No price data for {ticker}")
-            return 0.0
-        return float(data['Close'].iloc[-1])
+            return 0.0, "N/A"
+        price = float(data['Close'].iloc[-1])
+        fetch_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return price, fetch_time
     except Exception as e:
         logger.error(f"Price error for {ticker}: {str(e)}")
         st.error(f"Error getting price for {ticker}: {str(e)}")
-        return 0.0
+        return 0.0, "N/A"
 
 def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
     for attempt in range(max_retries):
@@ -179,7 +189,7 @@ def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
             if "too many requests" in error_msg or "rate limit" in error_msg:
                 st.session_state['rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN'] * (2 ** attempt)
                 logger.warning(f"Rate limit hit, cooling down for {CONFIG['RATE_LIMIT_COOLDOWN'] * (2 ** attempt)} seconds")
-                st.warning(f"Yahoo Finance rate limit reached. Wait {CONFIG['RATE_LIMIT_COOLDOWN'] * (2 ** attempt)} seconds.")
+                st.warning(f"Yahoo Finance rate limit reached. Try 30-second refresh. Wait {CONFIG['RATE_LIMIT_COOLDOWN'] * (2 ** attempt)} seconds.")
                 return None
             if attempt == max_retries - 1:
                 logger.error(f"API call failed after {max_retries} attempts: {str(e)}")
@@ -218,6 +228,10 @@ def get_stock_data(ticker: str) -> pd.DataFrame:
         if data.index.tz is None:
             data.index = data.index.tz_localize(pytz.utc).tz_convert(eastern)
         data['premarket'] = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
+        latest_time = data.index[-1]
+        if is_market_open() and (datetime.datetime.now(eastern) - latest_time).total_seconds() > 300:
+            logger.warning(f"Stale stock data for {ticker}: latest timestamp {latest_time}")
+            st.warning(f"Stale data (last update: {latest_time}). Try refreshing.")
         return data.reset_index(drop=False)
     except Exception as e:
         logger.error(f"Stock data error for {ticker}: {str(e)}")
@@ -314,7 +328,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def get_options_expiries(ticker: str) -> List[str]:
     try:
         stock = yf.Ticker(ticker)
-        expiries = stock.options  # Direct access instead of safe_api_call
+        expiries = stock.options
         if not expiries:
             logger.warning(f"No options expiries for {ticker}. Possible rate limit or non-optionable ticker.")
             st.warning(f"No options expiries for {ticker}. Check ticker or wait if recently refreshed.")
@@ -432,6 +446,7 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
             thresholds['volume_multiplier'] *= 0.7
             thresholds['gamma_min'] *= 0.7
             thresholds['delta_min' if side == 'call' else 'delta_max'] = max(0.4, thresholds['delta_min']) if side == 'call' else min(-0.4, thresholds['delta_max'])
+        logger.info(f"Thresholds for {side}: {thresholds}, ATR_pct: {volatility:.4f}")
         return thresholds
     except Exception as e:
         logger.error(f"Dynamic thresholds error: {str(e)}")
@@ -446,7 +461,7 @@ def calculate_holding_period(option: pd.Series, spot_price: float) -> str:
         intrinsic_value = max(0, spot_price - option['strike']) if option['contractSymbol'].startswith('C') else max(0, option['strike'] - spot_price)
         if intrinsic_value > 0:
             return "1-2 days (Scalp quickly)" if float(option['theta']) < -0.1 else "3-5 days (Swing trade)"
-        return "1 day (Gamma play)" if days_to_expiry <= 3 else "3-7 days (Wait for move)"
+        return "1 day (Gamma gap)" if days_to_expiry <= 3 else "3-7 days (Wait for move)"
     except Exception as e:
         logger.error(f"Holding period error: {str(e)}")
         return "N/A"
@@ -462,6 +477,7 @@ def calculate_profit_targets(option: pd.Series) -> Tuple[float, float]:
         return 0.0, 0.0
 
 def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
+    logger.info(f"Generating signal for {option['contractSymbol']} at {time.time()}")
     if stock_df.empty:
         return {'signal': False, 'reason': 'No stock data'}
     try:
@@ -512,6 +528,7 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
                 (ema_50 and ema_200 and ema_50 < ema_200, "EMA50 < EMA200", f"{ema_50:.2f} < {ema_200:.2f}" if ema_50 and ema_200 else "N/A"),
                 (rsi and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
                 (vwap and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
+                "N/A"),
                 (macd and macd_signal and macd < macd_signal, "MACD < Signal", f"{macd:.2f} < {macd_signal:.2f}" if macd and macd_signal else "N/A"),
                 (keltner_lower and close < keltner_lower, "Price < Keltner Lower", f"{close:.2f} < {keltner_lower:.2f}" if keltner_lower else "N/A"),
                 (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f}")
@@ -533,10 +550,11 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
             'failed_conditions': failed_conditions,
             'score': score,
             'thresholds': thresholds,
+            'refresh_count': st.session_state.refresh_counter,
+            'time_decay': time_decay,
             'profit_target': profit_target,
             'stop_loss': stop_loss,
-            'holding_period': holding_period,
-            'time_decay': time_decay
+            'holding_period': holding_period
         }
     except Exception as e:
         logger.error(f"Signal generation error: {str(e)}")
@@ -558,7 +576,7 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
         macd = float(latest['MACD']) if not pd.isna(latest['MACD']) else None
         macd_signal = float(latest['MACD_Signal']) if not pd.isna(latest['MACD_Signal']) else None
         keltner_upper = float(latest['Keltner_Upper']) if not pd.isna(latest['Keltner_Upper']) else None
-        keltner_lower = float(latest['Keltner_Lower']) if not pd.isna(latest['Keltner_Lower']) else None
+        keltner_lower = float(latest['Keltner_Lower']) if not pd.isna(latest['Keltner_L']) else None
         if side == "call":
             if ema_9 and ema_20 and close > ema_9 > ema_20:
                 score += 1.0
@@ -600,84 +618,79 @@ if 'refresh_system' not in st.session_state:
 
 if 'rate_limited_until' in st.session_state and time.time() < st.session_state['rate_limited_until']:
     remaining = int(st.session_state['rate_limited_until'] - time.time())
-    st.warning(f"Yahoo Finance API rate limited. Wait {remaining} seconds.")
+    st.warning(f"Yahoo Finance rate limit reached. Try 30-second refresh. Wait {remaining} seconds.")
     with st.expander("ℹ️ About Rate Limiting"):
         st.markdown("""
-        Yahoo Finance may restrict data retrieval. If rate limited:
-        - Wait a few minutes before retrying
-        - Avoid auto-refresh intervals below 1 minute
-        - Use one ticker at a time
+        **Yahoo Finance Rate Limits:**
+        - Frequent calls may trigger bans. Use 15–30s intervals.
+        - **Alternatives**: Polygon.io (real-time options, free tier), Alpaca ($30+/mo), Tradier ($20+/mo).
+        - Wait 5–10 minutes or try another ticker.
         """)
     st.stop()
 
 st.title("📈 Options Greeks Buy Signal Analyzer")
-st.markdown("**Enhanced for volatile markets** with real-time updates")
+st.markdown("**Enhanced for volatile markets** with real-time signals")
 
 with st.sidebar:
     st.header("⚙️ Configuration")
+    debug_mode = st.checkbox("Debug Mode", value=False, help="Show failed conditions for all options")
     st.subheader("🔄 Auto-Refresh Settings")
     enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
     if enable_auto_refresh:
-        refresh_interval = st.selectbox("Refresh Interval", options=[1, 5, 10, 30, 60], index=0, format_func=lambda x: f"{x} second{'s' if x != 1 else ''}")
+        refresh_interval = st.selectbox("Refresh Interval", options=[15, 30, 60], index=0, format_func=lambda x: f"{x} seconds")
         st.session_state.refresh_system.start(refresh_interval)
-        st.info(f"Data will refresh every {refresh_interval} second{'s' if refresh_interval != 1 else ''}")
+        st.info(f"Refreshing every {refresh_interval} seconds")
     else:
         st.session_state.refresh_system.stop()
-    st.subheader("Base Signal Thresholds")
+    st.subheader("Base Signal Parameters")
     col1, col2 = st.columns(2)
     with col1:
-        st.write("**Calls**")
+        st.write("**Call Options:**")
         SIGNAL_THRESHOLDS['call']['delta_base'] = st.slider("Base Delta", 0.1, 1.0, 0.5, 0.1)
         SIGNAL_THRESHOLDS['call']['gamma_base'] = st.slider("Base Gamma", 0.01, 0.2, 0.05, 0.01)
-        SIGNAL_THRESHOLDS['call']['rsi_base'] = st.slider("Base RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider("Min Volume", 100, 5000, 1000, 100)
+        SIGNAL_THRESHOLDS['call']['rsi_min'] = st.slider("Min RSI", 30, 70, 40, 1)
+        SIGNAL_THRESHOLDS['call']['volume_min'] = st.slider("Min Volume", 0, 1000, 500, 50)
     with col2:
-        st.write("**Puts**")
-        SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Base Delta ", -1.0, -0.1, -0.5, 0.1)
+        st.write("**Put Options:**")
+        SIGNAL_THRESHOLDS['put']['delta_base'] = -0.5, st.slider("Base Delta", -1.0, -0.1, -0.5, 0.1)
         SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Base Gamma ", 0.01, 0.2, 0.05, 0.01)
-        SIGNAL_THRESHOLDS['put']['rsi_base'] = st.slider("Base RSI ", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 50, 5)
-        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 100, 5000, 1000, 100)
-    st.write("**Common**")
-    SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta", 0.01, 0.1, 0.05, 0.01)
-    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier_base'] = st.slider("Volume Multiplier", 1.0, 3.0, 1.0, 0.1)
+        SIGNAL_THRESHOLDS['put']['rsi_max'] = st.slider("Max RSI", 30, 70, 60, 1)
+        SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Min Volume ", 0, 1000, 500, 50)
+    st.write("**Common Settings:**")
+    SIGNAL_THRESHOLDS['call']['theta_base'] = SIGNAL_THRESHOLDS['put']['theta_base'] = st.slider("Max Theta ", 0.01, 0.1, 0.05, 0.01)
+    SIGNAL_THRESHOLDS['call']['volume_multiplier_base'] = SIGNAL_THRESHOLDS['put']['volume_multiplier'] = st.slider("Volume Multiplier ", 0.5, 3.0, 1.0, 0.1)
     st.subheader("🎯 Profit Targets")
     CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
-    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01)
+    CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target %)", 0.05, 0.50, 0.15, 0.01)
     CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01)
 
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
 refresh_status = st.empty()
 if enable_auto_refresh:
-    elapsed = time.time() - st.session_state.last_refresh
+    elapsed = time.time() - st.session_state['last_refresh']
     remaining = max(0, refresh_interval - elapsed)
-    refresh_status.info(f"⏱️ Next refresh in {int(remaining)} second{'s' if int(remaining) != 1 else ''}")
+    refresh_status.info(f"⏱️ Next refresh in {int(remaining)} second{'s' if int(remaining) != 0 else ''}")
 else:
     refresh_status.empty()
 
 if ticker:
     try:
+        if not is_market_open():
+            st.warning("Signals disabled outside market hours (9:30 AM–4:00 PM Eastern)")
+            st.stop()
+
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            if is_market_open():
-                st.success("✅ Market is OPEN")
-            elif is_premarket():
-                st.warning("⏰ PREMARKET Session")
-            else:
-                st.info("💤 Market is CLOSED")
+            st.success("✅ Market is OPEN")
         with col2:
-            current_price = get_current_price(ticker)
-            st.metric("Current Price", f"${current_price:.2f}")
+            current_price, fetch_time = get_current_price(ticker)
+            st.metric("Current Price", f"${current_price:.2f}", delta=f"Fetched at {fetch_time}")
         with col3:
-            if 'last_refresh' in st.session_state:
-                last_update = datetime.datetime.fromtimestamp(st.session_state.last_refresh)
-                st.caption(f"📅 Last updated: {last_update.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                st.caption("📅 Last updated: Never")
+            last_update = datetime.datetime.fromtimestamp(st.session_state['last_refresh'])
+            st.caption(f"📅 Last updated: {last_update.strftime('%H:%M:%S')}")
         with col4:
-            if st.button("🔁 Refresh Now", key="manual_refresh"):
+            if st.button("🔄 Manual Refresh", key="manual_refresh"):
                 st.cache_data.clear()
                 st.session_state.last_refresh = time.time()
                 st.session_state.refresh_counter += 1
@@ -696,9 +709,9 @@ if ticker:
             with col2:
                 st.progress(min(put_score / 100, 1.0), text=f"Put Signal Strength: {put_score:.1f}%")
             if call_score > 80:
-                st.success("🚀 Strong Call Opportunity Detected!")
+                st.success("🚗 Strong Call Opportunity Detected!")
             elif put_score > 80:
-                st.success("📉 Strong Put Opportunity Detected!")
+                st.error("📉 Strong Put Opportunity Detected!")
             elif call_score > 60 or put_score > 60:
                 st.info("⚠️ Moderate Opportunity Detected")
             else:
@@ -706,17 +719,17 @@ if ticker:
 
         tab1, tab2, tab3 = st.tabs(["📊 Signals", "📈 Stock Data", "⚙️ Analysis Details"])
         with tab1:
-            with st.spinner("Fetching and analyzing data..."):
+            with st.spinner("Analyzing signals..."):
                 if df.empty:
-                    st.error(f"No stock data for {ticker}. Check ticker or try again.")
+                    st.error(f"No stock data for {ticker}. Check ticker or retry.")
                     st.stop()
                 df = compute_indicators(df)
                 if df.empty:
                     st.error("Cannot compute indicators.")
                     st.stop()
                 current_price = df.iloc[-1]['Close']
-                st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**")
-                atr_pct = df.iloc[-1].get('ATR_pct', 0)
+                st.success(f"✅ **{ticker}** - Current Price: **${current_price:.2f}**)s")
+                atr_pct = df.iloc[-1].get('ATR_pct', '0')
                 volatility_status = "Low"
                 if not pd.isna(atr_pct):
                     if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
@@ -725,55 +738,47 @@ if ticker:
                         volatility_status = "High"
                     elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
                         volatility_status = "Medium"
-                    st.info(f"📈 Volatility (ATR%): {atr_pct*100:.2f}% - **{volatility_status}**")
-                st.subheader("🧠 Diagnostic Information")
-                if is_premarket():
-                    st.warning("⚠️ PREMARKET: Relaxed thresholds")
-                elif is_early_market():
-                    st.warning("⚠️ EARLY MARKET: Relaxed thresholds")
-                st.write("📏 Current Signal Thresholds:")
-                col1, col2 = st.columns(2)
+                    st.info(f"📊 Volatility (ATR%): {atr_pct*100:.2f}% - {volatility_status}")
+                st.subheader("🧠 Diagnostics")
+                st.write("📏 Signal Thresholds:")
+                col1, col2 = st.columns Freshwater(2)
                 with col1:
-                    st.caption(f"**Calls:** Δ ≥ {SIGNAL_THRESHOLDS['call']['delta_base']:.2f} | "
-                              f"Γ ≥ {SIGNAL_THRESHOLDS['call']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THRESHOLDS['call']['volume_min']}")
+                    st.caption(f"**Calls:** Δ ≥ {‘call’]['thresholds']['delta_base']:.2f} | Γ ≥ {SIGNAL_THRESHOLDS['call']['gamma_base']:.3f} | Vol > {‘call’]['volume_min']}")
                 with col2:
-                    st.caption(f"**Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | "
-                              f"Γ ≥ {SIGNAL_THRESHOLDS['put']['gamma_base']:.3f} | "
-                              f"Vol > {SIGNAL_THRESHOLDS['put']['volume_min']}")
+                    st.caption(f"Puts:** Δ ≤ {SIGNAL_THRESHOLDS['put']['delta_base']:.2f} | Γ ≥ {‘put’]:.3f} | Vol > {‘put’]}")
                 expiries = get_options_expiries(ticker)
                 if not expiries:
-                    st.error(f"No options expiries for {ticker}. Possible causes: rate limit, non-optionable ticker, or API issue. Try another ticker or wait.")
+                    st.error(f"No options expiries for {ticker}. Possible causes: rate limit, non-optionable ticker, or API issue.")
                     st.stop()
                 expiry_mode = st.radio("Expiration Filter:", ["0DTE Only", "All Near-Term"], index=1)
                 today = datetime.date.today()
-                expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today] if expiry_mode == "0DTE Only" else expiries[:5]
+                expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today] [:1] if expiry_mode == "0DTE Only" else expiries[:3]  # Limit expiries
                 if not expiries_to_use:
                     st.warning("No expiries for selected mode.")
                     st.stop()
                 st.info(f"Analyzing {len(expiries_to_use)} expiries: {', '.join(expiries_to_use)}")
                 calls, puts = fetch_options_data(ticker, expiries_to_use)
                 if calls.empty and puts.empty:
-                    st.error("No options data.")
+                    st.error("No options data available.")
                     st.stop()
+                st.write(f"Before filtering: {len(calls)} calls, {len(puts)} puts")
                 for option_df in [calls, puts]:
                     option_df['is_0dte'] = option_df['expiry'].apply(lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today)
-                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-5, 5), 1)
+                strike_range = st.slider("Strike Range Around Current Price ($):", -50, 50, (-10, 10), 1)  # Wider range
                 min_strike = current_price + strike_range[0]
                 max_strike = current_price + strike_range[1]
-                calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)].copy()
-                puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)].copy()
+                calls_filtered = calls[(calls['strike'][:] >= min_strike) & (calls['strike'] <= max_strike)].copy()
+                puts_filtered = puts[(puts['strike'][:] >= min_strike[:] & (puts['strike'] <= max_strike)].copy()
                 if not calls_filtered.empty:
                     calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
                 if not puts_filtered.empty:
                     puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                m_filter = st.multiselect("Filter by Moneyness:", ["ITM", "NTM", "ATM", "OTM"], default=["ITM", "NTM", "ATM"])
+                m_filter = st.multiselect("Filter by Moneyness:", ["ITM", "NTM", "ATM", "OTM"], default=["ITM", "NTM", "ATM", "OTM"])  # Include OTM
                 if not calls_filtered.empty:
                     calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
                 if not puts_filtered.empty:
                     puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
-                st.write(f"🔍 Filtered Options: {len(calls_filtered)} calls, {len(puts_filtered)} puts "
-                         f"(Strike range: ${min_strike:.2f}-${max_strike:.2f})")
+                st.write(f"🔍 After filtering: {len(calls_filtered)} calls, {len(puts_filtered)} puts (Strikes: ${min_strike:.2f}–${max_strike:.2f})")
                 col1, col2 = st.columns(2)
                 with col1:
                     st.subheader("📈 Call Option Signals")
@@ -782,12 +787,17 @@ if ticker:
                         for _, row in calls_filtered.iterrows():
                             is_0dte = row.get('is_0dte', False)
                             signal_result = generate_signal(row, "call", df, is_0dte)
+                            if debug_mode:
+                                st.write(f"**Debug: {row['contractSymbol']} - Signal: {signal_result['signal']}**")
+                                if not signal_result['signal']:
+                                    st.write("Failed conditions:", signal_result['failed_conditions'])
                             if signal_result['signal']:
                                 row_dict = row.to_dict()
                                 row_dict.update({
                                     'signal_score': signal_result['score'],
                                     'thresholds': signal_result['thresholds'],
                                     'passed_conditions': signal_result['passed_conditions'],
+                                    'refresh_count': signal_result['refresh_count'],
                                     'is_0dte': is_0dte,
                                     'profit_target': signal_result['profit_target'],
                                     'stop_loss': signal_result['stop_loss'],
@@ -797,34 +807,28 @@ if ticker:
                                 call_signals.append(row_dict)
                         if call_signals:
                             signals_df = pd.DataFrame(call_signals).sort_values('signal_score', ascending=False)
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta',
-                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte', 'time_decay']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness',
+                                            'signal_score', 'refresh_count', 'time_decay', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
-                            st.dataframe(signals_df[available_cols].round(4), use_container_width=True, hide_index=True)
+                            st.dataframe(signals_df[available_cols].round(4), use_container_width=True)
                             if signals_df.iloc[0]['thresholds']:
                                 th = signals_df.iloc[0]['thresholds']
                                 st.info(f"Thresholds: Δ ≥ {th['delta_min']:.2f} | Γ ≥ {th['gamma_min']:.3f} | "
-                                        f"Θ ≤ {th['theta_base']:.3f} | RSI > {th['rsi_min']:.1f} | Vol > {th['volume_min']}")
+                                        f"Θ ≤ {th['theta_base']:.3f} | RSI ≥ {th['rsi_min']:.1f} | Vol > {th['volume_min']}")
                             with st.expander("View Conditions for Top Signal"):
-                                if signals_df.iloc[0]['passed_conditions']:
-                                    st.write("✅ Passed Conditions:")
-                                    for condition in signals_df.iloc[0]['passed_conditions']:
-                                        st.write(f"- {condition}")
-                                else:
-                                    st.info("No conditions passed")
-                            st.success(f"Found {len(call_signals)} call signals!")
+                                st.write("✅ Passed Conditions:")
+                                for condition in signals_df.iloc[0]['passed_conditions']:
+                                    st.write(f"- {condition}")
+                            st.success(f"✅ Found {len(call_signals)} call signals")
                         else:
-                            st.info("No call signals found.")
-                            if not calls_filtered.empty:
+                            st.warning("No call signals detected.")
+                            if debug_mode and not calls_filtered.empty:
                                 sample_call = calls_filtered.iloc[0]
                                 is_0dte = sample_call.get('is_0dte', False)
                                 result = generate_signal(sample_call, "call", df, is_0dte)
-                                if 'failed_conditions' in result:
-                                    st.write("Top call option failed conditions:")
-                                    for condition in result['failed_conditions']:
-                                        st.write(f"- {condition}")
+                                st.write("Sample call failed due to:", result['failed_conditions'])
                     else:
-                        st.info("No call options for selected filters.")
+                        st.info("No call options after filtering.")
                 with col2:
                     st.subheader("📉 Put Option Signals")
                     if not puts_filtered.empty:
@@ -832,12 +836,17 @@ if ticker:
                         for _, row in puts_filtered.iterrows():
                             is_0dte = row.get('is_0dte', False)
                             signal_result = generate_signal(row, "put", df, is_0dte)
+                            if debug_mode:
+                                st.write(f"**Debug: {row['contractSymbol']} - Signal: {signal_result['signal']}**")
+                                if not signal_result['signal']:
+                                    st.write("Failed conditions:", signal_result['failed_conditions'])
                             if signal_result['signal']:
                                 row_dict = row.to_dict()
                                 row_dict.update({
                                     'signal_score': signal_result['score'],
                                     'thresholds': signal_result['thresholds'],
                                     'passed_conditions': signal_result['passed_conditions'],
+                                    'refresh_count': signal_result['refresh_count'],
                                     'is_0dte': is_0dte,
                                     'profit_target': signal_result['profit_target'],
                                     'stop_loss': signal_result['stop_loss'],
@@ -847,42 +856,32 @@ if ticker:
                                 put_signals.append(row_dict)
                         if put_signals:
                             signals_df = pd.DataFrame(put_signals).sort_values('signal_score', ascending=False)
-                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta',
-                                           'moneyness', 'signal_score', 'profit_target', 'stop_loss', 'holding_period', 'is_0dte', 'time_decay']
+                            display_cols = ['contractSymbol', 'strike', 'lastPrice', 'volume', 'delta', 'gamma', 'theta', 'moneyness',
+                                            'signal_score', 'refresh_count', 'time_decay', 'profit_target', 'stop_loss', 'holding_period']
                             available_cols = [col for col in display_cols if col in signals_df.columns]
-                            st.dataframe(signals_df[available_cols].round(4), use_container_width=True, hide_index=True)
+                            st.dataframe(signals_df[available_cols].round(4), use_container_width=True)
                             if signals_df.iloc[0]['thresholds']:
                                 th = signals_df.iloc[0]['thresholds']
                                 st.info(f"Thresholds: Δ ≤ {th['delta_max']:.2f} | Γ ≥ {th['gamma_min']:.3f} | "
                                         f"Θ ≤ {th['theta_base']:.3f} | RSI < {th['rsi_max']:.1f} | Vol > {th['volume_min']}")
                             with st.expander("View Conditions for Top Signal"):
-                                if signals_df.iloc[0]['passed_conditions']:
-                                    st.write("✅ Passed Conditions:")
-                                    for condition in signals_df.iloc[0]['passed_conditions']:
-                                        st.write(f"- {condition}")
-                                else:
-                                    st.info("No conditions passed")
-                            st.success(f"Found {len(put_signals)} put signals!")
+                                st.write("✅ Conditions Passed:")
+                                for condition in signals_df.iloc[0]['passed_conditions']:
+                                    st.write(f"- {condition}")
+                            st.success(f"✅ Found {len(put_signals)} put signals")
                         else:
-                            st.info("No put signals found.")
-                            if not puts_filtered.empty:
+                            st.warning("No put signals detected.")
+                            if debug_mode and not puts_filtered.empty:
                                 sample_put = puts_filtered.iloc[0]
                                 is_0dte = sample_put.get('is_0dte', False)
                                 result = generate_signal(sample_put, "put", df, is_0dte)
-                                if 'failed_conditions' in result:
-                                    st.write("Top put option failed conditions:")
-                                    for condition in result['failed_conditions']:
-                                        st.write(f"- {condition}")
+                                st.write("Sample put failed due to:", result['failed_conditions'])
                     else:
-                        st.info("No put options for selected filters.")
-                del calls_filtered, puts_filtered, df  # Memory cleanup
+                        st.info("No put options after filtering.")
+                del calls_filtered, puts_filtered, df
         with tab2:
             if 'df' in locals() and not df.empty:
                 st.subheader("📊 Stock Data & Indicators")
-                if is_premarket():
-                    st.info("🔔 Pre-market data")
-                elif not is_market_open():
-                    st.info("🔔 After-hours data")
                 latest = df.iloc[-1]
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
@@ -905,17 +904,17 @@ if ticker:
                 with col4:
                     st.metric("Volatility (ATR%)", f"{latest['ATR_pct']*100:.2f}%" if not pd.isna(latest['ATR_pct']) else "N/A")
                 st.subheader("Recent Data")
-                display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'EMA_50', 'EMA_200', 'RSI', 'VWAP', 'MACD', 'MACD_Signal', 'Keltner_Upper', 'Keltner_Lower', 'ATR_pct', 'Volume', 'avg_vol']].round(2)
+                display_df = df.tail(10)[['Close', 'EMA_9', 'EMA_20', 'EMA_50', 'RSI', 'VWAP', 'MACD', 'MACD_Signal', 'Keltner_Upper', 'Keltner_Lower', 'ATR_pct', 'Volume', 'avg_vol']].round(2)
                 display_df['ATR_pct'] = display_df['ATR_pct'] * 100
                 display_df['Volume Ratio'] = display_df['Volume'] / display_df['avg_vol']
-                st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%', 'avg_vol': 'Avg Vol'}), use_container_width=True)
+                st.dataframe(display_df.rename(columns={'ATR_pct': 'ATR%'}, 'avg_vol': 'Avg Vol'), use_container_width=True)
         with tab3:
             st.subheader("🔍 Analysis Details")
             if enable_auto_refresh:
-                st.info(f"🔄 Auto-refresh: Every {refresh_interval} second{'s' if refresh_interval != 1 else ''}")
+                st.info(f"🔄 Auto-refresh: Every {refresh_interval} seconds")
             else:
                 st.info("🔄 Auto-refresh disabled")
-            if 'calls_filtered' in locals() and not calls_filtered.empty:
+            if 'calls' in locals() and not calls_filtered.empty:
                 st.write("**Sample Call Analysis:**")
                 sample_call = calls_filtered.iloc[0]
                 is_0dte = sample_call.get('is_0dte', False)
@@ -928,24 +927,29 @@ if ticker:
             st.write("**System Configuration:**")
             st.json(CONFIG)
     except Exception as e:
-        logger.error(f"Main interface error: {str(e)}")
-        st.error(f"Error: {str(e)}. Refresh page or try another ticker.")
+        logger.error(f"Main error: {str(e)}")
+        st.error(f"Error: {str(e)}. Try another ticker or refresh.")
 else:
     st.info("Enter a ticker to begin.")
-    with st.expander("ℹ️ How to use this app"):
+    with st.expander("📖 How to Use"):
         st.markdown("""
-        **Steps to analyze options:**
-        1. Enter a stock ticker (e.g., SPY, QQQ, AAPL)
-        2. Configure auto-refresh settings (optional)
-        3. Select expiration filter (0DTE or near-term)
-        4. Adjust strike range
-        5. Filter by moneyness (ITM, ATM, OTM)
-        6. Review signals
+        **Steps to Analyze Options:**
+        1. Enter a ticker (e.g., SPY, QQQ, AAPL).
+        2. Enable auto-refresh (15–30s recommended).
+        3. Choose expiration (0DTE or near-term).
+        4. Adjust strike range and moneyness filters.
+        5. Enable debug mode to troubleshoot signals.
+        6. Review signals in the “Signals” tab.
 
-        **Key Features:**
-        - **Real-Time Refresh:** Updates every 1 second
-        - **0DTE Time Decay:** Adjusts signals for theta decay
-        - **Robust Error Handling:** Prevents crashes
-        - **Dynamic Thresholds:** Adapts to volatility
-        - **Profit Targets & Stops:** Clear exit strategies
+        **Features**:
+        - **Real-Time**: 15s+ refresh with fresh data.
+        - **0DTE Decay**: Theta-adjusted signals.
+        - **Robust**: Error handling and logging.
+        - **Adaptive**: Volatility-based thresholds.
+        - **Exits**: Profit targets and stop losses.
+
+        **Tips**:
+        - Test during market hours (9:30 AM–4:00 PM Eastern).
+        - Use debug mode to diagnose signal failures.
+        - Consider Polygon.io or Alpaca for better data.
         """)
