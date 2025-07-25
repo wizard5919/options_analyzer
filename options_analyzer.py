@@ -607,7 +607,7 @@ def calculate_profit_targets(option: pd.Series) -> Tuple[float, float]:
     return profit_target, stop_loss
 
 def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
-    """Generate trading signal withdetailed analysis using dynamic thresholds"""
+    """Generate trading signal with detailed analysis using dynamic thresholds"""
     if stock_df.empty:
         return {'signal': False, 'reason': 'No stock data available'}
     
@@ -1213,9 +1213,9 @@ if ticker:
             st.subheader("Recent News")
             for item in news[:10]:  # Show more news
                 with st.expander(item.get('title', 'Untitled')):
-                    st.write(item['link'])
-                    summary = item.get('summary', 'No summary available')
-                    st.write(summary)
+                    st.write(item.get('publisher', 'Unknown'))
+                    st.write(item.get('link', 'No link available'))
+                    st.write(item.get('summary', 'No summary available'))
         else:
             st.info("No recent news available.")
         
