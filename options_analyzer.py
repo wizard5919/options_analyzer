@@ -1315,15 +1315,4 @@ with st.expander("ℹ️ About Rate Limiting"):
     - Use the app with one ticker at a time to reduce load
     - Consider upgrading to a premium data provider for higher limits
     """) {thresholds['volume_min']}")
-            ]
-        else:
-            volume_ok = option_volume > thresholds['volume_min']
-            
-            conditions = [
-                (delta <= thresholds['delta_max'], f"Delta <= {thresholds['delta_max']:.2f}", delta),
-                (gamma >= thresholds['gamma_min'], f"Gamma >= {thresholds['gamma_min']:.3f}", gamma),
-                (theta <= thresholds['theta_base'], f"Theta <= {thresholds['theta_base']:.3f}", theta),
-                (ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"),
-                (rsi is not None and rsi < thresholds['rsi_max'], f"RSI < {thresholds['rsi_max']:.1f}", rsi),
-                (vwap is not None and close < vwap, "Price < VWAP", f"{close:.2f} < {vwap:.2f}" if vwap else "N/A"),
-                (volume_ok, f"Option Vol > {thresholds['volume_min']}", f"{option_volume:.0f} >
+         
