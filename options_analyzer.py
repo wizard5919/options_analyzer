@@ -324,6 +324,18 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df['EMA_20'] = np.nan
             
+        if len(close) >= 50:
+            ema_50 = EMAIndicator(close=close, window=50)
+            df['EMA_50'] = ema_50.ema_indicator()
+        else:
+            df['EMA_50'] = np.nan
+            
+        if len(close) >= 200:
+            ema_200 = EMAIndicator(close=close, window=200)
+            df['EMA_200'] = ema_200.ema_indicator()
+        else:
+            df['EMA_200'] = np.nan
+            
         if len(close) >= 14:
             rsi = RSIIndicator(close=close, window=14)
             df['RSI'] = rsi.rsi()
@@ -695,6 +707,56 @@ def generate_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dt
         
     except Exception as e:
         return {'signal': False, 'reason': f'Error in signal generation: {str(e)}'}
+
+def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
+    """Calculate a score for call/put scanner based on technical indicators"""
+    if stock_df.empty:
+        return 0.0
+    
+    latest = stock_df.iloc[-1]
+    
+    score = 0.0
+    max_score = 5.0  # Five conditions
+    
+    try:
+        close = float(latest['Close'])
+        ema_9 = float(latest['EMA_9']) if not pd.isna(latest['EMA_9']) else None
+        ema_20 = float(latest['EMA_20']) if not pd.isna(latest['EMA_20']) else None
+        ema_50 = float(latest['EMA_50']) if not pd.isna(latest['EMA_50']) else None
+        ema_200 = float(latest['EMA_200']) if not pd.isna(latest['EMA_200']) else None
+        rsi = float(latest['RSI']) if not pd.isna(latest['RSI']) else None
+        macd = float(latest['MACD']) if not pd.isna(latest['MACD']) else None
+        macd_signal = float(latest['MACD_signal']) if not pd.isna(latest['MACD_signal']) else None
+        keltner_upper = float(latest['KC_upper']) if not pd.isna(latest['KC_upper']) else None
+        keltner_lower = float(latest['KC_lower']) if not pd.isna(latest['KC_lower']) else None
+        
+        if side == "call":
+            if ema_9 and ema_20 and close > ema_9 > ema_20:
+                score += 1.0
+            if ema_50 and ema_200 and ema_50 > ema_200:
+                score += 1.0
+            if rsi and rsi > 50:
+                score += 1.0
+            if macd and macd_signal and macd > macd_signal:
+                score += 1.0
+            if keltner_upper and close > keltner_upper:
+                score += 1.0
+        else:
+            if ema_9 and ema_20 and close < ema_9 < ema_20:
+                score += 1.0
+            if ema_50 and ema_200 and ema_50 < ema_200:
+                score += 1.0
+            if rsi and rsi < 50:
+                score += 1.0
+            if macd and macd_signal and macd < macd_signal:
+                score += 1.0
+            if keltner_lower and close < keltner_lower:
+                score += 1.0
+        
+        return (score / max_score) * 100
+    except Exception as e:
+        st.error(f"Error in scanner score calculation: {str(e)}")
+        return 0.0
 
 def create_stock_chart(df: pd.DataFrame):
     """Create TradingView-style chart with indicators using Plotly"""
@@ -1149,6 +1211,16 @@ if ticker:
                         st.bar_chart(scores)
                     else:
                         st.info("No put signals")
+                
+                # Scanner scores
+                call_score = calculate_scanner_score(df, 'call')
+                put_score = calculate_scanner_score(df, 'put')
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Call Scanner Score", f"{call_score:.2f}%")
+                with col2:
+                    st.metric("Put Scanner Score", f"{put_score:.2f}%")
                 
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
