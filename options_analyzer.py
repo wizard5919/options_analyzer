@@ -1305,7 +1305,8 @@ if ticker:
             for item in news[:10]:  # Show more news
                 with st.expander(item.get('title', 'Untitled')):
                     st.write(item.get('publisher', 'Unknown'))
-                    st.write(item.get('link', 'No link available'))
+                    link = item.get('link', 'No link available')
+                    st.write(f"**Link:** {link}")
                     st.write(item.get('summary', 'No summary available'))
         else:
             st.info("No recent news available.")
