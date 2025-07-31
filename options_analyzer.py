@@ -7,7 +7,6 @@ import time
 import warnings
 import pytz
 import math
-import threading
 from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
@@ -83,38 +82,6 @@ SIGNAL_THRESHOLDS = {
 }
 
 # =============================
-# AUTO-REFRESH SYSTEM
-# =============================
-
-class AutoRefreshSystem:
-    def __init__(self):
-        self.running = False
-        self.thread = None
-        self.refresh_interval = 60  # Default interval
-        
-    def start(self, interval):
-        if self.running and interval == self.refresh_interval:
-            return  # Already running with same interval
-        
-        self.stop()  # Stop any existing thread
-        self.running = True
-        self.refresh_interval = interval
-        
-        def refresh_loop():
-            while self.running:
-                time.sleep(interval)
-                if self.running:  # Double-check after sleep
-                    st.rerun()
-        
-        self.thread = threading.Thread(target=refresh_loop, daemon=True)
-        self.thread.start()
-    
-    def stop(self):
-        self.running = False
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
-
-# =============================
 # UTILITY FUNCTIONS
 # =============================
 
@@ -174,29 +141,37 @@ def get_polygon_realtime_price(ticker: str) -> float:
         return get_current_price(ticker)
     
     try:
-        client = RESTClient(CONFIG['POLYGON_API_KEY'])
+        # Configure Polygon for real-time with faster timeout
+        client = RESTClient(CONFIG['POLYGON_API_KEY'], trace=False, connect_timeout=0.5)
         trade = client.stocks_equities_last_trade(ticker)
         return trade.last.price
     except Exception as e:
         st.error(f"Polygon error: {str(e)}. Falling back to Yahoo Finance.")
         return get_current_price(ticker)
 
+# NEW: Optimized price fetching with smart caching
 def get_current_price(ticker: str) -> float:
-    """Get the most current price"""
-    # First try Polygon if API key is available
-    if CONFIG['POLYGON_API_KEY']:
-        return get_polygon_realtime_price(ticker)
+    """Get real-time price with caching optimized for frequent updates"""
+    cache_key = f"price_{ticker}_{int(time.time()) // 5}"  # Cache for 5-second chunks
     
-    # Fallback to Yahoo Finance
-    try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(period='1d', interval='1m', prepost=True)
-        if not data.empty:
-            return data['Close'].iloc[-1]
-        return 0.0
-    except Exception as e:
-        st.error(f"Error getting current price: {str(e)}")
-        return 0.0
+    @st.cache_data(ttl=5, show_spinner=False)
+    def _fetch_price(ticker):
+        try:
+            # Polygon real-time
+            if CONFIG['POLYGON_API_KEY']:
+                # Configure Polygon for real-time with faster timeout
+                client = RESTClient(CONFIG['POLYGON_API_KEY'], trace=False, connect_timeout=0.5)
+                trade = client.stocks_equities_last_trade(ticker)
+                return trade.last.price
+            
+            # Yahoo Finance fallback
+            stock = yf.Ticker(ticker)
+            data = stock.history(period='1d', interval='1m', prepost=True)
+            return data['Close'].iloc[-1] if not data.empty else 0.0
+        except Exception:
+            return 0.0
+    
+    return _fetch_price(ticker)
 
 def safe_api_call(func, *args, max_retries=CONFIG['MAX_RETRIES'], **kwargs):
     """Safely call API functions with retry logic"""
@@ -948,13 +923,14 @@ def create_stock_chart(df: pd.DataFrame):
 # STREAMLIT INTERFACE
 # =============================
 
-# Initialize session state
+# Initialize session state for auto-refresh
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
-if 'refresh_system' not in st.session_state:
-    st.session_state.refresh_system = AutoRefreshSystem()
+    st.session_state.refresh_interval = 60  # Default interval
+if 'auto_refresh_enabled' not in st.session_state:
+    st.session_state.auto_refresh_enabled = False
 
 # Rate limit check
 if 'rate_limited_until' in st.session_state:
@@ -991,19 +967,21 @@ with st.sidebar:
     # Auto-refresh section with icon
     with st.container():
         st.subheader("🔄 Auto-Refresh Settings")
-        enable_auto_refresh = st.checkbox("Enable Auto-Refresh", value=False)
+        # NEW: Updated auto-refresh configuration
+        enable_auto_refresh = st.checkbox("Enable Auto-Refresh", 
+                                         value=st.session_state.auto_refresh_enabled,
+                                         key='auto_refresh_enabled')
         
         if enable_auto_refresh:
             refresh_interval = st.selectbox(
                 "Refresh Interval",
-                options=[60, 120, 300],
-                index=1,
-                format_func=lambda x: f"{x} seconds"
+                options=[1, 5, 15, 30, 60],
+                index=2,
+                format_func=lambda x: f"{x} seconds",
+                key='refresh_interval_selector'
             )
-            st.session_state.refresh_system.start(refresh_interval)
+            st.session_state.refresh_interval = refresh_interval
             st.info(f"Data will refresh every {refresh_interval} seconds")
-        else:
-            st.session_state.refresh_system.stop()
     
     # Thresholds section with expanders and icons
     with st.expander("📊 Base Signal Thresholds", expanded=True):
@@ -1346,8 +1324,8 @@ if ticker:
     with tab3:
         st.subheader("🔍 Analysis Details")
         
-        if enable_auto_refresh:
-            st.info(f"🔄 Auto-refresh enabled: Every {refresh_interval} seconds")
+        if st.session_state.auto_refresh_enabled:
+            st.info(f"🔄 Auto-refresh enabled: Every {st.session_state.refresh_interval} seconds")
         else:
             st.info("🔄 Auto-refresh disabled")
         
@@ -1479,3 +1457,13 @@ with st.expander("ℹ️ About Rate Limiting"):
     - Use the app with one ticker at a time to reduce load
     - Consider upgrading to a premium data provider for higher limits
     """)
+
+# NEW: Auto-refresh logic at the bottom of the script
+if st.session_state.get('auto_refresh_enabled', False):
+    current_time = time.time()
+    elapsed = current_time - st.session_state.last_refresh
+    if elapsed > st.session_state.refresh_interval:
+        st.session_state.last_refresh = current_time
+        st.session_state.refresh_counter += 1
+        st.cache_data.clear()
+        st.rerun()
