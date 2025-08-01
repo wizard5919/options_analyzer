@@ -30,14 +30,14 @@ st.set_page_config(
 
 CONFIG = {
     'POLYGON_API_KEY': '',  # Will be set from user input
-    'MAX_RETRIES': 3,
-    'RETRY_DELAY': 1,
+    'MAX_RETRIES': 5,  # Increased from 3 to 5
+    'RETRY_DELAY': 2,  # Increased from 1 to 2 seconds
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
-    'CACHE_TTL': 120,  # 2 minutes for options data
-    'STOCK_CACHE_TTL': 60,  # 1 minute for stock data
-    'RATE_LIMIT_COOLDOWN': 180,  # 3 minutes
-    'MIN_REFRESH_INTERVAL': 30,  # Minimum 30 seconds between refreshes
+    'CACHE_TTL': 300,  # Increased from 120 to 300 seconds (5 minutes)
+    'STOCK_CACHE_TTL': 300,  # Increased from 60 to 300 seconds (5 minutes)
+    'RATE_LIMIT_COOLDOWN': 300,  # Increased from 180 to 300 seconds (5 minutes)
+    'MIN_REFRESH_INTERVAL': 60,  # Increased from 30 to 60 seconds
     'MARKET_OPEN': datetime.time(9, 30),  # 9:30 AM Eastern
     'MARKET_CLOSE': datetime.time(16, 0),  # 4:00 PM Eastern
     'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern
@@ -368,14 +368,28 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-# NEW: Enhanced options data caching
+# NEW: Enhanced options data caching with better rate limit handling
 @st.cache_data(ttl=CONFIG['CACHE_TTL'], show_spinner=False)
 def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
-    """Cache full option chains and expiries together"""
+    """Cache full option chains and expiries together with rate limit protection"""
     try:
-        # Get expiries first
+        # Get expiries first with retries
         stock = yf.Ticker(ticker)
-        expiries = list(stock.options) if stock.options else []
+        expiries = []
+        
+        for attempt in range(CONFIG['MAX_RETRIES']):
+            try:
+                expiries = list(stock.options) if stock.options else []
+                break
+            except Exception as e:
+                if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
+                    wait_time = CONFIG['RETRY_DELAY'] * (2 ** attempt)  # Exponential backoff
+                    time.sleep(wait_time)
+                    if attempt == CONFIG['MAX_RETRIES'] - 1:
+                        st.warning(f"Rate limit reached after {CONFIG['MAX_RETRIES']} attempts. Using reduced data.")
+                else:
+                    st.error(f"Error fetching expiries: {str(e)}")
+                    return [], pd.DataFrame(), pd.DataFrame()
         
         if not expiries:
             return [], pd.DataFrame(), pd.DataFrame()
@@ -384,40 +398,46 @@ def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Dat
         all_calls = pd.DataFrame()
         all_puts = pd.DataFrame()
         
-        # Limit to first 10 expiries to avoid excessive API calls
-        expiries_to_fetch = expiries[:10]
+        # Limit to first 5 expiries to avoid excessive API calls
+        expiries_to_fetch = expiries[:5]
         
         for expiry in expiries_to_fetch:
-            try:
-                chain = stock.option_chain(expiry)
-                if chain is None:
-                    continue
+            for attempt in range(CONFIG['MAX_RETRIES']):
+                try:
+                    chain = stock.option_chain(expiry)
+                    if chain is None:
+                        continue
+                        
+                    calls = chain.calls.copy()
+                    puts = chain.puts.copy()
                     
-                calls = chain.calls.copy()
-                puts = chain.puts.copy()
-                
-                calls['expiry'] = expiry
-                puts['expiry'] = expiry
-                
-                # Add Greeks columns if missing
-                for df_name, df in [('calls', calls), ('puts', puts)]:
-                    if 'delta' not in df.columns:
-                        df['delta'] = np.nan
-                    if 'gamma' not in df.columns:
-                        df['gamma'] = np.nan
-                    if 'theta' not in df.columns:
-                        df['theta'] = np.nan
-                
-                all_calls = pd.concat([all_calls, calls], ignore_index=True)
-                all_puts = pd.concat([all_puts, puts], ignore_index=True)
-                
-                time.sleep(0.5)  # Rate limiting
-                
-            except Exception as e:
-                if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
-                    st.warning("Rate limit reached. Please wait before retrying.")
-                    break
-                continue
+                    calls['expiry'] = expiry
+                    puts['expiry'] = expiry
+                    
+                    # Add Greeks columns if missing
+                    for df_name, df in [('calls', calls), ('puts', puts)]:
+                        if 'delta' not in df.columns:
+                            df['delta'] = np.nan
+                        if 'gamma' not in df.columns:
+                            df['gamma'] = np.nan
+                        if 'theta' not in df.columns:
+                            df['theta'] = np.nan
+                    
+                    all_calls = pd.concat([all_calls, calls], ignore_index=True)
+                    all_puts = pd.concat([all_puts, puts], ignore_index=True)
+                    
+                    time.sleep(1.5)  # Increased delay to prevent rate limiting
+                    break  # Break out of retry loop on success
+                    
+                except Exception as e:
+                    if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
+                        wait_time = CONFIG['RETRY_DELAY'] * (2 ** attempt)  # Exponential backoff
+                        time.sleep(wait_time)
+                        if attempt == CONFIG['MAX_RETRIES'] - 1:
+                            st.warning(f"Rate limit reached for {ticker} {expiry}. Skipping this expiry.")
+                    else:
+                        st.error(f"Error fetching options chain: {str(e)}")
+                        break
         
         return expiries, all_calls, all_puts
         
@@ -920,13 +940,13 @@ if 'rate_limited_until' in st.session_state:
             st.markdown("""
             **Immediate Actions:**
             - Wait for the cooldown period to complete
-            - Avoid rapid refreshes (minimum 30 seconds between requests)
+            - Avoid rapid refreshes (minimum 60 seconds between requests)
             
             **Long-term Solutions:**
             - **Upgrade to Polygon Premium**: Higher rate limits and real-time data
             - **Use one ticker at a time**: Analyze tickers sequentially, not simultaneously  
-            - **Increase refresh intervals**: Set auto-refresh to 60+ seconds
-            - **Cache data longer**: The app now caches data for 2 minutes to reduce API calls
+            - **Increase refresh intervals**: Set auto-refresh to 120+ seconds
+            - **Cache data longer**: The app now caches data for 5 minutes to reduce API calls
             
             **Professional Usage:**
             Consider upgrading to premium data providers for production trading systems.
@@ -963,19 +983,19 @@ with st.sidebar:
         )
         
         if enable_auto_refresh:
-            refresh_options = [30, 60, 120, 300]  # Enforced minimum intervals
+            refresh_options = [60, 120, 300, 600]  # Enforced minimum intervals
             refresh_interval = st.selectbox(
                 "Refresh Interval (Rate-Limit Safe)",
                 options=refresh_options,
-                index=1,  # Default to 60 seconds
+                index=1,  # Default to 120 seconds
                 format_func=lambda x: f"{x} seconds" if x < 60 else f"{x//60} minute{'s' if x > 60 else ''}",
                 key='refresh_interval_selector'
             )
             st.session_state.refresh_interval = refresh_interval
             
-            if refresh_interval >= 120:
+            if refresh_interval >= 300:
                 st.success(f"✅ Conservative: {refresh_interval}s interval")
-            elif refresh_interval >= 60:
+            elif refresh_interval >= 120:
                 st.info(f"⚖️ Balanced: {refresh_interval}s interval")
             else:
                 st.warning(f"⚠️ Aggressive: {refresh_interval}s interval (may hit limits)")
@@ -1068,12 +1088,12 @@ with st.sidebar:
     with st.expander("⚡ Performance Tips"):
         st.markdown("""
         **🚀 Speed Optimizations:**
-        - Data cached for 2 minutes (options) / 1 minute (stocks)
+        - Data cached for 5 minutes (options) / 5 minutes (stocks)
         - Vectorized signal processing (no slow loops)
         - Smart refresh intervals prevent rate limits
         
         **💰 Cost Reduction:**
-        - Use conservative refresh intervals (60s+)
+        - Use conservative refresh intervals (120s+)
         - Analyze one ticker at a time
         - Consider Polygon Premium for heavy usage
         
@@ -1183,7 +1203,7 @@ if ticker:
                     week_end = today + datetime.timedelta(days=7)
                     expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
                 else:
-                    expiries_to_use = expiries[:8]  # First 8 expiries
+                    expiries_to_use = expiries[:5]  # Reduced from 8 to 5 expiries
                 
                 if not expiries_to_use:
                     st.warning(f"⚠️ No expiries available for {expiry_mode} mode.")
@@ -1549,14 +1569,14 @@ if ticker:
         with st.expander("⚡ Performance Optimizations", expanded=False):
             st.markdown("""
             **🚀 Speed Improvements:**
-            - **Smart Caching**: Options cached for 2min, stocks for 1min
+            - **Smart Caching**: Options cached for 5 min, stocks for 5 min
             - **Batch Processing**: Vectorized operations instead of slow loops
             - **Combined Functions**: Stock data + indicators computed together
             - **Rate Limit Protection**: Enforced minimum refresh intervals
             
             **💰 Cost Reduction:**
             - **Full Chain Caching**: Fetch all expiries once, filter locally
-            - **Conservative Defaults**: 60s refresh intervals prevent overuse
+            - **Conservative Defaults**: 120s refresh intervals prevent overuse
             - **Fallback Logic**: Yahoo Finance backup when Polygon unavailable
             
             **📊 Better Analysis:**
@@ -1710,7 +1730,7 @@ else:
         st.markdown("""
         **⚡ Performance Improvements:**
         - **2x Faster**: Smart caching reduces API calls by 60%
-        - **Rate Limit Protection**: Enforced 30s minimum refresh intervals
+        - **Rate Limit Protection**: Exponential backoff with 5 retries
         - **Batch Processing**: Vectorized operations eliminate slow loops
         - **Combined Functions**: Stock data + indicators computed together
         
@@ -1727,7 +1747,7 @@ else:
         - **Professional UX**: Color-coded metrics, tooltips, and guidance
         
         **💰 Cost Optimization:**
-        - **Conservative Defaults**: 60s refresh intervals prevent overuse
+        - **Conservative Defaults**: 120s refresh intervals prevent overuse
         - **Polygon Integration**: Premium data with higher rate limits
         - **Fallback Logic**: Yahoo Finance backup when needed
         - **Usage Analytics**: Track refresh patterns and optimize costs
@@ -1750,7 +1770,7 @@ else:
         
         **🔧 Optimization:**
         - **Polygon API**: Get premium data with higher rate limits
-        - **Conservative Refresh**: Use 60s+ intervals to avoid limits
+        - **Conservative Refresh**: Use 120s+ intervals to avoid limits
         - **Focused Analysis**: Analyze one ticker at a time for best performance
         """)
 
