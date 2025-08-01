@@ -7,6 +7,7 @@ import time
 import warnings
 import pytz
 import math
+import requests
 from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
@@ -14,6 +15,7 @@ from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient  # Polygon API client
+import scipy.signal
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -30,29 +32,47 @@ st.set_page_config(
 
 CONFIG = {
     'POLYGON_API_KEY': '',  # Will be set from user input
-    'MAX_RETRIES': 5,  # Increased from 3 to 5
-    'RETRY_DELAY': 2,  # Increased from 1 to 2 seconds
+    'ALPHA_VANTAGE_API_KEY': '',  # New: Alpha Vantage API key
+    'FMP_API_KEY': '',            # New: Financial Modeling Prep API key
+    'IEX_API_KEY': '',            # New: IEX Cloud API key
+    'MAX_RETRIES': 5,
+    'RETRY_DELAY': 2,
     'DATA_TIMEOUT': 30,
     'MIN_DATA_POINTS': 50,
-    'CACHE_TTL': 300,  # Increased from 120 to 300 seconds (5 minutes)
-    'STOCK_CACHE_TTL': 300,  # Increased from 60 to 300 seconds (5 minutes)
-    'RATE_LIMIT_COOLDOWN': 300,  # Increased from 180 to 300 seconds (5 minutes)
-    'MIN_REFRESH_INTERVAL': 60,  # Increased from 30 to 60 seconds
-    'MARKET_OPEN': datetime.time(9, 30),  # 9:30 AM Eastern
-    'MARKET_CLOSE': datetime.time(16, 0),  # 4:00 PM Eastern
-    'PREMARKET_START': datetime.time(4, 0),  # 4:00 AM Eastern
+    'CACHE_TTL': 300,
+    'STOCK_CACHE_TTL': 300,
+    'RATE_LIMIT_COOLDOWN': 300,
+    'MIN_REFRESH_INTERVAL': 60,
+    'MARKET_OPEN': datetime.time(9, 30),
+    'MARKET_CLOSE': datetime.time(16, 0),
+    'PREMARKET_START': datetime.time(4, 0),
     'VOLATILITY_THRESHOLDS': {
         'low': 0.015,
         'medium': 0.03,
         'high': 0.05
     },
     'PROFIT_TARGETS': {
-        'call': 0.15,  # 15% profit target
-        'put': 0.15,   # 15% profit target
-        'stop_loss': 0.08  # 8% stop loss
+        'call': 0.15,
+        'put': 0.15,
+        'stop_loss': 0.08
     },
-    'TRADING_HOURS_PER_DAY': 6.5  # For time decay approximation
+    'TRADING_HOURS_PER_DAY': 6.5,
+    'SR_TIME_WINDOWS': {
+        'scalping': ['1min', '5min'],
+        'intraday': ['15min', '30min', '1h']
+    },
+    'SR_SENSITIVITY': {
+        '1min': 0.002,
+        '5min': 0.003,
+        '15min': 0.005,
+        '30min': 0.007,
+        '1h': 0.01
+    }
 }
+
+# Initialize API call log in session state
+if 'API_CALL_LOG' not in st.session_state:
+    st.session_state.API_CALL_LOG = []
 
 # Enhanced signal thresholds with weighted conditions
 SIGNAL_THRESHOLDS = {
@@ -68,13 +88,12 @@ SIGNAL_THRESHOLDS = {
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.3,
         'volume_min': 1000,
-        # NEW: Condition weights for scoring
         'condition_weights': {
             'delta': 0.25,
             'gamma': 0.20,
             'theta': 0.15,
-            'trend': 0.20,  # EMA alignment
-            'momentum': 0.10,  # RSI
+            'trend': 0.20,
+            'momentum': 0.10,
             'volume': 0.10
         }
     },
@@ -90,17 +109,242 @@ SIGNAL_THRESHOLDS = {
         'volume_multiplier_base': 1.0,
         'volume_vol_multiplier': 0.3,
         'volume_min': 1000,
-        # NEW: Condition weights for scoring
         'condition_weights': {
             'delta': 0.25,
             'gamma': 0.20,
             'theta': 0.15,
-            'trend': 0.20,  # EMA alignment
-            'momentum': 0.10,  # RSI
+            'trend': 0.20,
+            'momentum': 0.10,
             'volume': 0.10
         }
     }
 }
+
+# =============================
+# UTILITY FUNCTIONS FOR FREE DATA SOURCES
+# =============================
+
+def can_make_request(source: str) -> bool:
+    """Check if we can make another request without hitting limits"""
+    now = time.time()
+    
+    # Clean up old entries (older than 1 hour)
+    st.session_state.API_CALL_LOG = [
+        t for t in st.session_state.API_CALL_LOG 
+        if now - t['timestamp'] < 3600
+    ]
+    
+    # Count recent requests by source
+    av_count = len([t for t in st.session_state.API_CALL_LOG 
+                   if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 60])
+    fmp_count = len([t for t in st.session_state.API_CALL_LOG 
+                    if t['source'] == "FMP" and now - t['timestamp'] < 3600])
+    iex_count = len([t for t in st.session_state.API_CALL_LOG 
+                   if t['source'] == "IEX" and now - t['timestamp'] < 3600])
+    
+    # Enforce rate limits
+    if source == "ALPHA_VANTAGE" and av_count >= 4:  # 5 req/min limit (leaving 1 buffer)
+        return False
+    if source == "FMP" and fmp_count >= 9:  # 250/day ≈ 10/hour (leaving 1 buffer)
+        return False
+    if source == "IEX" and iex_count >= 29:  # 50k/mo ≈ 30/hour (leaving 1 buffer)
+        return False
+    
+    return True
+
+def log_api_request(source: str):
+    """Log an API request to track usage"""
+    st.session_state.API_CALL_LOG.append({
+        'source': source,
+        'timestamp': time.time()
+    })
+
+# =============================
+# SUPPORT/RESISTANCE FUNCTIONS
+# =============================
+
+def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity: float = None) -> dict:
+    """
+    Calculate support and resistance levels for a given timeframe
+    with enhanced clustering and relevance scoring
+    """
+    if sensitivity is None:
+        sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
+    
+    if data.empty:
+        return {'support': [], 'resistance': []}
+    
+    # Calculate recent volatility for dynamic sensitivity
+    atr = data['High'].subtract(data['Low']).mean()
+    if not np.isnan(atr) and atr > 0:
+        dynamic_sensitivity = max(sensitivity, min(0.02, atr * 0.5 / data['Close'].iloc[-1]))
+    else:
+        dynamic_sensitivity = sensitivity
+    
+    # Find swing highs and swing lows
+    highs = data['High']
+    lows = data['Low']
+    
+    # Find local maxima and minima
+    max_idx = scipy.signal.argrelextrema(highs.values, np.greater, order=3)[0]
+    min_idx = scipy.signal.argrelextrema(lows.values, np.less, order=3)[0]
+    
+    # Get price levels
+    resistance_levels = highs.iloc[max_idx].tolist()
+    support_levels = lows.iloc[min_idx].tolist()
+    
+    # Cluster nearby levels
+    clustered_resistance = []
+    clustered_support = []
+    
+    # Cluster resistance levels
+    resistance_levels.sort()
+    current_cluster = []
+    for level in resistance_levels:
+        if not current_cluster:
+            current_cluster.append(level)
+        elif level <= current_cluster[-1] * (1 + dynamic_sensitivity):
+            current_cluster.append(level)
+        else:
+            clustered_resistance.append(np.mean(current_cluster))
+            current_cluster = [level]
+    if current_cluster:
+        clustered_resistance.append(np.mean(current_cluster))
+    
+    # Cluster support levels
+    support_levels.sort()
+    current_cluster = []
+    for level in support_levels:
+        if not current_cluster:
+            current_cluster.append(level)
+        elif level >= current_cluster[-1] * (1 - dynamic_sensitivity):
+            current_cluster.append(level)
+        else:
+            clustered_support.append(np.mean(current_cluster))
+            current_cluster = [level]
+    if current_cluster:
+        clustered_support.append(np.mean(current_cluster))
+    
+    # Sort by relevance (proximity to current price)
+    current_price = data['Close'].iloc[-1]
+    
+    clustered_resistance.sort(key=lambda x: abs(x - current_price))
+    clustered_support.sort(key=lambda x: abs(x - current_price))
+    
+    # Return the most relevant levels
+    return {
+        'support': clustered_support[:5],
+        'resistance': clustered_resistance[:5],
+        'sensitivity': dynamic_sensitivity,
+        'timeframe': timeframe
+    }
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_multi_timeframe_data(ticker: str) -> dict:
+    """Get multi-timeframe data for support/resistance analysis"""
+    timeframes = {
+        '1min': {'interval': '1m', 'period': '1d'},
+        '5min': {'interval': '5m', 'period': '5d'},
+        '15min': {'interval': '15m', 'period': '15d'},
+        '30min': {'interval': '30m', 'period': '30d'},
+        '1h': {'interval': '60m', 'period': '60d'}
+    }
+    
+    data = {}
+    for tf, params in timeframes.items():
+        try:
+            df = yf.download(
+                ticker, 
+                period=params['period'],
+                interval=params['interval'],
+                progress=False,
+                prepost=True
+            )
+            if not df.empty:
+                # Clean and prepare data
+                df = df.dropna()
+                df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+                data[tf] = df
+        except Exception as e:
+            st.error(f"Error fetching {tf} data: {str(e)}")
+    
+    return data
+
+def analyze_support_resistance(ticker: str) -> dict:
+    """Analyze support and resistance across multiple timeframes"""
+    tf_data = get_multi_timeframe_data(ticker)
+    results = {}
+    
+    for timeframe, data in tf_data.items():
+        if not data.empty:
+            sr = calculate_support_resistance(data, timeframe)
+            results[timeframe] = sr
+    
+    return results
+
+def plot_sr_levels(data: dict, current_price: float) -> go.Figure:
+    """Create a visualization of support/resistance levels"""
+    fig = go.Figure()
+    
+    # Add current price line
+    fig.add_hline(y=current_price, line_dash="dash", line_color="blue", 
+                 annotation_text=f"Current Price: ${current_price:.2f}", 
+                 annotation_position="bottom right")
+    
+    # Prepare data for plotting
+    all_levels = []
+    for tf, sr in data.items():
+        for level in sr['support']:
+            all_levels.append({'price': level, 'type': 'support', 'timeframe': tf})
+        for level in sr['resistance']:
+            all_levels.append({'price': level, 'type': 'resistance', 'timeframe': tf})
+    
+    # Group by type
+    support_levels = [l for l in all_levels if l['type'] == 'support']
+    resistance_levels = [l for l in all_levels if l['type'] == 'resistance']
+    
+    # Add support levels
+    if support_levels:
+        support_df = pd.DataFrame(support_levels)
+        fig.add_trace(go.Scatter(
+            x=support_df['timeframe'],
+            y=support_df['price'],
+            mode='markers',
+            marker=dict(color='green', size=10, symbol='triangle-up'),
+            name='Support',
+            hovertemplate='<b>Support</b>: %{y:.2f}<br>Timeframe: %{x}<extra></extra>'
+        ))
+    
+    # Add resistance levels
+    if resistance_levels:
+        resistance_df = pd.DataFrame(resistance_levels)
+        fig.add_trace(go.Scatter(
+            x=resistance_df['timeframe'],
+            y=resistance_df['price'],
+            mode='markers',
+            marker=dict(color='red', size=10, symbol='triangle-down'),
+            name='Resistance',
+            hovertemplate='<b>Resistance</b>: %{y:.2f}<br>Timeframe: %{x}<extra></extra>'
+        ))
+    
+    # Set layout
+    fig.update_layout(
+        title=f'Support & Resistance Analysis',
+        xaxis_title='Timeframe',
+        yaxis_title='Price',
+        hovermode='closest',
+        template='plotly_dark',
+        height=500,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    return fig
 
 # =============================
 # ENHANCED UTILITY FUNCTIONS
@@ -112,11 +356,9 @@ def is_market_open() -> bool:
     now = datetime.datetime.now(eastern)
     now_time = now.time()
     
-    # Check if weekday (Monday=0, Sunday=6)
-    if now.weekday() >= 5:  # Saturday or Sunday
+    if now.weekday() >= 5:
         return False
     
-    # Check time
     return CONFIG['MARKET_OPEN'] <= now_time <= CONFIG['MARKET_CLOSE']
 
 def is_premarket() -> bool:
@@ -125,8 +367,7 @@ def is_premarket() -> bool:
     now = datetime.datetime.now(eastern)
     now_time = now.time()
     
-    # Only consider weekdays
-    if now.weekday() >= 5:  # Saturday or Sunday
+    if now.weekday() >= 5:
         return False
     
     return CONFIG['PREMARKET_START'] <= now_time < CONFIG['MARKET_OPEN']
@@ -141,7 +382,7 @@ def is_early_market() -> bool:
     market_open_today = datetime.datetime.combine(now.date(), CONFIG['MARKET_OPEN'])
     market_open_today = eastern.localize(market_open_today)
     
-    return (now - market_open_today).total_seconds() < 1800  # First 30 minutes
+    return (now - market_open_today).total_seconds() < 1800
 
 def calculate_remaining_trading_hours() -> float:
     """Calculate remaining trading hours in the day"""
@@ -155,23 +396,68 @@ def calculate_remaining_trading_hours() -> float:
     
     return (close_time - now).total_seconds() / 3600
 
-# NEW: Enhanced price fetching with smart caching
+# UPDATED: Enhanced price fetching with multi-source fallback
 @st.cache_data(ttl=5, show_spinner=False)
 def get_current_price(ticker: str) -> float:
-    """Get real-time price with optimized caching"""
-    try:
-        # Polygon real-time
-        if CONFIG['POLYGON_API_KEY']:
+    """Get real-time price from multiple free sources"""
+    # Try Polygon first if available
+    if CONFIG['POLYGON_API_KEY']:
+        try:
             client = RESTClient(CONFIG['POLYGON_API_KEY'], trace=False, connect_timeout=0.5)
             trade = client.stocks_equities_last_trade(ticker)
             return trade.last.price
-        
-        # Yahoo Finance fallback
+        except:
+            pass
+    
+    # Try Alpha Vantage
+    if CONFIG['ALPHA_VANTAGE_API_KEY'] and can_make_request("ALPHA_VANTAGE"):
+        try:
+            url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={CONFIG['ALPHA_VANTAGE_API_KEY']}"
+            response = requests.get(url, timeout=2)
+            response.raise_for_status()
+            data = response.json()
+            if 'Global Quote' in data and '05. price' in data['Global Quote']:
+                log_api_request("ALPHA_VANTAGE")
+                return float(data['Global Quote']['05. price'])
+        except:
+            pass
+    
+    # Try Financial Modeling Prep
+    if CONFIG['FMP_API_KEY'] and can_make_request("FMP"):
+        try:
+            url = f"https://financialmodelingprep.com/api/v3/quote-short/{ticker}?apikey={CONFIG['FMP_API_KEY']}"
+            response = requests.get(url, timeout=2)
+            response.raise_for_status()
+            data = response.json()
+            if data and isinstance(data, list) and 'price' in data[0]:
+                log_api_request("FMP")
+                return data[0]['price']
+        except:
+            pass
+    
+    # Try IEX Cloud
+    if CONFIG['IEX_API_KEY'] and can_make_request("IEX"):
+        try:
+            url = f"https://cloud.iexapis.com/stable/stock/{ticker}/quote?token={CONFIG['IEX_API_KEY']}"
+            response = requests.get(url, timeout=2)
+            response.raise_for_status()
+            data = response.json()
+            if 'latestPrice' in data:
+                log_api_request("IEX")
+                return data['latestPrice']
+        except:
+            pass
+    
+    # Yahoo Finance fallback
+    try:
         stock = yf.Ticker(ticker)
         data = stock.history(period='1d', interval='1m', prepost=True)
-        return data['Close'].iloc[-1] if not data.empty else 0.0
-    except Exception:
-        return 0.0
+        if not data.empty:
+            return data['Close'].iloc[-1]
+    except:
+        pass
+    
+    return 0.0
 
 # NEW: Combined stock data and indicators function for better caching
 @st.cache_data(ttl=CONFIG['STOCK_CACHE_TTL'], show_spinner=False)
@@ -200,7 +486,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
             data.columns = data.columns.droplevel(1)
         
         # Ensure we have required columns
-        required_cols = ['Close', 'High', 'Low', 'Volume']
+        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         missing_cols = [col for col in required_cols if col not in data.columns]
         if missing_cols:
             return pd.DataFrame()
@@ -246,7 +532,7 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     try:
         df = df.copy()
         
-        required_cols = ['Close', 'High', 'Low', 'Volume']
+        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         for col in required_cols:
             if col not in df.columns:
                 return pd.DataFrame()
@@ -847,7 +1133,7 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
         st.error(f"Error in scanner score calculation: {str(e)}")
         return 0.0
 
-def create_stock_chart(df: pd.DataFrame):
+def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
     """Create TradingView-style chart with indicators using Plotly"""
     if df.empty:
         return None
@@ -901,6 +1187,18 @@ def create_stock_chart(df: pd.DataFrame):
         fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_signal'], name='Signal', line=dict(color='orange')), row=3, col=1)
         fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color='gray'), row=3, col=1)
     
+    # Add support and resistance levels if available
+    if sr_levels:
+        # Add support levels
+        for level in sr_levels.get('5min', {}).get('support', []):
+            fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
+                         annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
+        
+        # Add resistance levels
+        for level in sr_levels.get('5min', {}).get('resistance', []):
+            fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
+                         annotation_text=f"R: {level:.2f}", annotation_position="top right")
+    
     fig.update_layout(
         height=800,
         title='Stock Price Chart with Indicators',
@@ -929,28 +1227,14 @@ if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = CONFIG['MIN_REFRESH_INTERVAL']
 if 'auto_refresh_enabled' not in st.session_state:
     st.session_state.auto_refresh_enabled = False
+if 'sr_data' not in st.session_state:
+    st.session_state.sr_data = {}
 
 # Enhanced rate limit check
 if 'rate_limited_until' in st.session_state:
     if time.time() < st.session_state['rate_limited_until']:
         remaining = int(st.session_state['rate_limited_until'] - time.time())
         st.error(f"⚠️ API rate limited. Please wait {remaining} seconds before retrying.")
-        
-        with st.expander("🔧 Rate Limiting Solutions"):
-            st.markdown("""
-            **Immediate Actions:**
-            - Wait for the cooldown period to complete
-            - Avoid rapid refreshes (minimum 60 seconds between requests)
-            
-            **Long-term Solutions:**
-            - **Upgrade to Polygon Premium**: Higher rate limits and real-time data
-            - **Use one ticker at a time**: Analyze tickers sequentially, not simultaneously  
-            - **Increase refresh intervals**: Set auto-refresh to 120+ seconds
-            - **Cache data longer**: The app now caches data for 5 minutes to reduce API calls
-            
-            **Professional Usage:**
-            Consider upgrading to premium data providers for production trading systems.
-            """)
         st.stop()
     else:
         del st.session_state['rate_limited_until']
@@ -962,16 +1246,56 @@ st.markdown("**Performance Optimized** • Weighted Scoring • Smart Caching �
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # Polygon API Key Input
+    # API Key Section
     st.subheader("🔑 API Settings")
+    
+    # Polygon API Key Input
     polygon_api_key = st.text_input("Enter Polygon API Key:", type="password", value=CONFIG['POLYGON_API_KEY'])
     if polygon_api_key:
         CONFIG['POLYGON_API_KEY'] = polygon_api_key
         st.success("✅ Polygon API key saved!")
         st.info("💡 **Tip**: Polygon Premium provides higher rate limits and real-time Greeks")
     else:
-        st.warning("⚠️ Using Yahoo Finance fallback (limited rate)")
-        st.info("💡 **Upgrade**: Get Polygon API key for better performance")
+        st.warning("⚠️ Using free data sources (limited rate)")
+    
+    # NEW: Free API Key Inputs
+    st.subheader("🔑 Free API Keys")
+    st.info("Use these free alternatives to reduce rate limits")
+    
+    CONFIG['ALPHA_VANTAGE_API_KEY'] = st.text_input(
+        "Alpha Vantage API Key (free):", 
+        type="password",
+        value=CONFIG['ALPHA_VANTAGE_API_KEY']
+    )
+    
+    CONFIG['FMP_API_KEY'] = st.text_input(
+        "Financial Modeling Prep API Key (free):", 
+        type="password",
+        value=CONFIG['FMP_API_KEY']
+    )
+    
+    CONFIG['IEX_API_KEY'] = st.text_input(
+        "IEX Cloud API Key (free):", 
+        type="password",
+        value=CONFIG['IEX_API_KEY']
+    )
+    
+    with st.expander("💡 How to get free keys"):
+        st.markdown("""
+        **1. Alpha Vantage:**
+        - Visit [https://www.alphavantage.co/support/#api-key](https://www.alphavantage.co/support/#api-key)
+        - Free tier: 5 requests/minute, 500/day
+        
+        **2. Financial Modeling Prep:**
+        - Visit [https://site.financialmodelingprep.com/developer](https://site.financialmodelingprep.com/developer)
+        - Free tier: 250 requests/day
+        
+        **3. IEX Cloud:**
+        - Visit [https://iexcloud.io/cloud-login#/register](https://iexcloud.io/cloud-login#/register)
+        - Free tier: 50,000 credits/month
+        
+        **Pro Tip:** Use all three for maximum free requests!
+        """)
     
     # Enhanced auto-refresh with minimum interval enforcement
     with st.container():
@@ -1141,12 +1465,20 @@ if ticker:
         st.session_state.refresh_counter += 1
         st.rerun()
 
+    # NEW: Support/Resistance Analysis
+    if 'sr_data' not in st.session_state or st.session_state.get('last_ticker') != ticker:
+        with st.spinner("🔍 Analyzing support/resistance levels..."):
+            st.session_state.sr_data = analyze_support_resistance(ticker)
+            st.session_state.last_ticker = ticker
+    
     # Enhanced tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🎯 Enhanced Signals", 
         "📊 Technical Analysis", 
+        "📈 Support/Resistance", 
         "🔍 Signal Explanations", 
-        "📰 Market Context"
+        "📰 Market Context",
+        "📊 Free Tier Usage"
     ])
     
     with tab1:
@@ -1482,7 +1814,7 @@ if ticker:
                 
                 # Enhanced interactive chart
                 st.subheader("📈 Interactive Price Chart")
-                chart_fig = create_stock_chart(df)
+                chart_fig = create_stock_chart(df, st.session_state.sr_data)
                 if chart_fig:
                     st.plotly_chart(chart_fig, use_container_width=True)
                 else:
@@ -1491,7 +1823,123 @@ if ticker:
         except Exception as e:
             st.error(f"❌ Error in Technical Analysis: {str(e)}")
     
+    # NEW: Support/Resistance Analysis Tab
     with tab3:
+        st.subheader("📈 Multi-Timeframe Support/Resistance Analysis")
+        st.info("Key levels for options trading strategies. Scalping: 1min/5min | Intraday: 15min/30min/1h")
+        
+        if not st.session_state.sr_data:
+            st.warning("No support/resistance data available. Please try refreshing.")
+            st.stop()
+        
+        # Display visualization
+        sr_fig = plot_sr_levels(st.session_state.sr_data, current_price)
+        if sr_fig:
+            st.plotly_chart(sr_fig, use_container_width=True)
+        
+        # Display detailed levels
+        st.subheader("Detailed Levels by Timeframe")
+        
+        # Scalping timeframes
+        st.markdown("#### 🚀 Scalping Timeframes (Short-Term Trades)")
+        col1, col2 = st.columns(2)
+        with col1:
+            if '1min' in st.session_state.sr_data:
+                sr = st.session_state.sr_data['1min']
+                st.markdown("**1 Minute**")
+                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                
+                st.markdown("**Support Levels**")
+                for level in sr['support']:
+                    st.markdown(f"- ${level:.2f}")
+                
+                st.markdown("**Resistance Levels**")
+                for level in sr['resistance']:
+                    st.markdown(f"- ${level:.2f}")
+        
+        with col2:
+            if '5min' in st.session_state.sr_data:
+                sr = st.session_state.sr_data['5min']
+                st.markdown("**5 Minute**")
+                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                
+                st.markdown("**Support Levels**")
+                for level in sr['support']:
+                    st.markdown(f"- ${level:.2f}")
+                
+                st.markdown("**Resistance Levels**")
+                for level in sr['resistance']:
+                    st.markdown(f"- ${level:.2f}")
+        
+        # Intraday timeframes
+        st.markdown("#### 📈 Intraday Timeframes (Swing Trades)")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if '15min' in st.session_state.sr_data:
+                sr = st.session_state.sr_data['15min']
+                st.markdown("**15 Minute**")
+                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                
+                st.markdown("**Support Levels**")
+                for level in sr['support']:
+                    st.markdown(f"- ${level:.2f}")
+                
+                st.markdown("**Resistance Levels**")
+                for level in sr['resistance']:
+                    st.markdown(f"- ${level:.2f}")
+        
+        with col2:
+            if '30min' in st.session_state.sr_data:
+                sr = st.session_state.sr_data['30min']
+                st.markdown("**30 Minute**")
+                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                
+                st.markdown("**Support Levels**")
+                for level in sr['support']:
+                    st.markdown(f"- ${level:.2f}")
+                
+                st.markdown("**Resistance Levels**")
+                for level in sr['resistance']:
+                    st.markdown(f"- ${level:.2f}")
+        
+        with col3:
+            if '1h' in st.session_state.sr_data:
+                sr = st.session_state.sr_data['1h']
+                st.markdown("**1 Hour**")
+                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                
+                st.markdown("**Support Levels**")
+                for level in sr['support']:
+                    st.markdown(f"- ${level:.2f}")
+                
+                st.markdown("**Resistance Levels**")
+                for level in sr['resistance']:
+                    st.markdown(f"- ${level:.2f}")
+        
+        # Trading strategy guidance
+        st.subheader("📝 Trading Strategy Guidance")
+        with st.expander("How to use support/resistance for options trading", expanded=True):
+            st.markdown("""
+            **Scalping Strategies (1min/5min levels):**
+            - Use for quick, short-term trades (minutes to hours)
+            - Look for options with strikes near key levels for breakout plays
+            - Combine with high delta options for directional plays
+            - Ideal for 0DTE or same-day expiration options
+            
+            **Intraday Strategies (15min/1h levels):**
+            - Use for swing trades (hours to days)
+            - Look for options with strikes between support/resistance levels for range-bound strategies
+            - Combine with technical indicators for confirmation
+            - Ideal for weekly expiration options
+            
+            **General Tips:**
+            1. **Breakout Trading**: Buy calls when price breaks above resistance, puts when below support
+            2. **Bounce Trading**: Buy calls near support, puts near resistance
+            3. **Range Trading**: Sell options when price is between support/resistance
+            4. **Straddles/Strangles**: Use when expecting volatility breakout
+            """)
+    
+    with tab4:
         st.subheader("🔍 Signal Explanations & Methodology")
         
         # Show current configuration
@@ -1599,7 +2047,7 @@ if ticker:
                 cache_hit_rate = 85  # Estimated based on caching strategy
                 st.metric("Est. Cache Hit Rate", f"{cache_hit_rate}%")
     
-    with tab4:
+    with tab5:
         st.subheader("📰 Market Context & News")
         
         try:
@@ -1721,6 +2169,97 @@ if ticker:
         
         except Exception as e:
             st.error(f"❌ Error loading market context: {str(e)}")
+    
+    # NEW: Free Tier Usage Dashboard
+    with tab6:
+        st.subheader("📊 Free Tier Usage")
+        
+        if not st.session_state.API_CALL_LOG:
+            st.info("No API calls recorded yet")
+            st.stop()
+        
+        now = time.time()
+        
+        # Calculate usage
+        av_usage_1min = len([t for t in st.session_state.API_CALL_LOG 
+                            if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 60])
+        av_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+                           if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 3600])
+        
+        fmp_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+                            if t['source'] == "FMP" and now - t['timestamp'] < 3600])
+        fmp_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
+                             if t['source'] == "FMP" and now - t['timestamp'] < 86400])
+        
+        iex_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+                            if t['source'] == "IEX" and now - t['timestamp'] < 3600])
+        iex_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
+                             if t['source'] == "IEX" and now - t['timestamp'] < 86400])
+        
+        # Display gauges
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.subheader("Alpha Vantage")
+            st.metric("Last Minute", f"{av_usage_1min}/5", "per minute")
+            st.metric("Last Hour", f"{av_usage_1hr}/300", "per hour")
+            st.progress(min(1.0, av_usage_1min/5), text=f"{min(100, av_usage_1min/5*100):.0f}% of minute limit")
+        
+        with col2:
+            st.subheader("Financial Modeling Prep")
+            st.metric("Last Hour", f"{fmp_usage_1hr}/10", "per hour")
+            st.metric("Last 24 Hours", f"{fmp_usage_24hr}/250", "per day")
+            st.progress(min(1.0, fmp_usage_1hr/10), text=f"{min(100, fmp_usage_1hr/10*100):.0f}% of hourly limit")
+        
+        with col3:
+            st.subheader("IEX Cloud")
+            st.metric("Last Hour", f"{iex_usage_1hr}/69", "per hour")
+            st.metric("Last 24 Hours", f"{iex_usage_24hr}/1667", "per day")
+            st.progress(min(1.0, iex_usage_1hr/69), text=f"{min(100, iex_usage_1hr/69*100):.0f}% of hourly limit")
+        
+        # Usage history chart
+        st.subheader("Usage History")
+        
+        # Create a DataFrame for visualization
+        log_df = pd.DataFrame(st.session_state.API_CALL_LOG)
+        log_df['timestamp'] = pd.to_datetime(log_df['timestamp'], unit='s')
+        log_df['time'] = log_df['timestamp'].dt.floor('min')
+        
+        # Group by source and time
+        usage_df = log_df.groupby(['source', pd.Grouper(key='time', freq='5min')]).size().unstack(fill_value=0)
+        
+        # Fill missing time periods
+        if not usage_df.empty:
+            all_times = pd.date_range(
+                start=log_df['timestamp'].min().floor('5min'),
+                end=log_df['timestamp'].max().ceil('5min'),
+                freq='5min'
+            )
+            usage_df = usage_df.reindex(all_times, axis=1, fill_value=0)
+            
+            # Plot
+            fig = go.Figure()
+            for source in usage_df.index:
+                fig.add_trace(go.Scatter(
+                    x=usage_df.columns,
+                    y=usage_df.loc[source],
+                    mode='lines+markers',
+                    name=source,
+                    stackgroup='one'
+                ))
+            
+            fig.update_layout(
+                title='API Calls Over Time',
+                xaxis_title='Time',
+                yaxis_title='API Calls',
+                hovermode='x unified',
+                template='plotly_dark'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No API calls recorded in the selected time range")
+        
+        st.info("💡 Usage resets over time. Add more free API keys to increase capacity")
 
 else:
     # Enhanced welcome screen
@@ -1740,10 +2279,10 @@ else:
         - **Detailed Explanations**: See exactly why each signal passes or fails
         - **Better Filtering**: Moneyness, expiry, and strike range controls
         
-        **🎯 Smarter Analysis:**
-        - **Full Chain Caching**: Fetch all expiries once, analyze locally
-        - **Market Context**: Premarket/regular/after-hours detection
-        - **Risk Management**: Built-in profit targets and stop losses
+        **🎯 New Features:**
+        - **Multi-Timeframe Support/Resistance**: 1min/5min for scalping, 15min/30min/1h for intraday
+        - **Free Tier API Integration**: Alpha Vantage, FMP, IEX Cloud
+        - **Usage Dashboard**: Track API consumption across services
         - **Professional UX**: Color-coded metrics, tooltips, and guidance
         
         **💰 Cost Optimization:**
