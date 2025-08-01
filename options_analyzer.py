@@ -15,7 +15,6 @@ from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient  # Polygon API client
-from scipy import signal  # Added missing import
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
