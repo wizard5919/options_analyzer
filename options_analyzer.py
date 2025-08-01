@@ -15,6 +15,7 @@ from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient  # Polygon API client
+from scipy import signal  # Added missing import
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -166,13 +167,13 @@ def log_api_request(source: str):
     })
 
 # =============================
-# SUPPORT/RESISTANCE FUNCTIONS (SCIPY-FREE)
+# FIXED SUPPORT/RESISTANCE FUNCTIONS
 # =============================
 
 def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity: float = None) -> dict:
     """
     Calculate support and resistance levels for a given timeframe
-    with enhanced clustering and relevance scoring
+    with enhanced clustering and relevance scoring - FIXED VERSION
     """
     if sensitivity is None:
         sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
@@ -180,79 +181,120 @@ def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity
     if data.empty:
         return {'support': [], 'resistance': []}
     
-    # Calculate recent volatility for dynamic sensitivity
-    # FIX: Properly convert Series to scalar
-    atr_value = (data['High'] - data['Low']).mean()
-    
-    # FIX: Convert to float and handle NaN properly
-    if not pd.isna(atr_value) and float(atr_value) > 0:
-        current_close = float(data['Close'].iloc[-1])
-        atr_ratio = float(atr_value) * 0.5 / current_close
-        dynamic_sensitivity = max(sensitivity, min(0.02, atr_ratio))
-    else:
-        dynamic_sensitivity = sensitivity
-    
-    # Find swing highs and swing lows
-    highs = data['High']
-    lows = data['Low']
-    
-    # Find local maxima and minima
-    max_idx = scipy.signal.argrelextrema(highs.values, np.greater, order=3)[0]
-    min_idx = scipy.signal.argrelextrema(lows.values, np.less, order=3)[0]
-    
-    # Get price levels
-    resistance_levels = highs.iloc[max_idx].tolist()
-    support_levels = lows.iloc[min_idx].tolist()
-    
-    # Cluster nearby levels
-    clustered_resistance = []
-    clustered_support = []
-    
-    # Cluster resistance levels
-    resistance_levels.sort()
-    current_cluster = []
-    for level in resistance_levels:
-        if not current_cluster:
-            current_cluster.append(level)
-        elif level <= current_cluster[-1] * (1 + dynamic_sensitivity):
-            current_cluster.append(level)
+    try:
+        # Calculate recent volatility for dynamic sensitivity
+        atr_series = data['High'] - data['Low']
+        
+        # FIXED: Properly handle Series to scalar conversion
+        atr_value = float(atr_series.mean())  # Convert to Python float
+        
+        # FIXED: Use math.isnan instead of pd.isna for scalar values
+        if not math.isnan(atr_value) and atr_value > 0:
+            current_close = float(data['Close'].iloc[-1])  # Convert to Python float
+            atr_ratio = atr_value * 0.5 / current_close
+            dynamic_sensitivity = max(sensitivity, min(0.02, atr_ratio))
         else:
-            clustered_resistance.append(np.mean(current_cluster))
-            current_cluster = [level]
-    if current_cluster:
-        clustered_resistance.append(np.mean(current_cluster))
+            dynamic_sensitivity = sensitivity
+        
+        # Find swing highs and swing lows
+        highs = data['High'].values  # Convert to numpy array
+        lows = data['Low'].values    # Convert to numpy array
+        
+        # Check if we have enough data points
+        if len(highs) < 10 or len(lows) < 10:
+            return {
+                'support': [],
+                'resistance': [],
+                'sensitivity': dynamic_sensitivity,
+                'timeframe': timeframe
+            }
+        
+        # Find local maxima and minima with error handling
+        try:
+            max_idx = signal.argrelextrema(highs, np.greater, order=3)[0]
+            min_idx = signal.argrelextrema(lows, np.less, order=3)[0]
+        except Exception as e:
+            st.warning(f"Error finding extrema for {timeframe}: {str(e)}")
+            return {
+                'support': [],
+                'resistance': [],
+                'sensitivity': dynamic_sensitivity,
+                'timeframe': timeframe
+            }
+        
+        # Get price levels
+        resistance_levels = [float(highs[i]) for i in max_idx if i < len(highs)]
+        support_levels = [float(lows[i]) for i in min_idx if i < len(lows)]
+        
+        # Cluster nearby levels
+        clustered_resistance = cluster_levels(resistance_levels, dynamic_sensitivity, True)
+        clustered_support = cluster_levels(support_levels, dynamic_sensitivity, False)
+        
+        # Sort by relevance (proximity to current price)
+        current_price = float(data['Close'].iloc[-1])
+        
+        clustered_resistance.sort(key=lambda x: abs(x - current_price))
+        clustered_support.sort(key=lambda x: abs(x - current_price))
+        
+        # Return the most relevant levels
+        return {
+            'support': clustered_support[:5],
+            'resistance': clustered_resistance[:5],
+            'sensitivity': dynamic_sensitivity,
+            'timeframe': timeframe
+        }
+        
+    except Exception as e:
+        st.warning(f"Error calculating S/R for {timeframe}: {str(e)}")
+        return {
+            'support': [],
+            'resistance': [],
+            'sensitivity': sensitivity,
+            'timeframe': timeframe
+        }
+
+def cluster_levels(levels: List[float], sensitivity: float, is_resistance: bool) -> List[float]:
+    """Helper function to cluster nearby support/resistance levels"""
+    if not levels:
+        return []
     
-    # Cluster support levels
-    support_levels.sort()
-    current_cluster = []
-    for level in support_levels:
-        if not current_cluster:
-            current_cluster.append(level)
-        elif level >= current_cluster[-1] * (1 - dynamic_sensitivity):
-            current_cluster.append(level)
-        else:
-            clustered_support.append(np.mean(current_cluster))
-            current_cluster = [level]
-    if current_cluster:
-        clustered_support.append(np.mean(current_cluster))
-    
-    # Sort by relevance (proximity to current price)
-    current_price = data['Close'].iloc[-1]
-    
-    clustered_resistance.sort(key=lambda x: abs(x - current_price))
-    clustered_support.sort(key=lambda x: abs(x - current_price))
-    
-    # Return the most relevant levels
-    return {
-        'support': clustered_support[:5],
-        'resistance': clustered_resistance[:5],
-        'sensitivity': dynamic_sensitivity,
-        'timeframe': timeframe
-    }
+    try:
+        levels.sort()
+        clustered = []
+        current_cluster = []
+        
+        for level in levels:
+            if not current_cluster:
+                current_cluster.append(level)
+            else:
+                last_level = current_cluster[-1]
+                if is_resistance:
+                    # For resistance, cluster if within sensitivity range above
+                    if level <= last_level * (1 + sensitivity):
+                        current_cluster.append(level)
+                    else:
+                        clustered.append(np.mean(current_cluster))
+                        current_cluster = [level]
+                else:
+                    # For support, cluster if within sensitivity range below
+                    if level >= last_level * (1 - sensitivity):
+                        current_cluster.append(level)
+                    else:
+                        clustered.append(np.mean(current_cluster))
+                        current_cluster = [level]
+        
+        if current_cluster:
+            clustered.append(np.mean(current_cluster))
+        
+        return clustered
+        
+    except Exception as e:
+        st.warning(f"Error clustering levels: {str(e)}")
+        return levels[:5]  # Return first 5 levels if clustering fails
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_multi_timeframe_data(ticker: str) -> dict:
-    """Get multi-timeframe data for support/resistance analysis"""
+    """Get multi-timeframe data for support/resistance analysis - ENHANCED ERROR HANDLING"""
     timeframes = {
         '1min': {'interval': '1m', 'period': '1d'},
         '5min': {'interval': '5m', 'period': '5d'},
@@ -274,88 +316,113 @@ def get_multi_timeframe_data(ticker: str) -> dict:
             if not df.empty:
                 # Clean and prepare data
                 df = df.dropna()
-                df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-                data[tf] = df
+                if len(df) >= 10:  # Ensure minimum data points
+                    df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+                    data[tf] = df
         except Exception as e:
-            st.error(f"Error fetching {tf} data: {str(e)}")
+            st.warning(f"Error fetching {tf} data: {str(e)}")
     
     return data
 
 def analyze_support_resistance(ticker: str) -> dict:
-    """Analyze support and resistance across multiple timeframes"""
-    tf_data = get_multi_timeframe_data(ticker)
-    results = {}
-    
-    for timeframe, data in tf_data.items():
-        if not data.empty:
-            sr = calculate_support_resistance(data, timeframe)
-            results[timeframe] = sr
-    
-    return results
+    """Analyze support and resistance across multiple timeframes - ENHANCED ERROR HANDLING"""
+    try:
+        tf_data = get_multi_timeframe_data(ticker)
+        results = {}
+        
+        for timeframe, data in tf_data.items():
+            if not data.empty:
+                try:
+                    sr = calculate_support_resistance(data, timeframe)
+                    results[timeframe] = sr
+                except Exception as e:
+                    st.warning(f"Error calculating S/R for {timeframe}: {str(e)}")
+                    results[timeframe] = {
+                        'support': [],
+                        'resistance': [],
+                        'sensitivity': CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005),
+                        'timeframe': timeframe
+                    }
+        
+        return results
+        
+    except Exception as e:
+        st.error(f"Error in support/resistance analysis: {str(e)}")
+        return {}
 
 def plot_sr_levels(data: dict, current_price: float) -> go.Figure:
-    """Create a visualization of support/resistance levels"""
-    fig = go.Figure()
-    
-    # Add current price line
-    fig.add_hline(y=current_price, line_dash="dash", line_color="blue", 
-                 annotation_text=f"Current Price: ${current_price:.2f}", 
-                 annotation_position="bottom right")
-    
-    # Prepare data for plotting
-    all_levels = []
-    for tf, sr in data.items():
-        for level in sr['support']:
-            all_levels.append({'price': level, 'type': 'support', 'timeframe': tf})
-        for level in sr['resistance']:
-            all_levels.append({'price': level, 'type': 'resistance', 'timeframe': tf})
-    
-    # Group by type
-    support_levels = [l for l in all_levels if l['type'] == 'support']
-    resistance_levels = [l for l in all_levels if l['type'] == 'resistance']
-    
-    # Add support levels
-    if support_levels:
-        support_df = pd.DataFrame(support_levels)
-        fig.add_trace(go.Scatter(
-            x=support_df['timeframe'],
-            y=support_df['price'],
-            mode='markers',
-            marker=dict(color='green', size=10, symbol='triangle-up'),
-            name='Support',
-            hovertemplate='<b>Support</b>: %{y:.2f}<br>Timeframe: %{x}<extra></extra>'
-        ))
-    
-    # Add resistance levels
-    if resistance_levels:
-        resistance_df = pd.DataFrame(resistance_levels)
-        fig.add_trace(go.Scatter(
-            x=resistance_df['timeframe'],
-            y=resistance_df['price'],
-            mode='markers',
-            marker=dict(color='red', size=10, symbol='triangle-down'),
-            name='Resistance',
-            hovertemplate='<b>Resistance</b>: %{y:.2f}<br>Timeframe: %{x}<extra></extra>'
-        ))
-    
-    # Set layout
-    fig.update_layout(
-        title=f'Support & Resistance Analysis',
-        xaxis_title='Timeframe',
-        yaxis_title='Price',
-        hovermode='closest',
-        template='plotly_dark',
-        height=500,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
+    """Create a visualization of support/resistance levels - ENHANCED ERROR HANDLING"""
+    try:
+        fig = go.Figure()
+        
+        # Add current price line
+        fig.add_hline(y=current_price, line_dash="dash", line_color="blue", 
+                     annotation_text=f"Current Price: ${current_price:.2f}", 
+                     annotation_position="bottom right")
+        
+        # Prepare data for plotting
+        all_levels = []
+        for tf, sr in data.items():
+            try:
+                for level in sr.get('support', []):
+                    if isinstance(level, (int, float)) and not math.isnan(level):
+                        all_levels.append({'price': float(level), 'type': 'support', 'timeframe': tf})
+                for level in sr.get('resistance', []):
+                    if isinstance(level, (int, float)) and not math.isnan(level):
+                        all_levels.append({'price': float(level), 'type': 'resistance', 'timeframe': tf})
+            except Exception as e:
+                st.warning(f"Error processing levels for {tf}: {str(e)}")
+        
+        # Group by type
+        support_levels = [l for l in all_levels if l['type'] == 'support']
+        resistance_levels = [l for l in all_levels if l['type'] == 'resistance']
+        
+        # Add support levels
+        if support_levels:
+            support_df = pd.DataFrame(support_levels)
+            fig.add_trace(go.Scatter(
+                x=support_df['timeframe'],
+                y=support_df['price'],
+                mode='markers',
+                marker=dict(color='green', size=10, symbol='triangle-up'),
+                name='Support',
+                hovertemplate='<b>Support</b>: %{y:.2f}<br>Timeframe: %{x}<extra></extra>'
+            ))
+        
+        # Add resistance levels
+        if resistance_levels:
+            resistance_df = pd.DataFrame(resistance_levels)
+            fig.add_trace(go.Scatter(
+                x=resistance_df['timeframe'],
+                y=resistance_df['price'],
+                mode='markers',
+                marker=dict(color='red', size=10, symbol='triangle-down'),
+                name='Resistance',
+                hovertemplate='<b>Resistance</b>: %{y:.2f}<br>Timeframe: %{x}<extra></extra>'
+            ))
+        
+        # Set layout
+        fig.update_layout(
+            title=f'Support & Resistance Analysis',
+            xaxis_title='Timeframe',
+            yaxis_title='Price',
+            hovermode='closest',
+            template='plotly_dark',
+            height=500,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
         )
-    )
-    
-    return fig
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating S/R plot: {str(e)}")
+        return go.Figure()  # Return empty figure
 
 # =============================
 # ENHANCED UTILITY FUNCTIONS
@@ -363,49 +430,61 @@ def plot_sr_levels(data: dict, current_price: float) -> go.Figure:
 
 def is_market_open() -> bool:
     """Check if market is currently open based on Eastern Time"""
-    eastern = pytz.timezone('US/Eastern')
-    now = datetime.datetime.now(eastern)
-    now_time = now.time()
-    
-    if now.weekday() >= 5:
+    try:
+        eastern = pytz.timezone('US/Eastern')
+        now = datetime.datetime.now(eastern)
+        now_time = now.time()
+        
+        if now.weekday() >= 5:
+            return False
+        
+        return CONFIG['MARKET_OPEN'] <= now_time <= CONFIG['MARKET_CLOSE']
+    except Exception:
         return False
-    
-    return CONFIG['MARKET_OPEN'] <= now_time <= CONFIG['MARKET_CLOSE']
 
 def is_premarket() -> bool:
     """Check if we're in premarket hours"""
-    eastern = pytz.timezone('US/Eastern')
-    now = datetime.datetime.now(eastern)
-    now_time = now.time()
-    
-    if now.weekday() >= 5:
+    try:
+        eastern = pytz.timezone('US/Eastern')
+        now = datetime.datetime.now(eastern)
+        now_time = now.time()
+        
+        if now.weekday() >= 5:
+            return False
+        
+        return CONFIG['PREMARKET_START'] <= now_time < CONFIG['MARKET_OPEN']
+    except Exception:
         return False
-    
-    return CONFIG['PREMARKET_START'] <= now_time < CONFIG['MARKET_OPEN']
 
 def is_early_market() -> bool:
     """Check if we're in the first 30 minutes of market open"""
-    if not is_market_open():
+    try:
+        if not is_market_open():
+            return False
+        
+        eastern = pytz.timezone('US/Eastern')
+        now = datetime.datetime.now(eastern)
+        market_open_today = datetime.datetime.combine(now.date(), CONFIG['MARKET_OPEN'])
+        market_open_today = eastern.localize(market_open_today)
+        
+        return (now - market_open_today).total_seconds() < 1800
+    except Exception:
         return False
-    
-    eastern = pytz.timezone('US/Eastern')
-    now = datetime.datetime.now(eastern)
-    market_open_today = datetime.datetime.combine(now.date(), CONFIG['MARKET_OPEN'])
-    market_open_today = eastern.localize(market_open_today)
-    
-    return (now - market_open_today).total_seconds() < 1800
 
 def calculate_remaining_trading_hours() -> float:
     """Calculate remaining trading hours in the day"""
-    eastern = pytz.timezone('US/Eastern')
-    now = datetime.datetime.now(eastern)
-    close_time = datetime.datetime.combine(now.date(), CONFIG['MARKET_CLOSE'])
-    close_time = eastern.localize(close_time)
-    
-    if now >= close_time:
+    try:
+        eastern = pytz.timezone('US/Eastern')
+        now = datetime.datetime.now(eastern)
+        close_time = datetime.datetime.combine(now.date(), CONFIG['MARKET_CLOSE'])
+        close_time = eastern.localize(close_time)
+        
+        if now >= close_time:
+            return 0.0
+        
+        return (close_time - now).total_seconds() / 3600
+    except Exception:
         return 0.0
-    
-    return (close_time - now).total_seconds() / 3600
 
 # UPDATED: Enhanced price fetching with multi-source fallback
 @st.cache_data(ttl=5, show_spinner=False)
@@ -416,8 +495,8 @@ def get_current_price(ticker: str) -> float:
         try:
             client = RESTClient(CONFIG['POLYGON_API_KEY'], trace=False, connect_timeout=0.5)
             trade = client.stocks_equities_last_trade(ticker)
-            return trade.last.price
-        except:
+            return float(trade.last.price)
+        except Exception:
             pass
     
     # Try Alpha Vantage
@@ -430,7 +509,7 @@ def get_current_price(ticker: str) -> float:
             if 'Global Quote' in data and '05. price' in data['Global Quote']:
                 log_api_request("ALPHA_VANTAGE")
                 return float(data['Global Quote']['05. price'])
-        except:
+        except Exception:
             pass
     
     # Try Financial Modeling Prep
@@ -442,8 +521,8 @@ def get_current_price(ticker: str) -> float:
             data = response.json()
             if data and isinstance(data, list) and 'price' in data[0]:
                 log_api_request("FMP")
-                return data[0]['price']
-        except:
+                return float(data[0]['price'])
+        except Exception:
             pass
     
     # Try IEX Cloud
@@ -455,8 +534,8 @@ def get_current_price(ticker: str) -> float:
             data = response.json()
             if 'latestPrice' in data:
                 log_api_request("IEX")
-                return data['latestPrice']
-        except:
+                return float(data['latestPrice'])
+        except Exception:
             pass
     
     # Yahoo Finance fallback
@@ -464,8 +543,8 @@ def get_current_price(ticker: str) -> float:
         stock = yf.Ticker(ticker)
         data = stock.history(period='1d', interval='1m', prepost=True)
         if not data.empty:
-            return data['Close'].iloc[-1]
-    except:
+            return float(data['Close'].iloc[-1])
+    except Exception:
         pass
     
     return 0.0
@@ -744,112 +823,128 @@ def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Dat
 
 def classify_moneyness(strike: float, spot: float) -> str:
     """Classify option moneyness with dynamic ranges"""
-    diff = abs(strike - spot)
-    diff_pct = diff / spot
-    
-    if diff_pct < 0.01:  # Within 1%
-        return 'ATM'
-    elif strike < spot:  # Below current price
-        if diff_pct < 0.03:  # 1-3% below
-            return 'NTM'  # Near-the-money
-        else:
-            return 'ITM'
-    else:  # Above current price
-        if diff_pct < 0.03:  # 1-3% above
-            return 'NTM'  # Near-the-money
-        else:
-            return 'OTM'
+    try:
+        diff = abs(strike - spot)
+        diff_pct = diff / spot
+        
+        if diff_pct < 0.01:  # Within 1%
+            return 'ATM'
+        elif strike < spot:  # Below current price
+            if diff_pct < 0.03:  # 1-3% below
+                return 'NTM'  # Near-the-money
+            else:
+                return 'ITM'
+        else:  # Above current price
+            if diff_pct < 0.03:  # 1-3% above
+                return 'NTM'  # Near-the-money
+            else:
+                return 'OTM'
+    except Exception:
+        return 'Unknown'
 
 def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float, float, float]:
     """Calculate approximate Greeks using simple formulas"""
-    moneyness = spot_price / option['strike']
-    
-    if 'C' in option.get('contractSymbol', ''):
-        if moneyness > 1.03:
-            delta = 0.95
-            gamma = 0.01
-        elif moneyness > 1.0:
-            delta = 0.65
-            gamma = 0.05
-        elif moneyness > 0.97:
-            delta = 0.50
-            gamma = 0.08
+    try:
+        moneyness = spot_price / option['strike']
+        
+        if 'C' in option.get('contractSymbol', ''):
+            if moneyness > 1.03:
+                delta = 0.95
+                gamma = 0.01
+            elif moneyness > 1.0:
+                delta = 0.65
+                gamma = 0.05
+            elif moneyness > 0.97:
+                delta = 0.50
+                gamma = 0.08
+            else:
+                delta = 0.35
+                gamma = 0.05
         else:
-            delta = 0.35
-            gamma = 0.05
-    else:
-        if moneyness < 0.97:
-            delta = -0.95
-            gamma = 0.01
-        elif moneyness < 1.0:
-            delta = -0.65
-            gamma = 0.05
-        elif moneyness < 1.03:
-            delta = -0.50
-            gamma = 0.08
-        else:
-            delta = -0.35
-            gamma = 0.05
-    
-    theta = 0.05 if datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date() == datetime.date.today() else 0.02
-    
-    return delta, gamma, theta
+            if moneyness < 0.97:
+                delta = -0.95
+                gamma = 0.01
+            elif moneyness < 1.0:
+                delta = -0.65
+                gamma = 0.05
+            elif moneyness < 1.03:
+                delta = -0.50
+                gamma = 0.08
+            else:
+                delta = -0.35
+                gamma = 0.05
+        
+        theta = 0.05 if datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date() == datetime.date.today() else 0.02
+        
+        return delta, gamma, theta
+    except Exception:
+        return 0.5, 0.05, 0.02
 
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     """Validate that option has required data for analysis"""
-    required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
-    
-    for field in required_fields:
-        if field not in option or pd.isna(option[field]):
+    try:
+        required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
+        
+        for field in required_fields:
+            if field not in option or pd.isna(option[field]):
+                return False
+        
+        if option['lastPrice'] <= 0:
             return False
-    
-    if option['lastPrice'] <= 0:
+        
+        # Fill in Greeks if missing
+        if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
+            delta, gamma, theta = calculate_approximate_greeks(option.to_dict(), spot_price)
+            option['delta'] = delta
+            option['gamma'] = gamma
+            option['theta'] = theta
+        
+        return True
+    except Exception:
         return False
-    
-    # Fill in Greeks if missing
-    if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
-        delta, gamma, theta = calculate_approximate_greeks(option.to_dict(), spot_price)
-        option['delta'] = delta
-        option['gamma'] = gamma
-        option['theta'] = theta
-    
-    return True
 
 def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool) -> Dict[str, float]:
     """Calculate dynamic thresholds with enhanced volatility response"""
-    thresholds = SIGNAL_THRESHOLDS[side].copy()
-    
-    volatility = stock_data.get('ATR_pct', 0.02)
-    
-    vol_multiplier = 1 + (volatility * 100)
-    
-    if side == 'call':
-        thresholds['delta_min'] = max(0.3, min(0.8, thresholds['delta_base'] * vol_multiplier))
-    else:
-        thresholds['delta_max'] = min(-0.3, max(-0.8, thresholds['delta_base'] * vol_multiplier))
-    
-    thresholds['gamma_min'] = thresholds['gamma_base'] * (1 + thresholds['gamma_vol_multiplier'] * (volatility * 200))
-    
-    thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * (1 + thresholds['volume_vol_multiplier'] * (volatility * 150))))
-    
-    # Adjust for market conditions
-    if is_premarket() or is_early_market():
+    try:
+        thresholds = SIGNAL_THRESHOLDS[side].copy()
+        
+        volatility = stock_data.get('ATR_pct', 0.02)
+        
+        # Handle NaN volatility
+        if pd.isna(volatility):
+            volatility = 0.02
+        
+        vol_multiplier = 1 + (volatility * 100)
+        
         if side == 'call':
-            thresholds['delta_min'] = 0.35
+            thresholds['delta_min'] = max(0.3, min(0.8, thresholds['delta_base'] * vol_multiplier))
         else:
-            thresholds['delta_max'] = -0.35
-        thresholds['volume_multiplier'] *= 0.6
-        thresholds['gamma_min'] *= 0.8
-    
-    if is_0dte:
-        thresholds['volume_multiplier'] *= 0.7
-        thresholds['gamma_min'] *= 0.7
-        if side == 'call':
-            thresholds['delta_min'] = max(0.4, thresholds['delta_min'])
-        else:
-            thresholds['delta_max'] = min(-0.4, thresholds['delta_max'])
-    
-    return thresholds
+            thresholds['delta_max'] = min(-0.3, max(-0.8, thresholds['delta_base'] * vol_multiplier))
+        
+        thresholds['gamma_min'] = thresholds['gamma_base'] * (1 + thresholds['gamma_vol_multiplier'] * (volatility * 200))
+        
+        thresholds['volume_multiplier'] = max(0.8, min(2.5, thresholds['volume_multiplier_base'] * (1 + thresholds['volume_vol_multiplier'] * (volatility * 150))))
+        
+        # Adjust for market conditions
+        if is_premarket() or is_early_market():
+            if side == 'call':
+                thresholds['delta_min'] = 0.35
+            else:
+                thresholds['delta_max'] = -0.35
+            thresholds['volume_multiplier'] *= 0.6
+            thresholds['gamma_min'] *= 0.8
+        
+        if is_0dte:
+            thresholds['volume_multiplier'] *= 0.7
+            thresholds['gamma_min'] *= 0.7
+            if side == 'call':
+                thresholds['delta_min'] = max(0.4, thresholds['delta_min'])
+            else:
+                thresholds['delta_max'] = min(-0.4, thresholds['delta_max'])
+        
+        return thresholds
+    except Exception:
+        return SIGNAL_THRESHOLDS[side].copy()
 
 # NEW: Enhanced signal generation with weighted scoring and explanations
 def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
@@ -887,33 +982,33 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
         
         if side == "call":
             # Delta condition
-            delta_pass = delta >= thresholds['delta_min']
+            delta_pass = delta >= thresholds.get('delta_min', 0.5)
             delta_score = weights['delta'] if delta_pass else 0
             weighted_score += delta_score
-            conditions.append((delta_pass, f"Delta >= {thresholds['delta_min']:.2f}", delta))
+            conditions.append((delta_pass, f"Delta >= {thresholds.get('delta_min', 0.5):.2f}", delta))
             explanations.append({
                 'condition': 'Delta',
                 'passed': delta_pass,
                 'value': delta,
-                'threshold': thresholds['delta_min'],
+                'threshold': thresholds.get('delta_min', 0.5),
                 'weight': weights['delta'],
                 'score': delta_score,
-                'explanation': f"Delta {delta:.3f} {'✓' if delta_pass else '✗'} threshold {thresholds['delta_min']:.2f}. Higher delta = more price sensitivity."
+                'explanation': f"Delta {delta:.3f} {'✓' if delta_pass else '✗'} threshold {thresholds.get('delta_min', 0.5):.2f}. Higher delta = more price sensitivity."
             })
             
             # Gamma condition
-            gamma_pass = gamma >= thresholds['gamma_min']
+            gamma_pass = gamma >= thresholds.get('gamma_min', 0.05)
             gamma_score = weights['gamma'] if gamma_pass else 0
             weighted_score += gamma_score
-            conditions.append((gamma_pass, f"Gamma >= {thresholds['gamma_min']:.3f}", gamma))
+            conditions.append((gamma_pass, f"Gamma >= {thresholds.get('gamma_min', 0.05):.3f}", gamma))
             explanations.append({
                 'condition': 'Gamma',
                 'passed': gamma_pass,
                 'value': gamma,
-                'threshold': thresholds['gamma_min'],
+                'threshold': thresholds.get('gamma_min', 0.05),
                 'weight': weights['gamma'],
                 'score': gamma_score,
-                'explanation': f"Gamma {gamma:.3f} {'✓' if gamma_pass else '✗'} threshold {thresholds['gamma_min']:.3f}. Higher gamma = faster delta changes."
+                'explanation': f"Gamma {gamma:.3f} {'✓' if gamma_pass else '✗'} threshold {thresholds.get('gamma_min', 0.05):.3f}. Higher gamma = faster delta changes."
             })
             
             # Theta condition
@@ -948,21 +1043,64 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             
         else:  # put side
             # Similar logic for puts but with inverted conditions
-            delta_pass = delta <= thresholds['delta_max']
+            delta_pass = delta <= thresholds.get('delta_max', -0.5)
             delta_score = weights['delta'] if delta_pass else 0
             weighted_score += delta_score
-            conditions.append((delta_pass, f"Delta <= {thresholds['delta_max']:.2f}", delta))
+            conditions.append((delta_pass, f"Delta <= {thresholds.get('delta_max', -0.5):.2f}", delta))
             explanations.append({
                 'condition': 'Delta',
                 'passed': delta_pass,
                 'value': delta,
-                'threshold': thresholds['delta_max'],
+                'threshold': thresholds.get('delta_max', -0.5),
                 'weight': weights['delta'],
                 'score': delta_score,
-                'explanation': f"Delta {delta:.3f} {'✓' if delta_pass else '✗'} threshold {thresholds['delta_max']:.2f}. More negative delta = higher put sensitivity."
+                'explanation': f"Delta {delta:.3f} {'✓' if delta_pass else '✗'} threshold {thresholds.get('delta_max', -0.5):.2f}. More negative delta = higher put sensitivity."
             })
             
-            # Continue with other conditions...
+            # Gamma condition (same as calls)
+            gamma_pass = gamma >= thresholds.get('gamma_min', 0.05)
+            gamma_score = weights['gamma'] if gamma_pass else 0
+            weighted_score += gamma_score
+            conditions.append((gamma_pass, f"Gamma >= {thresholds.get('gamma_min', 0.05):.3f}", gamma))
+            explanations.append({
+                'condition': 'Gamma',
+                'passed': gamma_pass,
+                'value': gamma,
+                'threshold': thresholds.get('gamma_min', 0.05),
+                'weight': weights['gamma'],
+                'score': gamma_score,
+                'explanation': f"Gamma {gamma:.3f} {'✓' if gamma_pass else '✗'} threshold {thresholds.get('gamma_min', 0.05):.3f}. Higher gamma = faster delta changes."
+            })
+            
+            # Theta condition (same as calls)
+            theta_pass = theta <= thresholds['theta_base']
+            theta_score = weights['theta'] if theta_pass else 0
+            weighted_score += theta_score
+            conditions.append((theta_pass, f"Theta <= {thresholds['theta_base']:.3f}", theta))
+            explanations.append({
+                'condition': 'Theta',
+                'passed': theta_pass,
+                'value': theta,
+                'threshold': thresholds['theta_base'],
+                'weight': weights['theta'],
+                'score': theta_score,
+                'explanation': f"Theta {theta:.3f} {'✓' if theta_pass else '✗'} threshold {thresholds['theta_base']:.3f}. Lower theta = less time decay."
+            })
+            
+            # Trend condition (inverted for puts)
+            trend_pass = ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20
+            trend_score = weights['trend'] if trend_pass else 0
+            weighted_score += trend_score
+            conditions.append((trend_pass, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"))
+            explanations.append({
+                'condition': 'Trend',
+                'passed': trend_pass,
+                'value': f"Price: {close:.2f}, EMA9: {ema_9:.2f}, EMA20: {ema_20:.2f}" if ema_9 and ema_20 else "N/A",
+                'threshold': "Price < EMA9 < EMA20",
+                'weight': weights['trend'],
+                'score': trend_score,
+                'explanation': f"Price below short-term EMAs {'✓' if trend_pass else '✗'}. Bearish trend alignment needed for puts."
+            })
         
         # Momentum condition (RSI)
         if side == "call":
@@ -979,7 +1117,7 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             'threshold': thresholds['rsi_min'] if side == "call" else thresholds['rsi_max'],
             'weight': weights['momentum'],
             'score': momentum_score,
-            'explanation': f"RSI {rsi:.1f} {'✓' if momentum_pass else '✗'} indicates {'bullish' if side == 'call' else 'bearish'} momentum."
+            'explanation': f"RSI {rsi:.1f} {'✓' if momentum_pass else '✗'} indicates {'bullish' if side == 'call' else 'bearish'} momentum." if rsi else "RSI N/A"
         })
         
         # Volume condition
@@ -1052,47 +1190,51 @@ def process_options_batch(options_df: pd.DataFrame, side: str, stock_df: pd.Data
     if options_df.empty or stock_df.empty:
         return pd.DataFrame()
     
-    # Add basic validation
-    options_df = options_df.copy()
-    options_df = options_df[options_df['lastPrice'] > 0]
-    options_df = options_df.dropna(subset=['strike', 'lastPrice', 'volume', 'openInterest'])
-    
-    if options_df.empty:
+    try:
+        # Add basic validation
+        options_df = options_df.copy()
+        options_df = options_df[options_df['lastPrice'] > 0]
+        options_df = options_df.dropna(subset=['strike', 'lastPrice', 'volume', 'openInterest'])
+        
+        if options_df.empty:
+            return pd.DataFrame()
+        
+        # Add 0DTE flag
+        today = datetime.date.today()
+        options_df['is_0dte'] = options_df['expiry'].apply(
+            lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today
+        )
+        
+        # Add moneyness
+        options_df['moneyness'] = options_df['strike'].apply(
+            lambda x: classify_moneyness(x, current_price)
+        )
+        
+        # Fill missing Greeks
+        for idx, row in options_df.iterrows():
+            if pd.isna(row.get('delta')) or pd.isna(row.get('gamma')) or pd.isna(row.get('theta')):
+                delta, gamma, theta = calculate_approximate_greeks(row.to_dict(), current_price)
+                options_df.loc[idx, 'delta'] = delta
+                options_df.loc[idx, 'gamma'] = gamma
+                options_df.loc[idx, 'theta'] = theta
+        
+        # Process signals
+        signals = []
+        for idx, row in options_df.iterrows():
+            signal_result = generate_enhanced_signal(row, side, stock_df, row['is_0dte'])
+            if signal_result['signal']:
+                row_dict = row.to_dict()
+                row_dict.update(signal_result)
+                signals.append(row_dict)
+        
+        if signals:
+            signals_df = pd.DataFrame(signals)
+            return signals_df.sort_values('score_percentage', ascending=False)
+        
         return pd.DataFrame()
-    
-    # Add 0DTE flag
-    today = datetime.date.today()
-    options_df['is_0dte'] = options_df['expiry'].apply(
-        lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today
-    )
-    
-    # Add moneyness
-    options_df['moneyness'] = options_df['strike'].apply(
-        lambda x: classify_moneyness(x, current_price)
-    )
-    
-    # Fill missing Greeks
-    for idx, row in options_df.iterrows():
-        if pd.isna(row.get('delta')) or pd.isna(row.get('gamma')) or pd.isna(row.get('theta')):
-            delta, gamma, theta = calculate_approximate_greeks(row.to_dict(), current_price)
-            options_df.loc[idx, 'delta'] = delta
-            options_df.loc[idx, 'gamma'] = gamma
-            options_df.loc[idx, 'theta'] = theta
-    
-    # Process signals
-    signals = []
-    for idx, row in options_df.iterrows():
-        signal_result = generate_enhanced_signal(row, side, stock_df, row['is_0dte'])
-        if signal_result['signal']:
-            row_dict = row.to_dict()
-            row_dict.update(signal_result)
-            signals.append(row_dict)
-    
-    if signals:
-        signals_df = pd.DataFrame(signals)
-        return signals_df.sort_values('score_percentage', ascending=False)
-    
-    return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error processing options batch: {str(e)}")
+        return pd.DataFrame()
 
 def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
     """Calculate a score for call/put scanner based on technical indicators"""
@@ -1149,81 +1291,89 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
     if df.empty:
         return None
     
-    fig = make_subplots(
-        rows=3, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.02,
-        row_heights=[0.6, 0.2, 0.2],
-        specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
-    )
-    
-    # Candlestick chart
-    fig.add_trace(
-        go.Candlestick(
-            x=df['Datetime'],
-            open=df['Open'],
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
-            name='Price'
-        ),
-        row=1, col=1
-    )
-    
-    # EMAs
-    fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_9'], name='EMA 9', line=dict(color='blue')), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_20'], name='EMA 20', line=dict(color='orange')), row=1, col=1)
-    
-    # Keltner Channels
-    if 'KC_upper' in df.columns:
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_upper'], name='KC Upper', line=dict(color='red', dash='dash')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_middle'], name='KC Middle', line=dict(color='green')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_lower'], name='KC Lower', line=dict(color='red', dash='dash')), row=1, col=1)
-    
-    # Volume
-    fig.add_trace(
-        go.Bar(x=df['Datetime'], y=df['Volume'], name='Volume', marker_color='gray'),
-        row=1, col=1, secondary_y=True
-    )
-    
-    # RSI
-    if 'RSI' in df.columns:
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-    
-    # MACD
-    if 'MACD' in df.columns:
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_signal'], name='Signal', line=dict(color='orange')), row=3, col=1)
-        fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color='gray'), row=3, col=1)
-    
-    # Add support and resistance levels if available
-    if sr_levels:
-        # Add support levels
-        for level in sr_levels.get('5min', {}).get('support', []):
-            fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
-                         annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
+    try:
+        fig = make_subplots(
+            rows=3, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.02,
+            row_heights=[0.6, 0.2, 0.2],
+            specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
+        )
         
-        # Add resistance levels
-        for level in sr_levels.get('5min', {}).get('resistance', []):
-            fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
-                         annotation_text=f"R: {level:.2f}", annotation_position="top right")
-    
-    fig.update_layout(
-        height=800,
-        title='Stock Price Chart with Indicators',
-        xaxis_rangeslider_visible=False,
-        showlegend=True,
-        template='plotly_dark'
-    )
-    
-    fig.update_yaxes(title_text="Price", row=1, col=1)
-    fig.update_yaxes(title_text="Volume", row=1, col=1, secondary_y=True)
-    fig.update_yaxes(title_text="RSI", row=2, col=1)
-    fig.update_yaxes(title_text="MACD", row=3, col=1)
-    
-    return fig
+        # Candlestick chart
+        fig.add_trace(
+            go.Candlestick(
+                x=df['Datetime'],
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name='Price'
+            ),
+            row=1, col=1
+        )
+        
+        # EMAs
+        if 'EMA_9' in df.columns and not df['EMA_9'].isna().all():
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_9'], name='EMA 9', line=dict(color='blue')), row=1, col=1)
+        if 'EMA_20' in df.columns and not df['EMA_20'].isna().all():
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_20'], name='EMA 20', line=dict(color='orange')), row=1, col=1)
+        
+        # Keltner Channels
+        if 'KC_upper' in df.columns and not df['KC_upper'].isna().all():
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_upper'], name='KC Upper', line=dict(color='red', dash='dash')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_middle'], name='KC Middle', line=dict(color='green')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_lower'], name='KC Lower', line=dict(color='red', dash='dash')), row=1, col=1)
+        
+        # Volume
+        fig.add_trace(
+            go.Bar(x=df['Datetime'], y=df['Volume'], name='Volume', marker_color='gray'),
+            row=1, col=1, secondary_y=True
+        )
+        
+        # RSI
+        if 'RSI' in df.columns and not df['RSI'].isna().all():
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=2, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+        
+        # MACD
+        if 'MACD' in df.columns and not df['MACD'].isna().all():
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=3, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_signal'], name='Signal', line=dict(color='orange')), row=3, col=1)
+            fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color='gray'), row=3, col=1)
+        
+        # Add support and resistance levels if available
+        if sr_levels:
+            # Add support levels
+            for level in sr_levels.get('5min', {}).get('support', []):
+                if isinstance(level, (int, float)) and not math.isnan(level):
+                    fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
+                                 annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
+            
+            # Add resistance levels
+            for level in sr_levels.get('5min', {}).get('resistance', []):
+                if isinstance(level, (int, float)) and not math.isnan(level):
+                    fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
+                                 annotation_text=f"R: {level:.2f}", annotation_position="top right")
+        
+        fig.update_layout(
+            height=800,
+            title='Stock Price Chart with Indicators',
+            xaxis_rangeslider_visible=False,
+            showlegend=True,
+            template='plotly_dark'
+        )
+        
+        fig.update_yaxes(title_text="Price", row=1, col=1)
+        fig.update_yaxes(title_text="Volume", row=1, col=1, secondary_y=True)
+        fig.update_yaxes(title_text="RSI", row=2, col=1)
+        fig.update_yaxes(title_text="MACD", row=3, col=1)
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error creating chart: {str(e)}")
+        return None
 
 # =============================
 # ENHANCED STREAMLIT INTERFACE
@@ -1411,9 +1561,12 @@ with st.sidebar:
         else:
             st.info("🔴 Market CLOSED")
         
-        eastern = pytz.timezone('US/Eastern')
-        now = datetime.datetime.now(eastern)
-        st.caption(f"**ET**: {now.strftime('%H:%M:%S')}")
+        try:
+            eastern = pytz.timezone('US/Eastern')
+            now = datetime.datetime.now(eastern)
+            st.caption(f"**ET**: {now.strftime('%H:%M:%S')}")
+        except Exception:
+            st.caption("**ET**: N/A")
         
         # Cache status
         if st.session_state.get('last_refresh'):
@@ -1478,11 +1631,15 @@ if ticker:
         st.session_state.refresh_counter += 1
         st.rerun()
 
-    # NEW: Support/Resistance Analysis
+    # NEW: Support/Resistance Analysis with better error handling
     if not st.session_state.sr_data or st.session_state.last_ticker != ticker:
         with st.spinner("🔍 Analyzing support/resistance levels..."):
-            st.session_state.sr_data = analyze_support_resistance(ticker)
-            st.session_state.last_ticker = ticker
+            try:
+                st.session_state.sr_data = analyze_support_resistance(ticker)
+                st.session_state.last_ticker = ticker
+            except Exception as e:
+                st.error(f"Error in S/R analysis: {str(e)}")
+                st.session_state.sr_data = {}
     
     # Enhanced tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -1843,114 +2000,113 @@ if ticker:
         
         if not st.session_state.sr_data:
             st.warning("No support/resistance data available. Please try refreshing.")
-            st.stop()
-        
-        # Display visualization
-        sr_fig = plot_sr_levels(st.session_state.sr_data, current_price)
-        if sr_fig:
-            st.plotly_chart(sr_fig, use_container_width=True)
-        
-        # Display detailed levels
-        st.subheader("Detailed Levels by Timeframe")
-        
-        # Scalping timeframes
-        st.markdown("#### 🚀 Scalping Timeframes (Short-Term Trades)")
-        col1, col2 = st.columns(2)
-        with col1:
-            if '1min' in st.session_state.sr_data:
-                sr = st.session_state.sr_data['1min']
-                st.markdown("**1 Minute**")
-                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                
-                st.markdown("**Support Levels**")
-                for level in sr['support']:
-                    st.markdown(f"- ${level:.2f}")
-                
-                st.markdown("**Resistance Levels**")
-                for level in sr['resistance']:
-                    st.markdown(f"- ${level:.2f}")
-        
-        with col2:
-            if '5min' in st.session_state.sr_data:
-                sr = st.session_state.sr_data['5min']
-                st.markdown("**5 Minute**")
-                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                
-                st.markdown("**Support Levels**")
-                for level in sr['support']:
-                    st.markdown(f"- ${level:.2f}")
-                
-                st.markdown("**Resistance Levels**")
-                for level in sr['resistance']:
-                    st.markdown(f"- ${level:.2f}")
-        
-        # Intraday timeframes
-        st.markdown("#### 📈 Intraday Timeframes (Swing Trades)")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if '15min' in st.session_state.sr_data:
-                sr = st.session_state.sr_data['15min']
-                st.markdown("**15 Minute**")
-                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                
-                st.markdown("**Support Levels**")
-                for level in sr['support']:
-                    st.markdown(f"- ${level:.2f}")
-                
-                st.markdown("**Resistance Levels**")
-                for level in sr['resistance']:
-                    st.markdown(f"- ${level:.2f}")
-        
-        with col2:
-            if '30min' in st.session_state.sr_data:
-                sr = st.session_state.sr_data['30min']
-                st.markdown("**30 Minute**")
-                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                
-                st.markdown("**Support Levels**")
-                for level in sr['support']:
-                    st.markdown(f"- ${level:.2f}")
-                
-                st.markdown("**Resistance Levels**")
-                for level in sr['resistance']:
-                    st.markdown(f"- ${level:.2f}")
-        
-        with col3:
-            if '1h' in st.session_state.sr_data:
-                sr = st.session_state.sr_data['1h']
-                st.markdown("**1 Hour**")
-                st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                
-                st.markdown("**Support Levels**")
-                for level in sr['support']:
-                    st.markdown(f"- ${level:.2f}")
-                
-                st.markdown("**Resistance Levels**")
-                for level in sr['resistance']:
-                    st.markdown(f"- ${level:.2f}")
-        
-        # Trading strategy guidance
-        st.subheader("📝 Trading Strategy Guidance")
-        with st.expander("How to use support/resistance for options trading", expanded=True):
-            st.markdown("""
-            **Scalping Strategies (1min/5min levels):**
-            - Use for quick, short-term trades (minutes to hours)
-            - Look for options with strikes near key levels for breakout plays
-            - Combine with high delta options for directional plays
-            - Ideal for 0DTE or same-day expiration options
+        else:
+            # Display visualization
+            sr_fig = plot_sr_levels(st.session_state.sr_data, current_price)
+            if sr_fig:
+                st.plotly_chart(sr_fig, use_container_width=True)
             
-            **Intraday Strategies (15min/1h levels):**
-            - Use for swing trades (hours to days)
-            - Look for options with strikes between support/resistance levels for range-bound strategies
-            - Combine with technical indicators for confirmation
-            - Ideal for weekly expiration options
+            # Display detailed levels
+            st.subheader("Detailed Levels by Timeframe")
             
-            **General Tips:**
-            1. **Breakout Trading**: Buy calls when price breaks above resistance, puts when below support
-            2. **Bounce Trading**: Buy calls near support, puts near resistance
-            3. **Range Trading**: Sell options when price is between support/resistance
-            4. **Straddles/Strangles**: Use when expecting volatility breakout
-            """)
+            # Scalping timeframes
+            st.markdown("#### 🚀 Scalping Timeframes (Short-Term Trades)")
+            col1, col2 = st.columns(2)
+            with col1:
+                if '1min' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['1min']
+                    st.markdown("**1 Minute**")
+                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support']:
+                        st.markdown(f"- ${level:.2f}")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance']:
+                        st.markdown(f"- ${level:.2f}")
+            
+            with col2:
+                if '5min' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['5min']
+                    st.markdown("**5 Minute**")
+                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support']:
+                        st.markdown(f"- ${level:.2f}")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance']:
+                        st.markdown(f"- ${level:.2f}")
+            
+            # Intraday timeframes
+            st.markdown("#### 📈 Intraday Timeframes (Swing Trades)")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if '15min' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['15min']
+                    st.markdown("**15 Minute**")
+                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support']:
+                        st.markdown(f"- ${level:.2f}")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance']:
+                        st.markdown(f"- ${level:.2f}")
+            
+            with col2:
+                if '30min' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['30min']
+                    st.markdown("**30 Minute**")
+                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support']:
+                        st.markdown(f"- ${level:.2f}")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance']:
+                        st.markdown(f"- ${level:.2f}")
+            
+            with col3:
+                if '1h' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['1h']
+                    st.markdown("**1 Hour**")
+                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support']:
+                        st.markdown(f"- ${level:.2f}")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance']:
+                        st.markdown(f"- ${level:.2f}")
+            
+            # Trading strategy guidance
+            st.subheader("📝 Trading Strategy Guidance")
+            with st.expander("How to use support/resistance for options trading", expanded=True):
+                st.markdown("""
+                **Scalping Strategies (1min/5min levels):**
+                - Use for quick, short-term trades (minutes to hours)
+                - Look for options with strikes near key levels for breakout plays
+                - Combine with high delta options for directional plays
+                - Ideal for 0DTE or same-day expiration options
+                
+                **Intraday Strategies (15min/1h levels):**
+                - Use for swing trades (hours to days)
+                - Look for options with strikes between support/resistance levels for range-bound strategies
+                - Combine with technical indicators for confirmation
+                - Ideal for weekly expiration options
+                
+                **General Tips:**
+                1. **Breakout Trading**: Buy calls when price breaks above resistance, puts when below support
+                2. **Bounce Trading**: Buy calls near support, puts near resistance
+                3. **Range Trading**: Sell options when price is between support/resistance
+                4. **Straddles/Strangles**: Use when expecting volatility breakout
+                """)
     
     with tab4:
         st.subheader("🔍 Signal Explanations & Methodology")
@@ -2189,90 +2345,89 @@ if ticker:
         
         if not st.session_state.API_CALL_LOG:
             st.info("No API calls recorded yet")
-            st.stop()
-        
-        now = time.time()
-        
-        # Calculate usage
-        av_usage_1min = len([t for t in st.session_state.API_CALL_LOG 
-                            if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 60])
-        av_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
-                           if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 3600])
-        
-        fmp_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
-                            if t['source'] == "FMP" and now - t['timestamp'] < 3600])
-        fmp_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
-                             if t['source'] == "FMP" and now - t['timestamp'] < 86400])
-        
-        iex_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
-                            if t['source'] == "IEX" and now - t['timestamp'] < 3600])
-        iex_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
-                             if t['source'] == "IEX" and now - t['timestamp'] < 86400])
-        
-        # Display gauges
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.subheader("Alpha Vantage")
-            st.metric("Last Minute", f"{av_usage_1min}/5", "per minute")
-            st.metric("Last Hour", f"{av_usage_1hr}/300", "per hour")
-            st.progress(min(1.0, av_usage_1min/5), text=f"{min(100, av_usage_1min/5*100):.0f}% of minute limit")
-        
-        with col2:
-            st.subheader("Financial Modeling Prep")
-            st.metric("Last Hour", f"{fmp_usage_1hr}/10", "per hour")
-            st.metric("Last 24 Hours", f"{fmp_usage_24hr}/250", "per day")
-            st.progress(min(1.0, fmp_usage_1hr/10), text=f"{min(100, fmp_usage_1hr/10*100):.0f}% of hourly limit")
-        
-        with col3:
-            st.subheader("IEX Cloud")
-            st.metric("Last Hour", f"{iex_usage_1hr}/69", "per hour")
-            st.metric("Last 24 Hours", f"{iex_usage_24hr}/1667", "per day")
-            st.progress(min(1.0, iex_usage_1hr/69), text=f"{min(100, iex_usage_1hr/69*100):.0f}% of hourly limit")
-        
-        # Usage history chart
-        st.subheader("Usage History")
-        
-        # Create a DataFrame for visualization
-        log_df = pd.DataFrame(st.session_state.API_CALL_LOG)
-        log_df['timestamp'] = pd.to_datetime(log_df['timestamp'], unit='s')
-        log_df['time'] = log_df['timestamp'].dt.floor('min')
-        
-        # Group by source and time
-        usage_df = log_df.groupby(['source', pd.Grouper(key='time', freq='5min')]).size().unstack(fill_value=0)
-        
-        # Fill missing time periods
-        if not usage_df.empty:
-            all_times = pd.date_range(
-                start=log_df['timestamp'].min().floor('5min'),
-                end=log_df['timestamp'].max().ceil('5min'),
-                freq='5min'
-            )
-            usage_df = usage_df.reindex(all_times, axis=1, fill_value=0)
-            
-            # Plot
-            fig = go.Figure()
-            for source in usage_df.index:
-                fig.add_trace(go.Scatter(
-                    x=usage_df.columns,
-                    y=usage_df.loc[source],
-                    mode='lines+markers',
-                    name=source,
-                    stackgroup='one'
-                ))
-            
-            fig.update_layout(
-                title='API Calls Over Time',
-                xaxis_title='Time',
-                yaxis_title='API Calls',
-                hovermode='x unified',
-                template='plotly_dark'
-            )
-            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No API calls recorded in the selected time range")
-        
-        st.info("💡 Usage resets over time. Add more free API keys to increase capacity")
+            now = time.time()
+            
+            # Calculate usage
+            av_usage_1min = len([t for t in st.session_state.API_CALL_LOG 
+                                if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 60])
+            av_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+                               if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 3600])
+            
+            fmp_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+                                if t['source'] == "FMP" and now - t['timestamp'] < 3600])
+            fmp_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
+                                 if t['source'] == "FMP" and now - t['timestamp'] < 86400])
+            
+            iex_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+                                if t['source'] == "IEX" and now - t['timestamp'] < 3600])
+            iex_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
+                                 if t['source'] == "IEX" and now - t['timestamp'] < 86400])
+            
+            # Display gauges
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.subheader("Alpha Vantage")
+                st.metric("Last Minute", f"{av_usage_1min}/5", "per minute")
+                st.metric("Last Hour", f"{av_usage_1hr}/300", "per hour")
+                st.progress(min(1.0, av_usage_1min/5), text=f"{min(100, av_usage_1min/5*100):.0f}% of minute limit")
+            
+            with col2:
+                st.subheader("Financial Modeling Prep")
+                st.metric("Last Hour", f"{fmp_usage_1hr}/10", "per hour")
+                st.metric("Last 24 Hours", f"{fmp_usage_24hr}/250", "per day")
+                st.progress(min(1.0, fmp_usage_1hr/10), text=f"{min(100, fmp_usage_1hr/10*100):.0f}% of hourly limit")
+            
+            with col3:
+                st.subheader("IEX Cloud")
+                st.metric("Last Hour", f"{iex_usage_1hr}/69", "per hour")
+                st.metric("Last 24 Hours", f"{iex_usage_24hr}/1667", "per day")
+                st.progress(min(1.0, iex_usage_1hr/69), text=f"{min(100, iex_usage_1hr/69*100):.0f}% of hourly limit")
+            
+            # Usage history chart
+            st.subheader("Usage History")
+            
+            # Create a DataFrame for visualization
+            log_df = pd.DataFrame(st.session_state.API_CALL_LOG)
+            log_df['timestamp'] = pd.to_datetime(log_df['timestamp'], unit='s')
+            log_df['time'] = log_df['timestamp'].dt.floor('min')
+            
+            # Group by source and time
+            usage_df = log_df.groupby(['source', pd.Grouper(key='time', freq='5min')]).size().unstack(fill_value=0)
+            
+            # Fill missing time periods
+            if not usage_df.empty:
+                all_times = pd.date_range(
+                    start=log_df['timestamp'].min().floor('5min'),
+                    end=log_df['timestamp'].max().ceil('5min'),
+                    freq='5min'
+                )
+                usage_df = usage_df.reindex(all_times, axis=1, fill_value=0)
+                
+                # Plot
+                fig = go.Figure()
+                for source in usage_df.index:
+                    fig.add_trace(go.Scatter(
+                        x=usage_df.columns,
+                        y=usage_df.loc[source],
+                        mode='lines+markers',
+                        name=source,
+                        stackgroup='one'
+                    ))
+                
+                fig.update_layout(
+                    title='API Calls Over Time',
+                    xaxis_title='Time',
+                    yaxis_title='API Calls',
+                    hovermode='x unified',
+                    template='plotly_dark'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No API calls recorded in the selected time range")
+            
+            st.info("💡 Usage resets over time. Add more free API keys to increase capacity")
 
 else:
     # Enhanced welcome screen
