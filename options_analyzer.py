@@ -13,7 +13,10 @@ from ta.trend import EMAIndicator, MACD
 from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from polygon import RESTClient  # Polygon API client
+try:
+    from polygon import RESTClient  # Polygon API client
+except ImportError:
+    RESTClient = None
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -161,7 +164,7 @@ def get_current_price(ticker: str) -> float:
     """Get real-time price with optimized caching"""
     try:
         # Polygon real-time
-        if CONFIG['POLYGON_API_KEY']:
+        if CONFIG['POLYGON_API_KEY'] and RESTClient:
             client = RESTClient(CONFIG['POLYGON_API_KEY'], trace=False, connect_timeout=0.5)
             trade = client.stocks_equities_last_trade(ticker)
             return trade.last.price
@@ -645,7 +648,50 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
                 'explanation': f"Delta {delta:.3f} {'✓' if delta_pass else '✗'} threshold {thresholds['delta_max']:.2f}. More negative delta = higher put sensitivity."
             })
             
-            # Continue with other conditions...
+            # Gamma condition (same for both calls and puts)
+            gamma_pass = gamma >= thresholds['gamma_min']
+            gamma_score = weights['gamma'] if gamma_pass else 0
+            weighted_score += gamma_score
+            conditions.append((gamma_pass, f"Gamma >= {thresholds['gamma_min']:.3f}", gamma))
+            explanations.append({
+                'condition': 'Gamma',
+                'passed': gamma_pass,
+                'value': gamma,
+                'threshold': thresholds['gamma_min'],
+                'weight': weights['gamma'],
+                'score': gamma_score,
+                'explanation': f"Gamma {gamma:.3f} {'✓' if gamma_pass else '✗'} threshold {thresholds['gamma_min']:.3f}. Higher gamma = faster delta changes."
+            })
+            
+            # Theta condition (same for both calls and puts)
+            theta_pass = theta <= thresholds['theta_base']
+            theta_score = weights['theta'] if theta_pass else 0
+            weighted_score += theta_score
+            conditions.append((theta_pass, f"Theta <= {thresholds['theta_base']:.3f}", theta))
+            explanations.append({
+                'condition': 'Theta',
+                'passed': theta_pass,
+                'value': theta,
+                'threshold': thresholds['theta_base'],
+                'weight': weights['theta'],
+                'score': theta_score,
+                'explanation': f"Theta {theta:.3f} {'✓' if theta_pass else '✗'} threshold {thresholds['theta_base']:.3f}. Lower theta = less time decay."
+            })
+            
+            # Trend condition for puts
+            trend_pass = ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20
+            trend_score = weights['trend'] if trend_pass else 0
+            weighted_score += trend_score
+            conditions.append((trend_pass, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"))
+            explanations.append({
+                'condition': 'Trend',
+                'passed': trend_pass,
+                'value': f"Price: {close:.2f}, EMA9: {ema_9:.2f}, EMA20: {ema_20:.2f}" if ema_9 and ema_20 else "N/A",
+                'threshold': "Price < EMA9 < EMA20",
+                'weight': weights['trend'],
+                'score': trend_score,
+                'explanation': f"Price below short-term EMAs {'✓' if trend_pass else '✗'}. Bearish trend alignment needed for puts."
+            })
         
         # Momentum condition (RSI)
         if side == "call":
