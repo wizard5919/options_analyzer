@@ -181,27 +181,28 @@ def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity
         return {'support': [], 'resistance': []}
     
     # Calculate recent volatility for dynamic sensitivity
-    atr_series = data['High'].subtract(data['Low'])  # This is a Series
-    atr = atr_series.mean()  # Convert to scalar
+    atr_series = data['High'] - data['Low']
+    atr_value = atr_series.mean()  # Convert to scalar value
     
-    # FIX: Ensure atr is a scalar value
-    if not pd.isna(atr) and atr > 0:
-        dynamic_sensitivity = max(sensitivity, min(0.02, atr * 0.5 / data['Close'].iloc[-1]))
+    # FIX: Properly handle scalar values
+    if not pd.isna(atr_value) and atr_value > 0:
+        current_close = data['Close'].iloc[-1]
+        atr_ratio = atr_value * 0.5 / current_close
+        dynamic_sensitivity = max(sensitivity, min(0.02, atr_ratio))
     else:
         dynamic_sensitivity = sensitivity
     
-    # Get window size based on timeframe
-    window_size = CONFIG['SR_WINDOW_SIZES'].get(timeframe, 5)
+    # Find swing highs and swing lows
+    highs = data['High']
+    lows = data['Low']
     
-    # Find local maxima using rolling windows
-    rolling_high = data['High'].rolling(window=window_size, center=True).max()
-    max_mask = (data['High'] == rolling_high)
-    resistance_levels = data.loc[max_mask, 'High'].tolist()
+    # Find local maxima and minima
+    max_idx = scipy.signal.argrelextrema(highs.values, np.greater, order=3)[0]
+    min_idx = scipy.signal.argrelextrema(lows.values, np.less, order=3)[0]
     
-    # Find local minima using rolling windows
-    rolling_low = data['Low'].rolling(window=window_size, center=True).min()
-    min_mask = (data['Low'] == rolling_low)
-    support_levels = data.loc[min_mask, 'Low'].tolist()
+    # Get price levels
+    resistance_levels = highs.iloc[max_idx].tolist()
+    support_levels = lows.iloc[min_idx].tolist()
     
     # Cluster nearby levels
     clustered_resistance = []
