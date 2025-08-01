@@ -770,65 +770,46 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-# NEW: Real data fetching with multiple strategies and better rate limit management
+# NEW: Real data fetching with fixed session handling
 @st.cache_data(ttl=1800, show_spinner=False)  # 30-minute cache for real data
 def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
-    """Get real options data with multiple strategies to avoid rate limits"""
+    """Get real options data with proper yfinance handling"""
     
-    # Strategy 1: Check if we can clear the rate limit status
+    # Check if we can clear the rate limit status
     if 'yf_rate_limited_until' in st.session_state:
         time_remaining = st.session_state['yf_rate_limited_until'] - time.time()
         if time_remaining <= 0:
             # Rate limit expired, try again
             del st.session_state['yf_rate_limited_until']
-            st.info("🔄 Rate limit expired - attempting fresh data fetch")
         else:
-            st.warning(f"⏳ Still rate limited for {int(time_remaining)}s")
             return [], pd.DataFrame(), pd.DataFrame()
     
-    # Strategy 2: Use different session/user agent
     try:
-        import yfinance as yf
+        # Don't use custom session - let yfinance handle it
+        stock = yf.Ticker(ticker)
         
-        # Create a fresh session
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        
-        # Try with session
-        stock = yf.Ticker(ticker, session=session)
-        
-        st.info(f"🔍 Attempting real data fetch for {ticker}...")
-        
-        # Single attempt with longer timeout
+        # Single attempt with minimal delay
         try:
             expiries = list(stock.options) if stock.options else []
             
             if not expiries:
-                st.warning("❌ No options expiries found")
                 return [], pd.DataFrame(), pd.DataFrame()
-            
-            st.success(f"✅ Found {len(expiries)} real expiry dates")
             
             # Get only the nearest expiry to minimize API calls
             nearest_expiry = expiries[0]
-            st.info(f"📊 Fetching real options chain for {nearest_expiry}")
             
             # Add small delay
-            time.sleep(2)
+            time.sleep(1)
             
             chain = stock.option_chain(nearest_expiry)
             
             if chain is None:
-                st.error("❌ No options chain data returned")
                 return [], pd.DataFrame(), pd.DataFrame()
             
             calls = chain.calls.copy()
             puts = chain.puts.copy()
             
             if calls.empty and puts.empty:
-                st.error("❌ Empty options chain")
                 return [], pd.DataFrame(), pd.DataFrame()
             
             # Add expiry column
@@ -841,7 +822,6 @@ def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Data
             puts_valid = all(col in puts.columns for col in required_cols)
             
             if not (calls_valid and puts_valid):
-                st.error("❌ Missing required columns in options data")
                 return [], pd.DataFrame(), pd.DataFrame()
             
             # Add Greeks columns if missing
@@ -853,22 +833,18 @@ def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Data
                 if 'theta' not in df.columns:
                     df['theta'] = np.nan
             
-            st.success(f"✅ **REAL DATA**: {len(calls)} calls, {len(puts)} puts for {nearest_expiry}")
             return [nearest_expiry], calls, puts
             
         except Exception as e:
             error_msg = str(e).lower()
             if any(keyword in error_msg for keyword in ["too many requests", "rate limit", "429", "quota"]):
                 # Set a shorter cooldown for real data attempts
-                st.session_state['yf_rate_limited_until'] = time.time() + 180  # 3 minutes instead of 5
-                st.error("🚫 Rate limited - try again in 3 minutes")
+                st.session_state['yf_rate_limited_until'] = time.time() + 180  # 3 minutes
                 return [], pd.DataFrame(), pd.DataFrame()
             else:
-                st.error(f"❌ Error fetching real data: {str(e)}")
                 return [], pd.DataFrame(), pd.DataFrame()
                 
     except Exception as e:
-        st.error(f"❌ Critical error in real data fetch: {str(e)}")
         return [], pd.DataFrame(), pd.DataFrame()
 
 def clear_rate_limit():
@@ -878,60 +854,12 @@ def clear_rate_limit():
         st.success("✅ Rate limit status cleared - try fetching data again")
         st.rerun()
 
-# NEW: Enhanced options data fetching with real data priority
-@st.cache_data(ttl=CONFIG['CACHE_TTL'], show_spinner=False)
+# NEW: Non-cached options data fetching (no widgets in cached functions)
 def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
-    """Get options data - prioritize real data, fallback to demo only when necessary"""
+    """Get options data - prioritize real data, handle UI separately"""
     
-    # Always try real data first
+    # Try to get real data
     expiries, calls, puts = get_real_options_data(ticker)
-    
-    if not expiries:
-        # Only show demo data option if real data fails
-        st.error("❌ Unable to fetch real options data")
-        
-        with st.expander("💡 Solutions for Real Data", expanded=True):
-            st.markdown("""
-            **🔧 To get real options data:**
-            
-            1. **Wait and Retry**: Rate limits typically reset in 3-5 minutes
-            2. **Try Different Time**: Options data is more available during market hours
-            3. **Use Alternative Tickers**: Some tickers have less restrictive access
-            4. **Premium Data Sources**: Consider upgrading to paid APIs for reliable access
-            
-            **⏰ Rate Limit Management:**
-            - Yahoo Finance limits options requests heavily
-            - Limits are per IP address and reset periodically  
-            - Using conservative refresh intervals helps avoid limits
-            """)
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if st.button("🔄 Clear Rate Limit & Retry", help="Clear rate limit status and try again"):
-                    clear_rate_limit()
-            
-            with col2:
-                if st.button("⏰ Check Rate Limit Status"):
-                    if 'yf_rate_limited_until' in st.session_state:
-                        remaining = max(0, int(st.session_state['yf_rate_limited_until'] - time.time()))
-                        if remaining > 0:
-                            st.info(f"⏳ Rate limited for {remaining} more seconds")
-                        else:
-                            st.success("✅ No active rate limits")
-                            del st.session_state['yf_rate_limited_until']
-                    else:
-                        st.success("✅ No active rate limits")
-            
-            with col3:
-                show_demo = st.button("📊 Show Demo Data (For Testing Only)")
-                
-        if show_demo or st.session_state.get('force_demo', False):
-            st.session_state.force_demo = True
-            st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
-            return get_fallback_options_data(ticker)
-        else:
-            return [], pd.DataFrame(), pd.DataFrame()
     
     return expiries, calls, puts
 
@@ -1927,35 +1855,73 @@ if ticker:
                     
                     st.info(f"{vol_color} **Volatility**: {atr_pct*100:.2f}% ({vol_status}) - Thresholds auto-adjust")
                 
-                # Get full options chain (cached) with better error handling
-                with st.spinner("📥 Fetching options data (rate-limit safe)..."):
+                # Get full options chain with real data priority and proper UI handling
+                with st.spinner("📥 Fetching REAL options data..."):
                     expiries, all_calls, all_puts = get_full_options_chain(ticker)
                 
+                # Handle the results and show UI controls outside of cached functions
                 if not expiries:
-                    st.error("❌ No options data available.")
+                    st.error("❌ Unable to fetch real options data")
                     
-                    with st.expander("💡 Troubleshooting Tips", expanded=True):
+                    # Check rate limit status
+                    rate_limited = False
+                    remaining_time = 0
+                    if 'yf_rate_limited_until' in st.session_state:
+                        remaining_time = max(0, int(st.session_state['yf_rate_limited_until'] - time.time()))
+                        rate_limited = remaining_time > 0
+                    
+                    with st.expander("💡 Solutions for Real Data", expanded=True):
                         st.markdown("""
-                        **🔧 If you're seeing rate limit errors:**
+                        **🔧 To get real options data:**
                         
-                        1. **Wait 5-10 minutes** before trying again
-                        2. **Try popular tickers** (SPY, QQQ, IWM, AAPL, TSLA, NVDA) - these have fallback data
-                        3. **Use longer refresh intervals** (300s+) to avoid hitting limits
-                        4. **Clear cache** and try again: Click the Refresh button
+                        1. **Wait and Retry**: Rate limits typically reset in 3-5 minutes
+                        2. **Try Different Time**: Options data is more available during market hours  
+                        3. **Use Popular Tickers**: SPY, QQQ, AAPL often have better access
+                        4. **Premium Data Sources**: Consider paid APIs for reliable access
                         
-                        **🎯 Alternative Analysis:**
-                        - Use the **Technical Analysis** tab (works without options data)
-                        - Check **Support/Resistance** levels (works independently)
-                        - Review **Market Context** for fundamental analysis
-                        
-                        **⏰ Rate Limit Status:**
-                        - Yahoo Finance has strict limits on options data
-                        - Limits reset automatically after 5-10 minutes
-                        - Consider using during off-peak hours
+                        **⏰ Rate Limit Management:**
+                        - Yahoo Finance limits options requests heavily
+                        - Limits are per IP address and reset periodically
+                        - Try again in a few minutes
                         """)
+                        
+                        if rate_limited:
+                            st.warning(f"⏳ Currently rate limited for {remaining_time} more seconds")
+                        else:
+                            st.info("✅ No active rate limits detected")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            if st.button("🔄 Clear Rate Limit & Retry", help="Clear rate limit status and try again"):
+                                clear_rate_limit()
+                        
+                        with col2:
+                            if st.button("⏰ Force Retry Now", help="Attempt to fetch data regardless of rate limit"):
+                                if 'yf_rate_limited_until' in st.session_state:
+                                    del st.session_state['yf_rate_limited_until']
+                                st.cache_data.clear()
+                                st.rerun()
+                        
+                        with col3:
+                            show_demo = st.button("📊 Show Demo Data", help="Use demo data for testing interface")
                     
-                    # Show technical analysis as alternative
-                    st.info("🔄 **Alternative**: Use Technical Analysis tab for stock-only analysis")
+                    if show_demo:
+                        st.session_state.force_demo = True
+                        st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
+                        expiries, all_calls, all_puts = get_fallback_options_data(ticker)
+                    else:
+                        # Suggest using other tabs
+                        st.info("💡 **Alternative**: Use Technical Analysis or Support/Resistance tabs (work without options data)")
+                        st.stop()
+                
+                # Only proceed if we have data (real or explicitly chosen demo)
+                if expiries:
+                    if st.session_state.get('force_demo', False):
+                        st.warning("⚠️ Using demo data for interface testing only")
+                    else:
+                        st.success(f"✅ **REAL OPTIONS DATA** loaded: {len(all_calls)} calls, {len(all_puts)} puts")
+                else:
                     st.stop()
                 
                 # Expiry selection
