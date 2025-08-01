@@ -770,92 +770,170 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-# NEW: Enhanced options data caching with immediate fallback on rate limits
-@st.cache_data(ttl=CONFIG['CACHE_TTL'], show_spinner=False)
-def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
-    """Cache full option chains and expiries together with immediate fallback"""
+# NEW: Real data fetching with multiple strategies and better rate limit management
+@st.cache_data(ttl=1800, show_spinner=False)  # 30-minute cache for real data
+def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
+    """Get real options data with multiple strategies to avoid rate limits"""
     
-    # Check if we're already rate limited
+    # Strategy 1: Check if we can clear the rate limit status
     if 'yf_rate_limited_until' in st.session_state:
-        if time.time() < st.session_state['yf_rate_limited_until']:
-            st.warning(f"⏳ Yahoo Finance rate limited - using fallback data")
-            return get_fallback_options_data(ticker)
+        time_remaining = st.session_state['yf_rate_limited_until'] - time.time()
+        if time_remaining <= 0:
+            # Rate limit expired, try again
+            del st.session_state['yf_rate_limited_until']
+            st.info("🔄 Rate limit expired - attempting fresh data fetch")
+        else:
+            st.warning(f"⏳ Still rate limited for {int(time_remaining)}s")
+            return [], pd.DataFrame(), pd.DataFrame()
     
+    # Strategy 2: Use different session/user agent
     try:
-        stock = yf.Ticker(ticker)
+        import yfinance as yf
         
-        # Quick test - try to get expiries with minimal retries
-        expiries = []
-        max_quick_attempts = 2  # Only 2 attempts to avoid long waits
+        # Create a fresh session
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
         
-        for attempt in range(max_quick_attempts):
-            try:
-                if attempt > 0:
-                    time.sleep(2)  # Short delay only
-                
-                expiries = list(stock.options) if stock.options else []
-                if expiries:
-                    break
-                    
-            except Exception as e:
-                error_msg = str(e).lower()
-                if any(keyword in error_msg for keyword in ["too many requests", "rate limit", "429", "quota"]):
-                    # Immediately set rate limit and use fallback
-                    st.session_state['yf_rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-                    st.warning("🚫 Rate limit detected - switching to fallback data immediately")
-                    return get_fallback_options_data(ticker)
-                else:
-                    st.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+        # Try with session
+        stock = yf.Ticker(ticker, session=session)
         
-        if not expiries:
-            st.info("📊 No live expiries found - using fallback data")
-            return get_fallback_options_data(ticker)
+        st.info(f"🔍 Attempting real data fetch for {ticker}...")
         
-        # If we got expiries, try to get minimal options data
-        all_calls = pd.DataFrame()
-        all_puts = pd.DataFrame()
-        
-        # Only get 1 expiry to minimize API calls
-        expiry = expiries[0]
-        st.info(f"📥 Fetching options for {expiry} (conservative approach)")
-        
+        # Single attempt with longer timeout
         try:
-            chain = stock.option_chain(expiry)
-            if chain is not None:
-                calls = chain.calls.copy()
-                puts = chain.puts.copy()
-                
-                calls['expiry'] = expiry
-                puts['expiry'] = expiry
-                
-                # Add Greeks columns if missing
-                for df_name, df in [('calls', calls), ('puts', puts)]:
-                    if 'delta' not in df.columns:
-                        df['delta'] = np.nan
-                    if 'gamma' not in df.columns:
-                        df['gamma'] = np.nan
-                    if 'theta' not in df.columns:
-                        df['theta'] = np.nan
-                
-                all_calls = calls
-                all_puts = puts
-                
-                st.success(f"✅ Successfully fetched live data for {expiry}")
-                return [expiry], all_calls, all_puts
+            expiries = list(stock.options) if stock.options else []
+            
+            if not expiries:
+                st.warning("❌ No options expiries found")
+                return [], pd.DataFrame(), pd.DataFrame()
+            
+            st.success(f"✅ Found {len(expiries)} real expiry dates")
+            
+            # Get only the nearest expiry to minimize API calls
+            nearest_expiry = expiries[0]
+            st.info(f"📊 Fetching real options chain for {nearest_expiry}")
+            
+            # Add small delay
+            time.sleep(2)
+            
+            chain = stock.option_chain(nearest_expiry)
+            
+            if chain is None:
+                st.error("❌ No options chain data returned")
+                return [], pd.DataFrame(), pd.DataFrame()
+            
+            calls = chain.calls.copy()
+            puts = chain.puts.copy()
+            
+            if calls.empty and puts.empty:
+                st.error("❌ Empty options chain")
+                return [], pd.DataFrame(), pd.DataFrame()
+            
+            # Add expiry column
+            calls['expiry'] = nearest_expiry
+            puts['expiry'] = nearest_expiry
+            
+            # Validate we have essential columns
+            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest']
+            calls_valid = all(col in calls.columns for col in required_cols)
+            puts_valid = all(col in puts.columns for col in required_cols)
+            
+            if not (calls_valid and puts_valid):
+                st.error("❌ Missing required columns in options data")
+                return [], pd.DataFrame(), pd.DataFrame()
+            
+            # Add Greeks columns if missing
+            for df_name, df in [('calls', calls), ('puts', puts)]:
+                if 'delta' not in df.columns:
+                    df['delta'] = np.nan
+                if 'gamma' not in df.columns:
+                    df['gamma'] = np.nan
+                if 'theta' not in df.columns:
+                    df['theta'] = np.nan
+            
+            st.success(f"✅ **REAL DATA**: {len(calls)} calls, {len(puts)} puts for {nearest_expiry}")
+            return [nearest_expiry], calls, puts
             
         except Exception as e:
             error_msg = str(e).lower()
             if any(keyword in error_msg for keyword in ["too many requests", "rate limit", "429", "quota"]):
-                st.session_state['yf_rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-                st.warning("🚫 Rate limit on options fetch - using fallback")
-                return get_fallback_options_data(ticker)
-        
-        # If we get here, fallback to demo data
-        return get_fallback_options_data(ticker)
-        
+                # Set a shorter cooldown for real data attempts
+                st.session_state['yf_rate_limited_until'] = time.time() + 180  # 3 minutes instead of 5
+                st.error("🚫 Rate limited - try again in 3 minutes")
+                return [], pd.DataFrame(), pd.DataFrame()
+            else:
+                st.error(f"❌ Error fetching real data: {str(e)}")
+                return [], pd.DataFrame(), pd.DataFrame()
+                
     except Exception as e:
-        st.warning(f"General error: {str(e)} - using fallback")
-        return get_fallback_options_data(ticker)
+        st.error(f"❌ Critical error in real data fetch: {str(e)}")
+        return [], pd.DataFrame(), pd.DataFrame()
+
+def clear_rate_limit():
+    """Allow user to manually clear rate limit"""
+    if 'yf_rate_limited_until' in st.session_state:
+        del st.session_state['yf_rate_limited_until']
+        st.success("✅ Rate limit status cleared - try fetching data again")
+        st.rerun()
+
+# NEW: Enhanced options data fetching with real data priority
+@st.cache_data(ttl=CONFIG['CACHE_TTL'], show_spinner=False)
+def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
+    """Get options data - prioritize real data, fallback to demo only when necessary"""
+    
+    # Always try real data first
+    expiries, calls, puts = get_real_options_data(ticker)
+    
+    if not expiries:
+        # Only show demo data option if real data fails
+        st.error("❌ Unable to fetch real options data")
+        
+        with st.expander("💡 Solutions for Real Data", expanded=True):
+            st.markdown("""
+            **🔧 To get real options data:**
+            
+            1. **Wait and Retry**: Rate limits typically reset in 3-5 minutes
+            2. **Try Different Time**: Options data is more available during market hours
+            3. **Use Alternative Tickers**: Some tickers have less restrictive access
+            4. **Premium Data Sources**: Consider upgrading to paid APIs for reliable access
+            
+            **⏰ Rate Limit Management:**
+            - Yahoo Finance limits options requests heavily
+            - Limits are per IP address and reset periodically  
+            - Using conservative refresh intervals helps avoid limits
+            """)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("🔄 Clear Rate Limit & Retry", help="Clear rate limit status and try again"):
+                    clear_rate_limit()
+            
+            with col2:
+                if st.button("⏰ Check Rate Limit Status"):
+                    if 'yf_rate_limited_until' in st.session_state:
+                        remaining = max(0, int(st.session_state['yf_rate_limited_until'] - time.time()))
+                        if remaining > 0:
+                            st.info(f"⏳ Rate limited for {remaining} more seconds")
+                        else:
+                            st.success("✅ No active rate limits")
+                            del st.session_state['yf_rate_limited_until']
+                    else:
+                        st.success("✅ No active rate limits")
+            
+            with col3:
+                show_demo = st.button("📊 Show Demo Data (For Testing Only)")
+                
+        if show_demo or st.session_state.get('force_demo', False):
+            st.session_state.force_demo = True
+            st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
+            return get_fallback_options_data(ticker)
+        else:
+            return [], pd.DataFrame(), pd.DataFrame()
+    
+    return expiries, calls, puts
 
 def get_fallback_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
     """Enhanced fallback method with realistic options data"""
