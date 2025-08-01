@@ -172,7 +172,7 @@ def log_api_request(source: str):
 def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity: float = None) -> dict:
     """
     Calculate support and resistance levels for a given timeframe
-    with enhanced clustering and relevance scoring (no scipy dependency)
+    with enhanced clustering and relevance scoring
     """
     if sensitivity is None:
         sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
@@ -181,8 +181,11 @@ def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity
         return {'support': [], 'resistance': []}
     
     # Calculate recent volatility for dynamic sensitivity
-    atr = data['High'].subtract(data['Low']).mean()
-    if not np.isnan(atr) and atr > 0:
+    atr_series = data['High'].subtract(data['Low'])  # This is a Series
+    atr = atr_series.mean()  # Convert to scalar
+    
+    # FIX: Ensure atr is a scalar value
+    if not pd.isna(atr) and atr > 0:
         dynamic_sensitivity = max(sensitivity, min(0.02, atr * 0.5 / data['Close'].iloc[-1]))
     else:
         dynamic_sensitivity = sensitivity
