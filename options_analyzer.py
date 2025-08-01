@@ -181,13 +181,13 @@ def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity
         return {'support': [], 'resistance': []}
     
     # Calculate recent volatility for dynamic sensitivity
-    atr_series = data['High'] - data['Low']
-    atr_value = atr_series.mean()  # Convert to scalar value
+    # FIX: Properly convert Series to scalar
+    atr_value = (data['High'] - data['Low']).mean()
     
-    # FIX: Properly handle scalar values
-    if not pd.isna(atr_value) and atr_value > 0:
-        current_close = data['Close'].iloc[-1]
-        atr_ratio = atr_value * 0.5 / current_close
+    # FIX: Convert to float and handle NaN properly
+    if not pd.isna(atr_value) and float(atr_value) > 0:
+        current_close = float(data['Close'].iloc[-1])
+        atr_ratio = float(atr_value) * 0.5 / current_close
         dynamic_sensitivity = max(sensitivity, min(0.02, atr_ratio))
     else:
         dynamic_sensitivity = sensitivity
