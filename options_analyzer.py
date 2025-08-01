@@ -15,6 +15,13 @@ from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient  # Polygon API client
+try:
+    from scipy import signal
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    import warnings
+    warnings.warn("scipy not available. Support/Resistance analysis will use simplified method.")
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -169,6 +176,24 @@ def log_api_request(source: str):
 # FIXED SUPPORT/RESISTANCE FUNCTIONS
 # =============================
 
+def find_peaks_simple(data, order=3):
+    """Simple peak finding without scipy"""
+    peaks = []
+    for i in range(order, len(data) - order):
+        if all(data[i] >= data[i-j] for j in range(1, order+1)) and \
+           all(data[i] >= data[i+j] for j in range(1, order+1)):
+            peaks.append(i)
+    return peaks
+
+def find_valleys_simple(data, order=3):
+    """Simple valley finding without scipy"""
+    valleys = []
+    for i in range(order, len(data) - order):
+        if all(data[i] <= data[i-j] for j in range(1, order+1)) and \
+           all(data[i] <= data[i+j] for j in range(1, order+1)):
+            valleys.append(i)
+    return valleys
+
 def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity: float = None) -> dict:
     """
     Calculate support and resistance levels for a given timeframe
@@ -210,16 +235,18 @@ def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity
         
         # Find local maxima and minima with error handling
         try:
-            max_idx = signal.argrelextrema(highs, np.greater, order=3)[0]
-            min_idx = signal.argrelextrema(lows, np.less, order=3)[0]
+            if SCIPY_AVAILABLE:
+                max_idx = signal.argrelextrema(highs, np.greater, order=3)[0]
+                min_idx = signal.argrelextrema(lows, np.less, order=3)[0]
+            else:
+                # Use simple peak finding if scipy not available
+                max_idx = find_peaks_simple(highs, order=3)
+                min_idx = find_valleys_simple(lows, order=3)
         except Exception as e:
             st.warning(f"Error finding extrema for {timeframe}: {str(e)}")
-            return {
-                'support': [],
-                'resistance': [],
-                'sensitivity': dynamic_sensitivity,
-                'timeframe': timeframe
-            }
+            # Fallback to simple method
+            max_idx = find_peaks_simple(highs, order=3)
+            min_idx = find_valleys_simple(lows, order=3)
         
         # Get price levels
         resistance_levels = [float(highs[i]) for i in max_idx if i < len(highs)]
