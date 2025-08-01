@@ -1,10 +1,3 @@
-fix this error and provide me with the full integrated code : 
-
-File "/mount/src/options_analyzer/options_analyzer.py", line 1259
-                                  'profit_target': 'Target,
-                                                   ^
-SyntaxError: unterminated string literal (detected at line 1259)
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
