@@ -15,7 +15,6 @@ from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient  # Polygon API client
-import scipy.signal
 
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -67,6 +66,13 @@ CONFIG = {
         '15min': 0.005,
         '30min': 0.007,
         '1h': 0.01
+    },
+    'SR_WINDOW_SIZES': {
+        '1min': 5,
+        '5min': 5,
+        '15min': 7,
+        '30min': 7,
+        '1h': 10
     }
 }
 
@@ -160,13 +166,13 @@ def log_api_request(source: str):
     })
 
 # =============================
-# SUPPORT/RESISTANCE FUNCTIONS
+# SUPPORT/RESISTANCE FUNCTIONS (SCIPY-FREE)
 # =============================
 
 def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity: float = None) -> dict:
     """
     Calculate support and resistance levels for a given timeframe
-    with enhanced clustering and relevance scoring
+    with enhanced clustering and relevance scoring (no scipy dependency)
     """
     if sensitivity is None:
         sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
@@ -181,17 +187,18 @@ def calculate_support_resistance(data: pd.DataFrame, timeframe: str, sensitivity
     else:
         dynamic_sensitivity = sensitivity
     
-    # Find swing highs and swing lows
-    highs = data['High']
-    lows = data['Low']
+    # Get window size based on timeframe
+    window_size = CONFIG['SR_WINDOW_SIZES'].get(timeframe, 5)
     
-    # Find local maxima and minima
-    max_idx = scipy.signal.argrelextrema(highs.values, np.greater, order=3)[0]
-    min_idx = scipy.signal.argrelextrema(lows.values, np.less, order=3)[0]
+    # Find local maxima using rolling windows
+    rolling_high = data['High'].rolling(window=window_size, center=True).max()
+    max_mask = (data['High'] == rolling_high)
+    resistance_levels = data.loc[max_mask, 'High'].tolist()
     
-    # Get price levels
-    resistance_levels = highs.iloc[max_idx].tolist()
-    support_levels = lows.iloc[min_idx].tolist()
+    # Find local minima using rolling windows
+    rolling_low = data['Low'].rolling(window=window_size, center=True).min()
+    min_mask = (data['Low'] == rolling_low)
+    support_levels = data.loc[min_mask, 'Low'].tolist()
     
     # Cluster nearby levels
     clustered_resistance = []
@@ -1229,6 +1236,8 @@ if 'auto_refresh_enabled' not in st.session_state:
     st.session_state.auto_refresh_enabled = False
 if 'sr_data' not in st.session_state:
     st.session_state.sr_data = {}
+if 'last_ticker' not in st.session_state:
+    st.session_state.last_ticker = ""
 
 # Enhanced rate limit check
 if 'rate_limited_until' in st.session_state:
@@ -1466,7 +1475,7 @@ if ticker:
         st.rerun()
 
     # NEW: Support/Resistance Analysis
-    if 'sr_data' not in st.session_state or st.session_state.get('last_ticker') != ticker:
+    if not st.session_state.sr_data or st.session_state.last_ticker != ticker:
         with st.spinner("🔍 Analyzing support/resistance levels..."):
             st.session_state.sr_data = analyze_support_resistance(ticker)
             st.session_state.last_ticker = ticker
