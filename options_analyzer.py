@@ -770,215 +770,224 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-# NEW: Enhanced options data caching with better rate limit handling and fallbacks
+# NEW: Enhanced options data caching with immediate fallback on rate limits
 @st.cache_data(ttl=CONFIG['CACHE_TTL'], show_spinner=False)
 def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
-    """Cache full option chains and expiries together with enhanced rate limit protection"""
+    """Cache full option chains and expiries together with immediate fallback"""
+    
+    # Check if we're already rate limited
+    if 'yf_rate_limited_until' in st.session_state:
+        if time.time() < st.session_state['yf_rate_limited_until']:
+            st.warning(f"⏳ Yahoo Finance rate limited - using fallback data")
+            return get_fallback_options_data(ticker)
+    
     try:
-        # Check if we're being rate limited
-        if 'yf_rate_limited_until' in st.session_state:
-            if time.time() < st.session_state['yf_rate_limited_until']:
-                remaining = int(st.session_state['yf_rate_limited_until'] - time.time())
-                st.warning(f"⏳ Yahoo Finance rate limited. Waiting {remaining}s...")
-                return [], pd.DataFrame(), pd.DataFrame()
-        
-        # Get expiries first with enhanced retries and longer delays
         stock = yf.Ticker(ticker)
-        expiries = []
         
-        for attempt in range(CONFIG['MAX_RETRIES']):
+        # Quick test - try to get expiries with minimal retries
+        expiries = []
+        max_quick_attempts = 2  # Only 2 attempts to avoid long waits
+        
+        for attempt in range(max_quick_attempts):
             try:
-                # Add longer delay between attempts
                 if attempt > 0:
-                    delay = min(30, CONFIG['RETRY_DELAY'] * (2 ** attempt))  # Cap at 30 seconds
-                    st.info(f"⏳ Attempt {attempt + 1}/{CONFIG['MAX_RETRIES']} - Waiting {delay}s...")
-                    time.sleep(delay)
+                    time.sleep(2)  # Short delay only
                 
-                # Try to get options expiries
                 expiries = list(stock.options) if stock.options else []
-                
                 if expiries:
-                    st.success(f"✅ Found {len(expiries)} expiry dates")
                     break
-                else:
-                    st.warning(f"⚠️ No expiries found for {ticker} on attempt {attempt + 1}")
                     
             except Exception as e:
                 error_msg = str(e).lower()
                 if any(keyword in error_msg for keyword in ["too many requests", "rate limit", "429", "quota"]):
-                    # Set rate limit cooldown
-                    cooldown_time = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-                    st.session_state['yf_rate_limited_until'] = cooldown_time
-                    
-                    st.error(f"🚫 Yahoo Finance rate limit detected. Cooling down for {CONFIG['RATE_LIMIT_COOLDOWN']}s")
-                    
-                    if attempt == CONFIG['MAX_RETRIES'] - 1:
-                        st.error("❌ Max retries reached. Please try again in 5 minutes or use a different ticker.")
-                        return [], pd.DataFrame(), pd.DataFrame()
+                    # Immediately set rate limit and use fallback
+                    st.session_state['yf_rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+                    st.warning("🚫 Rate limit detected - switching to fallback data immediately")
+                    return get_fallback_options_data(ticker)
                 else:
-                    st.error(f"Error fetching expiries (attempt {attempt + 1}): {str(e)}")
-                    
-                    if attempt == CONFIG['MAX_RETRIES'] - 1:
-                        # Try alternative approach for popular tickers
-                        return get_fallback_options_data(ticker)
+                    st.warning(f"Attempt {attempt + 1} failed: {str(e)}")
         
         if not expiries:
-            st.warning(f"⚠️ No options expiries found for {ticker}")
+            st.info("📊 No live expiries found - using fallback data")
             return get_fallback_options_data(ticker)
         
-        # Get options data for expiries with enhanced rate limiting
+        # If we got expiries, try to get minimal options data
         all_calls = pd.DataFrame()
         all_puts = pd.DataFrame()
         
-        # Further reduce expiries to prevent rate limiting (max 3 instead of 5)
-        expiries_to_fetch = expiries[:3]
-        st.info(f"📊 Fetching options for {len(expiries_to_fetch)} expiries (rate-limit safe)")
+        # Only get 1 expiry to minimize API calls
+        expiry = expiries[0]
+        st.info(f"📥 Fetching options for {expiry} (conservative approach)")
         
-        successful_fetches = 0
-        for i, expiry in enumerate(expiries_to_fetch):
-            # Add progress indicator
-            progress = st.progress((i) / len(expiries_to_fetch))
-            status = st.empty()
-            status.info(f"📥 Fetching {expiry} ({i+1}/{len(expiries_to_fetch)})")
+        try:
+            chain = stock.option_chain(expiry)
+            if chain is not None:
+                calls = chain.calls.copy()
+                puts = chain.puts.copy()
+                
+                calls['expiry'] = expiry
+                puts['expiry'] = expiry
+                
+                # Add Greeks columns if missing
+                for df_name, df in [('calls', calls), ('puts', puts)]:
+                    if 'delta' not in df.columns:
+                        df['delta'] = np.nan
+                    if 'gamma' not in df.columns:
+                        df['gamma'] = np.nan
+                    if 'theta' not in df.columns:
+                        df['theta'] = np.nan
+                
+                all_calls = calls
+                all_puts = puts
+                
+                st.success(f"✅ Successfully fetched live data for {expiry}")
+                return [expiry], all_calls, all_puts
             
-            for attempt in range(CONFIG['MAX_RETRIES']):
-                try:
-                    # Longer delay between option chain requests
-                    if i > 0 or attempt > 0:
-                        delay = 3 + (attempt * 2)  # 3, 5, 7, 9, 11 seconds
-                        time.sleep(delay)
-                    
-                    chain = stock.option_chain(expiry)
-                    if chain is None:
-                        st.warning(f"⚠️ No chain data for {expiry}")
-                        break
-                        
-                    calls = chain.calls.copy()
-                    puts = chain.puts.copy()
-                    
-                    if calls.empty and puts.empty:
-                        st.warning(f"⚠️ Empty chain for {expiry}")
-                        break
-                    
-                    calls['expiry'] = expiry
-                    puts['expiry'] = expiry
-                    
-                    # Add Greeks columns if missing
-                    for df_name, df in [('calls', calls), ('puts', puts)]:
-                        if 'delta' not in df.columns:
-                            df['delta'] = np.nan
-                        if 'gamma' not in df.columns:
-                            df['gamma'] = np.nan
-                        if 'theta' not in df.columns:
-                            df['theta'] = np.nan
-                    
-                    all_calls = pd.concat([all_calls, calls], ignore_index=True)
-                    all_puts = pd.concat([all_puts, puts], ignore_index=True)
-                    
-                    successful_fetches += 1
-                    status.success(f"✅ Fetched {expiry} - {len(calls)} calls, {len(puts)} puts")
-                    break  # Success, move to next expiry
-                    
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if any(keyword in error_msg for keyword in ["too many requests", "rate limit", "429", "quota"]):
-                        # Set rate limit cooldown
-                        cooldown_time = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
-                        st.session_state['yf_rate_limited_until'] = cooldown_time
-                        
-                        status.error(f"🚫 Rate limited on {expiry}. Stopping to prevent further limits.")
-                        progress.empty()
-                        status.empty()
-                        
-                        # Return what we have so far
-                        if successful_fetches > 0:
-                            st.warning(f"⚠️ Partial data: {successful_fetches}/{len(expiries_to_fetch)} expiries fetched")
-                            return expiries, all_calls, all_puts
-                        else:
-                            return [], pd.DataFrame(), pd.DataFrame()
-                    else:
-                        status.warning(f"⚠️ Error on {expiry} attempt {attempt + 1}: {str(e)}")
-                        if attempt == CONFIG['MAX_RETRIES'] - 1:
-                            status.error(f"❌ Failed to fetch {expiry} after {CONFIG['MAX_RETRIES']} attempts")
-                            break
-            
-            # Clean up progress indicators
-            progress.empty()
-            status.empty()
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in ["too many requests", "rate limit", "429", "quota"]):
+                st.session_state['yf_rate_limited_until'] = time.time() + CONFIG['RATE_LIMIT_COOLDOWN']
+                st.warning("🚫 Rate limit on options fetch - using fallback")
+                return get_fallback_options_data(ticker)
         
-        if successful_fetches == 0:
-            st.error("❌ No options data could be fetched due to rate limits")
-            return [], pd.DataFrame(), pd.DataFrame()
-        
-        st.success(f"✅ Successfully fetched {successful_fetches}/{len(expiries_to_fetch)} expiries")
-        return expiries, all_calls, all_puts
+        # If we get here, fallback to demo data
+        return get_fallback_options_data(ticker)
         
     except Exception as e:
-        st.error(f"❌ Critical error fetching options data: {str(e)}")
+        st.warning(f"General error: {str(e)} - using fallback")
         return get_fallback_options_data(ticker)
 
 def get_fallback_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
-    """Fallback method for popular tickers with simulated options data"""
-    st.warning("🔄 Attempting fallback options data...")
+    """Enhanced fallback method with realistic options data"""
     
-    # For popular tickers, we can provide basic structure
-    popular_tickers = {
-        'SPY': {'expiries': ['2024-08-02', '2024-08-09', '2024-08-16'], 'strikes': [500, 505, 510, 515, 520]},
-        'QQQ': {'expiries': ['2024-08-02', '2024-08-09', '2024-08-16'], 'strikes': [350, 355, 360, 365, 370]},
-        'IWM': {'expiries': ['2024-08-02', '2024-08-09', '2024-08-16'], 'strikes': [200, 205, 210, 215, 220]},
-        'AAPL': {'expiries': ['2024-08-02', '2024-08-09', '2024-08-16'], 'strikes': [220, 225, 230, 235, 240]},
-        'TSLA': {'expiries': ['2024-08-02', '2024-08-09', '2024-08-16'], 'strikes': [240, 250, 260, 270, 280]},
-        'NVDA': {'expiries': ['2024-08-02', '2024-08-09', '2024-08-16'], 'strikes': [110, 115, 120, 125, 130]}
-    }
+    # Get current price for realistic strikes
+    try:
+        current_price = get_current_price(ticker)
+        if current_price <= 0:
+            # Default prices for common tickers
+            default_prices = {
+                'SPY': 550, 'QQQ': 480, 'IWM': 215, 'AAPL': 230, 
+                'TSLA': 250, 'NVDA': 125, 'MSFT': 420, 'GOOGL': 175,
+                'AMZN': 185, 'META': 520
+            }
+            current_price = default_prices.get(ticker, 100)
+    except:
+        current_price = 100
     
-    if ticker in popular_tickers:
-        info = popular_tickers[ticker]
-        st.info(f"📊 Using fallback data structure for {ticker}")
-        
-        # Create basic options structure (user would need real data for trading)
-        calls_data = []
-        puts_data = []
-        
-        for expiry in info['expiries']:
-            for strike in info['strikes']:
-                # Basic call structure
-                calls_data.append({
-                    'contractSymbol': f"{ticker}{expiry.replace('-', '')}C{strike:08.0f}000",
-                    'strike': strike,
-                    'expiry': expiry,
-                    'lastPrice': 5.0,  # Placeholder
-                    'volume': 1000,    # Placeholder
-                    'openInterest': 500, # Placeholder
-                    'impliedVolatility': 0.25, # Placeholder
-                    'delta': 0.5,      # Placeholder
-                    'gamma': 0.05,     # Placeholder
-                    'theta': -0.05     # Placeholder
-                })
-                
-                # Basic put structure
-                puts_data.append({
-                    'contractSymbol': f"{ticker}{expiry.replace('-', '')}P{strike:08.0f}000",
-                    'strike': strike,
-                    'expiry': expiry,
-                    'lastPrice': 5.0,  # Placeholder
-                    'volume': 1000,    # Placeholder
-                    'openInterest': 500, # Placeholder
-                    'impliedVolatility': 0.25, # Placeholder
-                    'delta': -0.5,     # Placeholder
-                    'gamma': 0.05,     # Placeholder
-                    'theta': -0.05     # Placeholder
-                })
-        
-        calls_df = pd.DataFrame(calls_data)
-        puts_df = pd.DataFrame(puts_data)
-        
-        st.warning("⚠️ **DEMO DATA**: This is simulated options data for demonstration. Do not use for actual trading!")
-        
-        return info['expiries'], calls_df, puts_df
+    # Create realistic strike ranges around current price
+    strike_range = max(5, current_price * 0.1)  # 10% range or minimum $5
+    strikes = []
     
+    # Generate strikes in reasonable increments
+    if current_price < 50:
+        increment = 1
+    elif current_price < 200:
+        increment = 5
     else:
-        st.error(f"❌ No fallback data available for {ticker}. Try SPY, QQQ, IWM, AAPL, TSLA, or NVDA")
-        return [], pd.DataFrame(), pd.DataFrame()
+        increment = 10
+    
+    start_strike = int((current_price - strike_range) / increment) * increment
+    end_strike = int((current_price + strike_range) / increment) * increment
+    
+    for strike in range(start_strike, end_strike + increment, increment):
+        if strike > 0:
+            strikes.append(strike)
+    
+    # Generate expiry dates
+    today = datetime.date.today()
+    expiries = []
+    
+    # Add today if it's a weekday (0DTE)
+    if today.weekday() < 5:
+        expiries.append(today.strftime('%Y-%m-%d'))
+    
+    # Add next Friday
+    days_until_friday = (4 - today.weekday()) % 7
+    if days_until_friday == 0:
+        days_until_friday = 7
+    next_friday = today + datetime.timedelta(days=days_until_friday)
+    expiries.append(next_friday.strftime('%Y-%m-%d'))
+    
+    # Add week after
+    week_after = next_friday + datetime.timedelta(days=7)
+    expiries.append(week_after.strftime('%Y-%m-%d'))
+    
+    st.info(f"📊 Generated {len(strikes)} strikes around ${current_price:.2f} for {ticker}")
+    
+    # Create realistic options data
+    calls_data = []
+    puts_data = []
+    
+    for expiry in expiries:
+        expiry_date = datetime.datetime.strptime(expiry, '%Y-%m-%d').date()
+        days_to_expiry = (expiry_date - today).days
+        is_0dte = days_to_expiry == 0
+        
+        for strike in strikes:
+            # Calculate moneyness
+            moneyness = current_price / strike
+            
+            # Realistic Greeks based on moneyness and time
+            if moneyness > 1.05:  # ITM calls
+                call_delta = 0.7 + (moneyness - 1) * 0.2
+                put_delta = call_delta - 1
+                gamma = 0.02
+            elif moneyness > 0.95:  # ATM
+                call_delta = 0.5
+                put_delta = -0.5
+                gamma = 0.08 if is_0dte else 0.05
+            else:  # OTM calls
+                call_delta = 0.3 - (1 - moneyness) * 0.2
+                put_delta = call_delta - 1
+                gamma = 0.02
+            
+            # Theta increases as expiry approaches
+            theta = -0.1 if is_0dte else -0.05 if days_to_expiry <= 7 else -0.02
+            
+            # Realistic pricing (very rough estimate)
+            intrinsic_call = max(0, current_price - strike)
+            intrinsic_put = max(0, strike - current_price)
+            time_value = 5 if is_0dte else 10 if days_to_expiry <= 7 else 15
+            
+            call_price = intrinsic_call + time_value * gamma
+            put_price = intrinsic_put + time_value * gamma
+            
+            # Volume estimates
+            volume = 1000 if abs(moneyness - 1) < 0.05 else 500  # Higher volume near ATM
+            
+            calls_data.append({
+                'contractSymbol': f"{ticker}{expiry.replace('-', '')}C{strike*1000:08.0f}",
+                'strike': strike,
+                'expiry': expiry,
+                'lastPrice': round(call_price, 2),
+                'volume': volume,
+                'openInterest': volume // 2,
+                'impliedVolatility': 0.25,
+                'delta': round(call_delta, 3),
+                'gamma': round(gamma, 3),
+                'theta': round(theta, 3)
+            })
+            
+            puts_data.append({
+                'contractSymbol': f"{ticker}{expiry.replace('-', '')}P{strike*1000:08.0f}",
+                'strike': strike,
+                'expiry': expiry,
+                'lastPrice': round(put_price, 2),
+                'volume': volume,
+                'openInterest': volume // 2,
+                'impliedVolatility': 0.25,
+                'delta': round(put_delta, 3),
+                'gamma': round(gamma, 3),
+                'theta': round(theta, 3)
+            })
+    
+    calls_df = pd.DataFrame(calls_data)
+    puts_df = pd.DataFrame(puts_data)
+    
+    st.success(f"✅ Generated realistic demo data: {len(calls_df)} calls, {len(puts_df)} puts")
+    st.warning("⚠️ **DEMO DATA**: Realistic structure but not real market data. Do not use for actual trading!")
+    
+    return expiries, calls_df, puts_df
 
 def classify_moneyness(strike: float, spot: float) -> str:
     """Classify option moneyness with dynamic ranges"""
