@@ -206,12 +206,13 @@ graph TD
 
 ---
 
-## 📬 Contact
+📬 **Contact**
+- **Author**: Youssef Sbai  
+- **Email**: youssefsbai83@gmail.com  
+- **GitHub**: [github.com/wizard5919](https://github.com/wizard5919)  
+- **LinkedIn**: [Youssef Sbai](https://www.linkedin.com/in/youssef-sbai-59b0172b0)
 
-- **Author:** Youssef Sbai
-- **Email:** youssefsbai83@gmail.com
-- **Issues:** [GitHub Issues](https://github.com/wizard5919/options_analyzer/issues)
+📌 This project was developed for educational and personal research purposes.  
+If you’re interested in contributing, collaborating, or building upon this work, feel free to reach out via [LinkedIn](https://www.linkedin.com/in/youssef-sbai-59b0172b0) or GitHub.
 
----
-
-**License:** MIT © 2025 Youssef Sbai
+📄 **License**: MIT © 2025 Youssef Sbai
