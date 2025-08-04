@@ -2981,52 +2981,52 @@ if st.session_state.get('auto_refresh_enabled', False) and ticker:
         st.rerun()  # CORRECTED LINE - removed the invalid syntax
             
            # Intraday timeframes
-            st.markdown("#### 📈 Intraday Timeframes (Swing Trades)")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if '15min' in st.session_state.sr_data:
-                    sr = st.session_state.sr_data['15min']
-                    st.markdown("**15 Minute**")
-                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                    
-                    st.markdown("**Support Levels**")
-                    for level in sr['support']:
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-                    
-                    st.markdown("**Resistance Levels**")
-                    for level in sr['resistance']:
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-            
-            with col2:
-                if '30min' in st.session_state.sr_data:
-                    sr = st.session_state.sr_data['30min']
-                    st.markdown("**30 Minute**")
-                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                    
-                    st.markdown("**Support Levels**")
-                    for level in sr['support']:
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-                    
-                    st.markdown("**Resistance Levels**")
-                    for level in sr['resistance']:
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-            
-           with col3:
-               if '1h' in st.session_state.sr_data:
-                   sr = st.session_state.sr_data['1h']
-                   st.markdown("**1 Hour**")
-                   st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+st.markdown("#### 📈 Intraday Timeframes (Swing Trades)")
+col1, col2, col3 = st.columns(3)
+with col1:
+    if '15min' in st.session_state.sr_data:
+        sr = st.session_state.sr_data['15min']
+        st.markdown("**15 Minute**")
+        st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
         
-                   st.markdown("**Support Levels**")
-                   for level in sr['support']:
-                       distance = abs(level - current_price) / current_price * 100
-                       st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+        st.markdown("**Support Levels**")
+        for level in sr['support']:
+            distance = abs(level - current_price) / current_price * 100
+            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
         
-                   st.markdown("**Resistance Levels**")
-                   for level in sr['resistance']:
-                       distance = abs(level - current_price) / current_price * 100
-                       st.markdown(f"- ${level:.2f} ({distance:.1f}% away}")
+        st.markdown("**Resistance Levels**")
+        for level in sr['resistance']:
+            distance = abs(level - current_price) / current_price * 100
+            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+    
+with col2:
+    if '30min' in st.session_state.sr_data:
+        sr = st.session_state.sr_data['30min']
+        st.markdown("**30 Minute**")
+        st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+        
+        st.markdown("**Support Levels**")
+        for level in sr['support']:
+            distance = abs(level - current_price) / current_price * 100
+            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+        
+        st.markdown("**Resistance Levels**")
+        for level in sr['resistance']:
+            distance = abs(level - current_price) / current_price * 100
+            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+    
+with col3:
+    if '1h' in st.session_state.sr_data:
+        sr = st.session_state.sr_data['1h']
+        st.markdown("**1 Hour**")
+        st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+        
+        st.markdown("**Support Levels**")
+        for level in sr['support']:
+            distance = abs(level - current_price) / current_price * 100
+            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+        
+        st.markdown("**Resistance Levels**")
+        for level in sr['resistance']:
+            distance = abs(level - current_price) / current_price * 100
+            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
