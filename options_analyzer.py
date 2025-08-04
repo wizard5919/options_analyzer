@@ -2978,7 +2978,8 @@ if st.session_state.get('auto_refresh_enabled', False) and ticker:
         # Show refresh notification
         st.success(f"🔄 Auto-refreshed at {datetime.datetime.now().strftime('%H:%M:%S')}")
         time.sleep(0.5)  # Brief pause to show notification
-        st.rerun() in sr['support']:
+        st.rerun()  # CORRECTED LINE - removed the invalid syntax
+
                         distance = abs(level - current_price) / current_price * 100
                         st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
                     
