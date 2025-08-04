@@ -15,6 +15,8 @@ from ta.volatility import AverageTrueRange, KeltnerChannel
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient  # Polygon API client
+from streamlit_autorefresh import st_autorefresh  # NEW: For auto-refresh
+
 try:
     from scipy import signal
     SCIPY_AVAILABLE = True
@@ -31,6 +33,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# NEW: Auto-refresh for real-time updates
+refresh_interval = st_autorefresh(interval=1000, limit=None, key="price_refresh")
 
 # =============================
 # ENHANCED CONFIGURATION & CONSTANTS
@@ -2058,6 +2063,16 @@ with st.sidebar:
         - Detailed explanations show why signals pass/fail
         """)
 
+# NEW: Create placeholders for real-time metrics
+if 'price_placeholder' not in st.session_state:
+    st.session_state.price_placeholder = st.empty()
+if 'status_placeholder' not in st.session_state:
+    st.session_state.status_placeholder = st.empty()
+if 'cache_placeholder' not in st.session_state:
+    st.session_state.cache_placeholder = st.empty()
+if 'refresh_placeholder' not in st.session_state:
+    st.session_state.refresh_placeholder = st.empty()
+
 # Main interface
 ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
@@ -2066,29 +2081,35 @@ if ticker:
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        if is_market_open():
-            st.success("🟢 OPEN")
-        elif is_premarket():
-            st.warning("🟡 PRE")
-        else:
-            st.info("🔴 CLOSED")
-    
+        st.session_state.status_placeholder = st.empty()
     with col2:
-        current_price = get_current_price(ticker)
-        if current_price > 0:
-            st.metric("Price", f"${current_price:.2f}")
-        else:
-            st.error("❌ Price Error")
-    
+        st.session_state.price_placeholder = st.empty()
     with col3:
-        cache_age = int(time.time() - st.session_state.get('last_refresh', 0))
-        st.metric("Cache Age", f"{cache_age}s")
-    
+        st.session_state.cache_placeholder = st.empty()
     with col4:
-        st.metric("Refreshes", st.session_state.refresh_counter)
-    
+        st.session_state.refresh_placeholder = st.empty()
     with col5:
         manual_refresh = st.button("🔄 Refresh", key="manual_refresh")
+    
+    # Update real-time metrics
+    current_price = get_current_price(ticker)
+    cache_age = int(time.time() - st.session_state.get('last_refresh', 0))
+    
+    # Update placeholders
+    if is_market_open():
+        st.session_state.status_placeholder.success("🟢 OPEN")
+    elif is_premarket():
+        st.session_state.status_placeholder.warning("🟡 PRE")
+    else:
+        st.session_state.status_placeholder.info("🔴 CLOSED")
+    
+    if current_price > 0:
+        st.session_state.price_placeholder.metric("Price", f"${current_price:.2f}")
+    else:
+        st.session_state.price_placeholder.error("❌ Price Error")
+    
+    st.session_state.cache_placeholder.metric("Cache Age", f"{cache_age}s")
+    st.session_state.refresh_placeholder.metric("Refreshes", st.session_state.refresh_counter)
     
     if manual_refresh:
         st.cache_data.clear()
@@ -2200,7 +2221,7 @@ if ticker:
                     if show_demo:
                         st.session_state.force_demo = True
                         st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
-                        expiries, all_calls, all_puts = get_fallback_options_data(ticker)
+                        expiries, calls, puts = get_fallback_options_data(ticker)
                     else:
                         # Suggest using other tabs
                         st.info("💡 **Alternative**: Use Technical Analysis or Support/Resistance tabs (work without options data)")
@@ -2657,19 +2678,19 @@ if ticker:
             st.markdown("""
             **🚀 Speed Improvements:**
             - **Smart Caching**: Options cached for 5 min, stocks for 5 min
-            - **Batch Processing**: Vectorized operations instead of slow loops
-            - **Combined Functions**: Stock data + indicators computed together
-            - **Rate Limit Protection**: Enforced minimum refresh intervals
+            - Batch processing: Vectorized operations instead of slow loops
+            - Combined functions: Stock data + indicators computed together
+            - Rate limit protection: Enforced minimum refresh intervals
             
             **💰 Cost Reduction:**
-            - **Full Chain Caching**: Fetch all expiries once, filter locally
-            - **Conservative Defaults**: 120s refresh intervals prevent overuse
-            - **Fallback Logic**: Yahoo Finance backup when Polygon unavailable
+            - Full chain caching: Fetch all expiries once, filter locally
+            - Conservative defaults: 120s refresh intervals prevent overuse
+            - Fallback logic: Yahoo Finance backup when Polygon unavailable
             
             **📊 Better Analysis:**
-            - **Weighted Scoring**: Most important factors weighted highest
-            - **Detailed Explanations**: See exactly why signals pass/fail
-            - **Multiple Timeframes**: 0DTE, weekly, monthly analysis
+            - Weighted scoring: Most important factors weighted highest
+            - Detailed explanations: See exactly why signals pass/fail
+            - Multiple timeframes: 0DTE, weekly, monthly analysis
             """)
         
         # Performance metrics
@@ -2683,7 +2704,7 @@ if ticker:
                 avg_interval = (time.time() - st.session_state.get('session_start', time.time())) / max(st.session_state.refresh_counter, 1)
                 st.metric("Avg Refresh Interval", f"{avg_interval:.0f}s")
             with col3:
-                cache_hit_rate = 85  # Estimated based on caching strategy
+                cache_hit_rate = 85 # Estimated based on caching strategy
                 st.metric("Est. Cache Hit Rate", f"{cache_hit_rate}%")
     
     with tab5:
@@ -2737,7 +2758,7 @@ if ticker:
                 try:
                     news = stock.news
                     if news:
-                        for i, item in enumerate(news[:5]):  # Limit to 5 most recent
+                        for i, item in enumerate(news[:5]): # Limit to 5 most recent
                             title = item.get('title', 'Untitled')
                             publisher = item.get('publisher', 'Unknown')
                             link = item.get('link', '#')
@@ -2809,9 +2830,8 @@ if ticker:
         except Exception as e:
             st.error(f"❌ Error loading market context: {str(e)}")
     
-    # NEW: Free Tier Usage Dashboard
     with tab6:
-        st.subheader("📊 Free Tier Usage")
+        st.subheader("📰 Free Tier Usage Dashboard")
         
         if not st.session_state.API_CALL_LOG:
             st.info("No API calls recorded yet")
@@ -2819,19 +2839,19 @@ if ticker:
             now = time.time()
             
             # Calculate usage
-            av_usage_1min = len([t for t in st.session_state.API_CALL_LOG 
+            av_usage_1min = len([t for t in st.session_state.API_CALL_LOG
                                 if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 60])
-            av_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+            av_usage_1hr = len([t for t in st.session_state.API_CALL_LOG
                                if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 3600])
             
-            fmp_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+            fmp_usage_1hr = len([t for t in st.session_state.API_CALL_LOG
                                 if t['source'] == "FMP" and now - t['timestamp'] < 3600])
-            fmp_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
+            fmp_usage_24hr = len([t for t in st.session_state.API_CALL_LOG
                                  if t['source'] == "FMP" and now - t['timestamp'] < 86400])
             
-            iex_usage_1hr = len([t for t in st.session_state.API_CALL_LOG 
+            iex_usage_1hr = len([t for t in st.session_state.API_CALL_LOG
                                 if t['source'] == "IEX" and now - t['timestamp'] < 3600])
-            iex_usage_24hr = len([t for t in st.session_state.API_CALL_LOG 
+            iex_usage_24hr = len([t for t in st.session_state.API_CALL_LOG
                                  if t['source'] == "IEX" and now - t['timestamp'] < 86400])
             
             # Display gauges
@@ -2898,7 +2918,6 @@ if ticker:
                 st.info("No API calls recorded in the selected time range")
             
             st.info("💡 Usage resets over time. Add more free API keys to increase capacity")
-
 else:
     # Enhanced welcome screen
     st.info("👋 **Welcome!** Enter a stock ticker above to begin enhanced options analysis.")
@@ -2947,7 +2966,7 @@ else:
         
         **⚙️ Pro Tips:**
         - **For Scalping**: Use 0DTE mode with tight strike ranges
-        - **For Swing Trading**: Use "This Week" with wider ranges  
+        - **For Swing Trading**: Use "This Week" with wider ranges
         - **For High Volume**: Increase minimum volume thresholds
         - **For Volatile Markets**: Increase profit targets and stop losses
         
@@ -2956,11 +2975,9 @@ else:
         - **Conservative Refresh**: Use 120s+ intervals to avoid limits
         - **Focused Analysis**: Analyze one ticker at a time for best performance
         """)
-
 # Initialize session start time for performance tracking
 if 'session_start' not in st.session_state:
     st.session_state.session_start = time.time()
-
 # Enhanced auto-refresh logic with better rate limiting
 if st.session_state.get('auto_refresh_enabled', False) and ticker:
     current_time = time.time()
@@ -2978,56 +2995,5 @@ if st.session_state.get('auto_refresh_enabled', False) and ticker:
         
         # Show refresh notification
         st.success(f"🔄 Auto-refreshed at {datetime.datetime.now().strftime('%H:%M:%S')}")
-        time.sleep(0.5)  # Brief pause to show notification
-        st.rerun()  # CORRECTED LINE - removed the invalid syntax
-            
-           # Intraday timeframes
-st.markdown("#### 📈 Intraday Timeframes (Swing Trades)")
-col1, col2, col3 = st.columns(3)
-with col1:
-    if '15min' in st.session_state.sr_data:
-        sr = st.session_state.sr_data['15min']
-        st.markdown("**15 Minute**")
-        st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-        
-        st.markdown("**Support Levels**")
-        for level in sr['support']:
-            distance = abs(level - current_price) / current_price * 100
-            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-        
-        st.markdown("**Resistance Levels**")
-        for level in sr['resistance']:
-            distance = abs(level - current_price) / current_price * 100
-            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-    
-with col2:
-    if '30min' in st.session_state.sr_data:
-        sr = st.session_state.sr_data['30min']
-        st.markdown("**30 Minute**")
-        st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-        
-        st.markdown("**Support Levels**")
-        for level in sr['support']:
-            distance = abs(level - current_price) / current_price * 100
-            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-        
-        st.markdown("**Resistance Levels**")
-        for level in sr['resistance']:
-            distance = abs(level - current_price) / current_price * 100
-            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-    
-with col3:
-    if '1h' in st.session_state.sr_data:
-        sr = st.session_state.sr_data['1h']
-        st.markdown("**1 Hour**")
-        st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-        
-        st.markdown("**Support Levels**")
-        for level in sr['support']:
-            distance = abs(level - current_price) / current_price * 100
-            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-        
-        st.markdown("**Resistance Levels**")
-        for level in sr['resistance']:
-            distance = abs(level - current_price) / current_price * 100
-            st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+        time.sleep(0.5) # Brief pause to show notification
+        st.rerun()
