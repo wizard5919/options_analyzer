@@ -2979,32 +2979,8 @@ if st.session_state.get('auto_refresh_enabled', False) and ticker:
         st.success(f"🔄 Auto-refreshed at {datetime.datetime.now().strftime('%H:%M:%S')}")
         time.sleep(0.5)  # Brief pause to show notification
         st.rerun()  # CORRECTED LINE - removed the invalid syntax
-
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-                    
-                    st.markdown("**Resistance Levels**")
-                    for level in sr['resistance']:
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
             
-            with col2:
-                if '5min' in st.session_state.sr_data:
-                    sr = st.session_state.sr_data['5min']
-                    st.markdown("**5 Minute**")
-                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                    
-                    st.markdown("**Support Levels**")
-                    for level in sr['support']:
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-                    
-                    st.markdown("**Resistance Levels**")
-                    for level in sr['resistance']:
-                        distance = abs(level - current_price) / current_price * 100
-                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
-            
-            # Intraday timeframes
+           # Intraday timeframes
             st.markdown("#### 📈 Intraday Timeframes (Swing Trades)")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -3039,11 +3015,18 @@ if st.session_state.get('auto_refresh_enabled', False) and ticker:
                         distance = abs(level - current_price) / current_price * 100
                         st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
             
-            with col3:
-                if '1h' in st.session_state.sr_data:
-                    sr = st.session_state.sr_data['1h']
-                    st.markdown("**1 Hour**")
-                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
-                    
-                    st.markdown("**Support Levels**")
-                    for levelimport streamlit as st
+           with col3:
+               if '1h' in st.session_state.sr_data:
+                   sr = st.session_state.sr_data['1h']
+                   st.markdown("**1 Hour**")
+                   st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+        
+                   st.markdown("**Support Levels**")
+                   for level in sr['support']:
+                       distance = abs(level - current_price) / current_price * 100
+                       st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+        
+                   st.markdown("**Resistance Levels**")
+                   for level in sr['resistance']:
+                       distance = abs(level - current_price) / current_price * 100
+                       st.markdown(f"- ${level:.2f} ({distance:.1f}% away}")
