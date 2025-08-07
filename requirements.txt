@@ -1,14 +1,14 @@
-streamlit
 yfinance
 pandas
 numpy
-plotly
-matplotlib
+streamlit
+requests
 ta
+plotly
 polygon-api-client
+streamlit-autorefresh
+scipy
 aiohttp
 nest_asyncio
-vaderSentiment
-streamlit-autorefresh
-streamlit-authenticator
+streamlit-authenticator==0.2.3  # Pin to a known working version
 playwright
