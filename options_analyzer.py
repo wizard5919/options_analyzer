@@ -2051,7 +2051,6 @@ if authentication_status is False:
 elif authentication_status is None:
     st.warning("Please enter your username and password")
     st.stop()
-
 # Enhanced header
 st.title("📈 Enhanced Options Greeks Analyzer")
 st.markdown("**Performance Optimized** • Weighted Scoring • Smart Caching • Rate Limit Protection")
