@@ -7,6 +7,6 @@ matplotlib
 ta
 polygon-api-client
 aiohttp
-asyncio
+nest_asyncio
 vaderSentiment
 streamlit-autorefresh
