@@ -1,5 +1,5 @@
 yfinance==0.2.40
-pandas==2.2.2
+pandas==2.2.1  # Downgrade to 2.2.1 for better compatibility
 numpy==1.26.4
 streamlit==1.36.0
 requests==2.32.3
