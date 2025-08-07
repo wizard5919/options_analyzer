@@ -11,3 +11,4 @@ nest_asyncio
 vaderSentiment
 streamlit-autorefresh
 streamlit-authenticator
+playwright
