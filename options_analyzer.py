@@ -1,4 +1,3 @@
-⚠️ Calendar unavailable: 'dict' object has no attribute 'empty'
 
 import yfinance as yf
 import pandas as pd
