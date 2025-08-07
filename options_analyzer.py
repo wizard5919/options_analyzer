@@ -2289,11 +2289,11 @@ if 'cache_placeholder' not in st.session_state:
 if 'refresh_placeholder' not in st.session_state:
     st.session_state.refresh_placeholder = st.empty()
 # Main interface
-ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+# Inside the main interface, around line 2353
 if ticker:
     # Enhanced header with metrics
     col1, col2, col3, col4, col5 = st.columns(5)
-   
+    
     with col1:
         st.session_state.status_placeholder = st.empty()
     with col2:
@@ -2304,11 +2304,11 @@ if ticker:
         st.session_state.refresh_placeholder = st.empty()
     with col5:
         manual_refresh = st.button("🔄 Refresh", key="manual_refresh")
-   
+    
     # Update real-time metrics
     current_price = get_current_price(ticker)
     cache_age = int(time.time() - st.session_state.get('last_refresh', 0))
-   
+    
     # Update placeholders
     if is_market_open():
         st.session_state.status_placeholder.success("🟢 OPEN")
@@ -2316,20 +2316,21 @@ if ticker:
         st.session_state.status_placeholder.warning("🟡 PRE")
     else:
         st.session_state.status_placeholder.info("🔴 CLOSED")
-   
+    
     if current_price > 0:
         st.session_state.price_placeholder.metric("Price", f"${current_price:.2f}")
     else:
         st.session_state.price_placeholder.error("❌ Price Error")
-   
+    
     st.session_state.cache_placeholder.metric("Cache Age", f"{cache_age}s")
     st.session_state.refresh_placeholder.metric("Refreshes", st.session_state.refresh_counter)
-   
+    
     if manual_refresh:
         st.cache_data.clear()
         st.session_state.last_refresh = time.time()
         st.session_state.refresh_counter += 1
         st.rerun()
+    
     # UPDATED: Enhanced Support/Resistance Analysis with better error handling
     if not st.session_state.sr_data or st.session_state.last_ticker != ticker:
         with st.spinner("🔍 Analyzing support/resistance levels..."):
@@ -2339,7 +2340,7 @@ if ticker:
             except Exception as e:
                 st.error(f"Error in S/R analysis: {str(e)}")
                 st.session_state.sr_data = {}
-   
+    
     # Enhanced tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🎯 Enhanced Signals",
@@ -2349,337 +2350,337 @@ if ticker:
         "📰 Market Context",
         "📊 Free Tier Usage"
     ])
-   
-   with tab1:
-    try:
-        with st.spinner("🔄 Loading enhanced analysis..."):
-            # Get stock data with indicators (cached)
-            df = get_stock_data_with_indicators(ticker)
-            
-            if df.empty:
-                st.error("❌ Unable to fetch stock data. Please check ticker or wait for rate limits.")
-                st.stop()
-            
-            current_price = df.iloc[-1]['Close']
-            st.success(f"✅ **{ticker}** - ${current_price:.2f}")
-            
-            # Volatility assessment
-            atr_pct = df.iloc[-1].get('ATR_pct', 0)
-            if not pd.isna(atr_pct):
-                vol_status = "Low"
-                vol_color = "🟢"
-                if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
-                    vol_status = "Extreme"
-                    vol_color = "🔴"
-                elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['medium']:
-                    vol_status = "High"
-                    vol_color = "🟡"
-                elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
-                    vol_status = "Medium"
-                    vol_color = "🟠"
+    
+    with tab1:  # FIXED: Ensured consistent 4-space indentation
+        try:
+            with st.spinner("🔄 Loading enhanced analysis..."):
+                # Get stock data with indicators (cached)
+                df = get_stock_data_with_indicators(ticker)
                 
-                st.info(f"{vol_color} **Volatility**: {atr_pct*100:.2f}% ({vol_status}) - Thresholds auto-adjust")
-            
-            # Get full options chain with real data priority and proper UI handling
-            with st.spinner("📥 Fetching REAL options data..."):
-                expiries, all_calls, all_puts = get_full_options_chain(ticker)
-            
-            # Handle the results and show UI controls outside of cached functions
-            if not expiries:
-                st.error("❌ Unable to fetch real options data")
-                
-                # Check rate limit status
-                rate_limited = False
-                remaining_time = 0
-                if 'yf_rate_limited_until' in st.session_state:
-                    remaining_time = max(0, int(st.session_state['yf_rate_limited_until'] - time.time()))
-                    rate_limited = remaining_time > 0
-                
-                with st.expander("💡 Solutions for Real Data", expanded=True):
-                    st.markdown("""
-                    **🔧 To get real options data:**
-                    
-                    1. **Wait and Retry**: Rate limits typically reset in 3-5 minutes
-                    2. **Try Different Time**: Options data is more available during market hours
-                    3. **Use Popular Tickers**: SPY, QQQ, AAPL often have better access
-                    4. **Premium Data Sources**: Consider paid APIs for reliable access
-                    
-                    **⏰ Rate Limit Management:**
-                    - Yahoo Finance limits options requests heavily
-                    - Limits are per IP address and reset periodically
-                    - Try again in a few minutes
-                    """)
-                    
-                    if rate_limited:
-                        st.warning(f"⏳ Currently rate limited for {remaining_time} more seconds")
-                    else:
-                        st.info("✅ No active rate limits detected")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        if st.button("🔄 Clear Rate Limit & Retry", help="Clear rate limit status and try again"):
-                            clear_rate_limit()
-                    
-                    with col2:
-                        if st.button("⏰ Force Retry Now", help="Attempt to fetch data regardless of rate limit"):
-                            if 'yf_rate_limited_until' in st.session_state:
-                                del st.session_state['yf_rate_limited_until']
-                            st.cache_data.clear()
-                            st.rerun()
-                    
-                    with col3:
-                        show_demo = st.button("📊 Show Demo Data", help="Use demo data for testing interface")
-                
-                if show_demo:
-                    st.session_state.force_demo = True
-                    st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
-                    expiries, calls, puts = get_fallback_options_data(ticker)
-                else:
-                    # Suggest using other tabs
-                    st.info("💡 **Alternative**: Use Technical Analysis or Support/Resistance tabs (work without options data)")
+                if df.empty:
+                    st.error("❌ Unable to fetch stock data. Please check ticker or wait for rate limits.")
                     st.stop()
-            
-            # Only proceed if we have data (real or explicitly chosen demo)
-            if expiries:
-                if st.session_state.get('force_demo', False):
-                    st.warning("⚠️ Using demo data for interface testing only")
+                
+                current_price = df.iloc[-1]['Close']
+                st.success(f"✅ **{ticker}** - ${current_price:.2f}")
+                
+                # Volatility assessment
+                atr_pct = df.iloc[-1].get('ATR_pct', 0)
+                if not pd.isna(atr_pct):
+                    vol_status = "Low"
+                    vol_color = "🟢"
+                    if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
+                        vol_status = "Extreme"
+                        vol_color = "🔴"
+                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['medium']:
+                        vol_status = "High"
+                        vol_color = "🟡"
+                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
+                        vol_status = "Medium"
+                        vol_color = "🟠"
+                    
+                    st.info(f"{vol_color} **Volatility**: {atr_pct*100:.2f}% ({vol_status}) - Thresholds auto-adjust")
+                
+                # Get full options chain with real data priority and proper UI handling
+                with st.spinner("📥 Fetching REAL options data..."):
+                    expiries, all_calls, all_puts = get_full_options_chain(ticker)
+                
+                # Handle the results and show UI controls outside of cached functions
+                if not expiries:
+                    st.error("❌ Unable to fetch real options data")
+                    
+                    # Check rate limit status
+                    rate_limited = False
+                    remaining_time = 0
+                    if 'yf_rate_limited_until' in st.session_state:
+                        remaining_time = max(0, int(st.session_state['yf_rate_limited_until'] - time.time()))
+                        rate_limited = remaining_time > 0
+                    
+                    with st.expander("💡 Solutions for Real Data", expanded=True):
+                        st.markdown("""
+                        **🔧 To get real options data:**
+                        
+                        1. **Wait and Retry**: Rate limits typically reset in 3-5 minutes
+                        2. **Try Different Time**: Options data is more available during market hours
+                        3. **Use Popular Tickers**: SPY, QQQ, AAPL often have better access
+                        4. **Premium Data Sources**: Consider paid APIs for reliable access
+                        
+                        **⏰ Rate Limit Management:**
+                        - Yahoo Finance limits options requests heavily
+                        - Limits are per IP address and reset periodically
+                        - Try again in a few minutes
+                        """)
+                        
+                        if rate_limited:
+                            st.warning(f"⏳ Currently rate limited for {remaining_time} more seconds")
+                        else:
+                            st.info("✅ No active rate limits detected")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            if st.button("🔄 Clear Rate Limit & Retry", help="Clear rate limit status and try again"):
+                                clear_rate_limit()
+                        
+                        with col2:
+                            if st.button("⏰ Force Retry Now", help="Attempt to fetch data regardless of rate limit"):
+                                if 'yf_rate_limited_until' in st.session_state:
+                                    del st.session_state['yf_rate_limited_until']
+                                st.cache_data.clear()
+                                st.rerun()
+                        
+                        with col3:
+                            show_demo = st.button("📊 Show Demo Data", help="Use demo data for testing interface")
+                    
+                    if show_demo:
+                        st.session_state.force_demo = True
+                        st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
+                        expiries, calls, puts = get_fallback_options_data(ticker)
+                    else:
+                        # Suggest using other tabs
+                        st.info("💡 **Alternative**: Use Technical Analysis or Support/Resistance tabs (work without options data)")
+                        st.stop()
+                
+                # Only proceed if we have data (real or explicitly chosen demo)
+                if expiries:
+                    if st.session_state.get('force_demo', False):
+                        st.warning("⚠️ Using demo data for interface testing only")
+                    else:
+                        st.success(f"✅ **REAL OPTIONS DATA** loaded: {len(all_calls)} calls, {len(all_puts)} puts")
                 else:
-                    st.success(f"✅ **REAL OPTIONS DATA** loaded: {len(all_calls)} calls, {len(all_puts)} puts")
-            else:
-                st.stop()
-            
-            # Expiry selection
-            col1, col2 = st.columns(2)
-            with col1:
-                expiry_mode = st.radio(
-                    "📅 Expiration Filter:",
-                    ["0DTE Only", "This Week", "All Near-Term"],
-                    index=1,
-                    help="0DTE = Same day expiry, This Week = Within 7 days"
+                    st.stop()
+                
+                # Expiry selection
+                col1, col2 = st.columns(2)
+                with col1:
+                    expiry_mode = st.radio(
+                        "📅 Expiration Filter:",
+                        ["0DTE Only", "This Week", "All Near-Term"],
+                        index=1,
+                        help="0DTE = Same day expiry, This Week = Within 7 days"
+                    )
+                
+                today = datetime.date.today()
+                if expiry_mode == "0DTE Only":
+                    expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
+                elif expiry_mode == "This Week":  # FIXED: Changed = to ==
+                    week_end = today + datetime.timedelta(days=7)
+                    expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
+                else:
+                    expiries_to_use = expiries[:5] # Reduced from 8 to 5 expiries
+                
+                if not expiries_to_use:
+                    st.warning(f"⚠️ No expiries available for {expiry_mode} mode.")
+                    st.stop()
+                
+                with col2:
+                    st.info(f"📊 Analyzing **{len(expiries_to_use)}** expiries")
+                    if expiries_to_use:
+                        st.caption(f"Range: {expiries_to_use[0]} to {expiries_to_use[-1]}")
+                
+                # Filter options by expiry
+                calls_filtered = all_calls[all_calls['expiry'].isin(expiries_to_use)].copy()
+                puts_filtered = all_puts[all_puts['expiry'].isin(expiries_to_use)].copy()
+                
+                # Strike range filter
+                strike_range = st.slider(
+                    "🎯 Strike Range Around Current Price ($):",
+                    -50, 50, (-10, 10), 1,
+                    help="Narrow range for focused analysis, wide range for comprehensive scan"
                 )
-            
-            today = datetime.date.today()
-            if expiry_mode == "0DTE Only":
-                expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
-            elif expiry_mode == "This Week":  # FIXED: Changed = to ==
-                week_end = today + datetime.timedelta(days=7)
-                expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
-            else:
-                expiries_to_use = expiries[:5] # Reduced from 8 to 5 expiries
-            
-            if not expiries_to_use:
-                st.warning(f"⚠️ No expiries available for {expiry_mode} mode.")
-                st.stop()
-            
-            with col2:
-                st.info(f"📊 Analyzing **{len(expiries_to_use)}** expiries")
-                if expiries_to_use:
-                    st.caption(f"Range: {expiries_to_use[0]} to {expiries_to_use[-1]}")
-            
-            # Filter options by expiry
-            calls_filtered = all_calls[all_calls['expiry'].isin(expiries_to_use)].copy()
-            puts_filtered = all_puts[all_puts['expiry'].isin(expiries_to_use)].copy()
-            
-            # Strike range filter
-            strike_range = st.slider(
-                "🎯 Strike Range Around Current Price ($):",
-                -50, 50, (-10, 10), 1,
-                help="Narrow range for focused analysis, wide range for comprehensive scan"
-            )
-            min_strike = current_price + strike_range[0]
-            max_strike = current_price + strike_range[1]
-            
-            calls_filtered = calls_filtered[
-                (calls_filtered['strike'] >= min_strike) &
-                (calls_filtered['strike'] <= max_strike)
-            ].copy()
-            puts_filtered = puts_filtered[
-                (puts_filtered['strike'] >= min_strike) &
-                (puts_filtered['strike'] <= max_strike)
-            ].copy()
-            
-            # Moneyness filter
-            m_filter = st.multiselect(
-                "💰 Moneyness Filter:",
-                options=["ITM", "NTM", "ATM", "OTM"],
-                default=["NTM", "ATM"],
-                help="ATM=At-the-money, NTM=Near-the-money, ITM=In-the-money, OTM=Out-of-the-money"
-            )
-            
-            if not calls_filtered.empty:
-                calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
-            
-            if not puts_filtered.empty:
-                puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
-            
-            st.write(f"🔍 **Filtered Options**: {len(calls_filtered)} calls, {len(puts_filtered)} puts")
-            
-            # Process signals using enhanced batch processing
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📈 Enhanced Call Signals")
+                min_strike = current_price + strike_range[0]
+                max_strike = current_price + strike_range[1]
+                
+                calls_filtered = calls_filtered[
+                    (calls_filtered['strike'] >= min_strike) &
+                    (calls_filtered['strike'] <= max_strike)
+                ].copy()
+                puts_filtered = puts_filtered[
+                    (puts_filtered['strike'] >= min_strike) &
+                    (puts_filtered['strike'] <= max_strike)
+                ].copy()
+                
+                # Moneyness filter
+                m_filter = st.multiselect(
+                    "💰 Moneyness Filter:",
+                    options=["ITM", "NTM", "ATM", "OTM"],
+                    default=["NTM", "ATM"],
+                    help="ATM=At-the-money, NTM=Near-the-money, ITM=In-the-money, OTM=Out-of-the-money"
+                )
+                
                 if not calls_filtered.empty:
-                    call_signals_df = process_options_batch(calls_filtered, "call", df, current_price)
-                    
-                    if not call_signals_df.empty:
-                        # Display top signals with enhanced info
-                        display_cols = [
-                            'contractSymbol', 'strike', 'lastPrice', 'volume',
-                            'delta', 'gamma', 'theta', 'moneyness',
-                            'score_percentage', 'profit_target', 'stop_loss',
-                            'holding_period', 'is_0dte'
-                        ]
-                        available_cols = [col for col in display_cols if col in call_signals_df.columns]
-                        
-                        # Rename columns for better display
-                        display_df = call_signals_df[available_cols].copy()
-                        display_df = display_df.rename(columns={
-                            'score_percentage': 'Score%',
-                            'profit_target': 'Target',
-                            'stop_loss': 'Stop',
-                            'holding_period': 'Hold Period',
-                            'is_0dte': '0DTE'
-                        })
-                        
-                        st.dataframe(
-                            display_df.round(3),
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                        
-                        # NEW: Export CSV
-                        csv = display_df.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Download Call Signals CSV",
-                            data=csv,
-                            file_name=f"{ticker}_call_signals.csv",
-                            mime="text/csv"
-                        )
-                        
-                        # Enhanced success message with stats
-                        avg_score = call_signals_df['score_percentage'].mean()
-                        top_score = call_signals_df['score_percentage'].max()
-                        st.success(f"✅ **{len(call_signals_df)} call signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
-                        
-                        # Show best signal details
-                        if len(call_signals_df) > 0:
-                            best_call = call_signals_df.iloc[0]
-                            with st.expander(f"🏆 Best Call Signal Details ({best_call['contractSymbol']})"):
-                                col_a, col_b, col_c = st.columns(3)
-                                with col_a:
-                                    st.metric("Score", f"{best_call['score_percentage']:.1f}%")
-                                    st.metric("Delta", f"{best_call['delta']:.3f}")
-                                    st.metric("Vega", f"{best_call['vega']:.3f}")
-                                with col_b:
-                                    st.metric("Profit Target", f"${best_call['profit_target']:.2f}")
-                                    st.metric("Gamma", f"{best_call['gamma']:.3f}")
-                                    st.metric("IV", f"{best_call['impliedVolatility']:.2%}")
-                                with col_c:
-                                    st.metric("Stop Loss", f"${best_call['stop_loss']:.2f}")
-                                    st.metric("Volume", f"{best_call['volume']:,.0f}")
-                                    st.metric("OI", f"{best_call['openInterest']:,.0f}")
-                    else:
-                        st.info("ℹ️ No call signals found matching current criteria.")
-                        st.caption("💡 Try adjusting strike range, moneyness filter, or threshold weights")
-                else:
-                    st.info("ℹ️ No call options available for selected filters.")
-            
-            with col2:
-                st.subheader("📉 Enhanced Put Signals")
+                    calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
+                    calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
+                
                 if not puts_filtered.empty:
-                    put_signals_df = process_options_batch(puts_filtered, "put", df, current_price)
-                    
-                    if not put_signals_df.empty:
-                        # Display top signals with enhanced info
-                        display_cols = [
-                            'contractSymbol', 'strike', 'lastPrice', 'volume',
-                            'delta', 'gamma', 'theta', 'moneyness',
-                            'score_percentage', 'profit_target', 'stop_loss',
-                            'holding_period', 'is_0dte'
-                        ]
-                        available_cols = [col for col in display_cols if col in put_signals_df.columns]
+                    puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
+                    puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
+                
+                st.write(f"🔍 **Filtered Options**: {len(calls_filtered)} calls, {len(puts_filtered)} puts")
+                
+                # Process signals using enhanced batch processing
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("📈 Enhanced Call Signals")
+                    if not calls_filtered.empty:
+                        call_signals_df = process_options_batch(calls_filtered, "call", df, current_price)
                         
-                        # Rename columns for better display
-                        display_df = put_signals_df[available_cols].copy()
-                        display_df = display_df.rename(columns={
-                            'score_percentage': 'Score%',
-                            'profit_target': 'Target',
-                            'stop_loss': 'Stop',
-                            'holding_period': 'Hold Period',
-                            'is_0dte': '0DTE'
-                        })
-                        
-                        st.dataframe(
-                            display_df.round(3),
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                        
-                        # NEW: Export CSV
-                        csv = display_df.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Download Put Signals CSV",
-                            data=csv,
-                            file_name=f"{ticker}_put_signals.csv",
-                            mime="text/csv"
-                        )
-                        
-                        # Enhanced success message with stats
-                        avg_score = put_signals_df['score_percentage'].mean()
-                        top_score = put_signals_df['score_percentage'].max()
-                        st.success(f"✅ **{len(put_signals_df)} put signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
-                        
-                        # Show best signal details
-                        if len(put_signals_df) > 0:
-                            best_put = put_signals_df.iloc[0]
-                            with st.expander(f"🏆 Best Put Signal Details ({best_put['contractSymbol']})"):
-                                col_a, col_b, col_c = st.columns(3)
-                                with col_a:
-                                    st.metric("Score", f"{best_put['score_percentage']:.1f}%")
-                                    st.metric("Delta", f"{best_put['delta']:.3f}")
-                                    st.metric("Vega", f"{best_put['vega']:.3f}")
-                                with col_b:
-                                    st.metric("Profit Target", f"${best_put['profit_target']:.2f}")
-                                    st.metric("Gamma", f"{best_put['gamma']:.3f}")
-                                    st.metric("IV", f"{best_put['impliedVolatility']:.2%}")
-                                with col_c:
-                                    st.metric("Stop Loss", f"${best_put['stop_loss']:.2f}")
-                                    st.metric("Volume", f"{best_put['volume']:,.0f}")
-                                    st.metric("OI", f"{best_put['openInterest']:,.0f}")
+                        if not call_signals_df.empty:
+                            # Display top signals with enhanced info
+                            display_cols = [
+                                'contractSymbol', 'strike', 'lastPrice', 'volume',
+                                'delta', 'gamma', 'theta', 'moneyness',
+                                'score_percentage', 'profit_target', 'stop_loss',
+                                'holding_period', 'is_0dte'
+                            ]
+                            available_cols = [col for col in display_cols if col in call_signals_df.columns]
+                            
+                            # Rename columns for better display
+                            display_df = call_signals_df[available_cols].copy()
+                            display_df = display_df.rename(columns={
+                                'score_percentage': 'Score%',
+                                'profit_target': 'Target',
+                                'stop_loss': 'Stop',
+                                'holding_period': 'Hold Period',
+                                'is_0dte': '0DTE'
+                            })
+                            
+                            st.dataframe(
+                                display_df.round(3),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                            
+                            # NEW: Export CSV
+                            csv = display_df.to_csv(index=False).encode('utf-8')
+                            st.download_button(
+                                label="📥 Download Call Signals CSV",
+                                data=csv,
+                                file_name=f"{ticker}_call_signals.csv",
+                                mime="text/csv"
+                            )
+                            
+                            # Enhanced success message with stats
+                            avg_score = call_signals_df['score_percentage'].mean()
+                            top_score = call_signals_df['score_percentage'].max()
+                            st.success(f"✅ **{len(call_signals_df)} call signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
+                            
+                            # Show best signal details
+                            if len(call_signals_df) > 0:
+                                best_call = call_signals_df.iloc[0]
+                                with st.expander(f"🏆 Best Call Signal Details ({best_call['contractSymbol']})"):
+                                    col_a, col_b, col_c = st.columns(3)
+                                    with col_a:
+                                        st.metric("Score", f"{best_call['score_percentage']:.1f}%")
+                                        st.metric("Delta", f"{best_call['delta']:.3f}")
+                                        st.metric("Vega", f"{best_call['vega']:.3f}")
+                                    with col_b:
+                                        st.metric("Profit Target", f"${best_call['profit_target']:.2f}")
+                                        st.metric("Gamma", f"{best_call['gamma']:.3f}")
+                                        st.metric("IV", f"{best_call['impliedVolatility']:.2%}")
+                                    with col_c:
+                                        st.metric("Stop Loss", f"${best_call['stop_loss']:.2f}")
+                                        st.metric("Volume", f"{best_call['volume']:,.0f}")
+                                        st.metric("OI", f"{best_call['openInterest']:,.0f}")
+                        else:
+                            st.info("ℹ️ No call signals found matching current criteria.")
+                            st.caption("💡 Try adjusting strike range, moneyness filter, or threshold weights")
                     else:
-                        st.info("ℹ️ No put signals found matching current criteria.")
-                        st.caption("💡 Try adjusting strike range, moneyness filter, or threshold weights")
-                else:
-                    st.info("ℹ️ No put options available for selected filters.")
-            
-            # Enhanced scanner scores
-            call_score = calculate_scanner_score(df, 'call')
-            put_score = calculate_scanner_score(df, 'put')
-            
-            st.markdown("---")
-            st.subheader("🧠 Technical Scanner Scores")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                score_color = "🟢" if call_score >= 70 else "🟡" if call_score >= 40 else "🔴"
-                st.metric("📈 Call Scanner", f"{call_score:.1f}%", help="Based on bullish technical indicators")
-                st.caption(f"{score_color} {'Strong' if call_score >= 70 else 'Moderate' if call_score >= 40 else 'Weak'} bullish setup")
-            
-            with col2:
-                score_color = "🟢" if put_score >= 70 else "🟡" if put_score >= 40 else "🔴"
-                st.metric("📉 Put Scanner", f"{put_score:.1f}%", help="Based on bearish technical indicators")
-                st.caption(f"{score_color} {'Strong' if put_score >= 70 else 'Moderate' if put_score >= 40 else 'Weak'} bearish setup")
-            
-            with col3:
-                directional_bias = "Bullish" if call_score > put_score else "Bearish" if put_score > call_score else "Neutral"
-                bias_strength = abs(call_score - put_score)
-                st.metric("🎯 Directional Bias", directional_bias)
-                st.caption(f"Strength: {bias_strength:.1f}% difference")
-            
+                        st.info("ℹ️ No call options available for selected filters.")
+                
+                with col2:
+                    st.subheader("📉 Enhanced Put Signals")
+                    if not puts_filtered.empty:
+                        put_signals_df = process_options_batch(puts_filtered, "put", df, current_price)
+                        
+                        if not put_signals_df.empty:
+                            # Display top signals with enhanced info
+                            display_cols = [
+                                'contractSymbol', 'strike', 'lastPrice', 'volume',
+                                'delta', 'gamma', 'theta', 'moneyness',
+                                'score_percentage', 'profit_target', 'stop_loss',
+                                'holding_period', 'is_0dte'
+                            ]
+                            available_cols = [col for col in display_cols if col in put_signals_df.columns]
+                            
+                            # Rename columns for better display
+                            display_df = put_signals_df[available_cols].copy()
+                            display_df = display_df.rename(columns={
+                                'score_percentage': 'Score%',
+                                'profit_target': 'Target',
+                                'stop_loss': 'Stop',
+                                'holding_period': 'Hold Period',
+                                'is_0dte': '0DTE'
+                            })
+                            
+                            st.dataframe(
+                                display_df.round(3),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                            
+                            # NEW: Export CSV
+                            csv = display_df.to_csv(index=False).encode('utf-8')
+                            st.download_button(
+                                label="📥 Download Put Signals CSV",
+                                data=csv,
+                                file_name=f"{ticker}_put_signals.csv",
+                                mime="text/csv"
+                            )
+                            
+                            # Enhanced success message with stats
+                            avg_score = put_signals_df['score_percentage'].mean()
+                            top_score = put_signals_df['score_percentage'].max()
+                            st.success(f"✅ **{len(put_signals_df)} put signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
+                            
+                            # Show best signal details
+                            if len(put_signals_df) > 0:
+                                best_put = put_signals_df.iloc[0]
+                                with st.expander(f"🏆 Best Put Signal Details ({best_put['contractSymbol']})"):
+                                    col_a, col_b, col_c = st.columns(3)
+                                    with col_a:
+                                        st.metric("Score", f"{best_put['score_percentage']:.1f}%")
+                                        st.metric("Delta", f"{best_put['delta']:.3f}")
+                                        st.metric("Vega", f"{best_put['vega']:.3f}")
+                                    with col_b:
+                                        st.metric("Profit Target", f"${best_put['profit_target']:.2f}")
+                                        st.metric("Gamma", f"{best_put['gamma']:.3f}")
+                                        st.metric("IV", f"{best_put['impliedVolatility']:.2%}")
+                                    with col_c:
+                                        st.metric("Stop Loss", f"${best_put['stop_loss']:.2f}")
+                                        st.metric("Volume", f"{best_put['volume']:,.0f}")
+                                        st.metric("OI", f"{best_put['openInterest']:,.0f}")
+                        else:
+                            st.info("ℹ️ No put signals found matching current criteria.")
+                            st.caption("💡 Try adjusting strike range, moneyness filter, or threshold weights")
+                    else:
+                        st.info("ℹ️ No put options available for selected filters.")
+                
+                # Enhanced scanner scores
+                call_score = calculate_scanner_score(df, 'call')
+                put_score = calculate_scanner_score(df, 'put')
+                
+                st.markdown("---")
+                st.subheader("🧠 Technical Scanner Scores")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    score_color = "🟢" if call_score >= 70 else "🟡" if call_score >= 40 else "🔴"
+                    st.metric("📈 Call Scanner", f"{call_score:.1f}%", help="Based on bullish technical indicators")
+                    st.caption(f"{score_color} {'Strong' if call_score >= 70 else 'Moderate' if call_score >= 40 else 'Weak'} bullish setup")
+                
+                with col2:
+                    score_color = "🟢" if put_score >= 70 else "🟡" if put_score >= 40 else "🔴"
+                    st.metric("📉 Put Scanner", f"{put_score:.1f}%", help="Based on bearish technical indicators")
+                    st.caption(f"{score_color} {'Strong' if put_score >= 70 else 'Moderate' if put_score >= 40 else 'Weak'} bearish setup")
+                
+                with col3:
+                    directional_bias = "Bullish" if call_score > put_score else "Bearish" if put_score > call_score else "Neutral"
+                    bias_strength = abs(call_score - put_score)
+                    st.metric("🎯 Directional Bias", directional_bias)
+                    st.caption(f"Strength: {bias_strength:.1f}% difference")
+                
         except Exception as e:
             st.error(f"❌ Error in signal analysis: {str(e)}")
             st.error("Please try refreshing or check your ticker symbol.")
