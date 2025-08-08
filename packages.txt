@@ -3,6 +3,6 @@ python3-dev
 gcc
 g++
 cmake
-libopenblas-dev  # For numpy/scipy
-libatlas-base-dev  # For numpy/scipy
-liblapack-dev  # For numpy/scipy
+libopenblas-dev
+libatlas-base-dev
+liblapack-dev
