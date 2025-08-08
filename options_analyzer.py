@@ -2551,7 +2551,7 @@ if ticker:
                 today = datetime.date.today()
                 if expiry_mode == "0DTE Only":
                     expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
-                elif expiry_mode = "This Week":
+                elif expiry_mode == "This Week":
                     week_end = today + datetime.timedelta(days=7)
                     expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
                 else:
