@@ -1,5 +1,3 @@
-main
-wizard5919/options_analyzer/main/options_analyzer.py
 
 import yfinance as yf
 import pandas as pd
