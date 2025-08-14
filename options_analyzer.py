@@ -1098,7 +1098,10 @@ def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Data
            
             return [nearest_expiry], calls, puts
            
-        except Exception as e:
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                print("HTTP 404: Invalid ticker or no data. Using fallback.")
+                return get_fallback_options_data(ticker)
             error_msg = str(e).lower()
             if any(keyword in error_msg for keyword in ["too many requests", "rate limit", "429", "quota"]):
                 # Set a shorter cooldown for real data attempts
@@ -1404,6 +1407,7 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             delta_pass = delta >= thresholds['delta_min']
             delta_score = weights['delta'] if delta_pass else 0
             weighted_score += delta_score
+            conditions.append((delta_pass, f"Delta >= {thresholds['delta_min']:.2f}", delta))
             explanations.append({
                 'condition': 'Delta',
                 'passed': delta_pass,
@@ -1464,6 +1468,7 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             delta_pass = delta <= -thresholds['delta_min']
             delta_score = weights['delta'] if delta_pass else 0
             weighted_score += delta_score
+            conditions.append((delta_pass, f"Delta <= -{thresholds['delta_min']:.2f}", delta))
             explanations.append({
                 'condition': 'Delta',
                 'passed': delta_pass,
@@ -1527,6 +1532,7 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
        
         momentum_score = weights['momentum'] if momentum_pass else 0
         weighted_score += momentum_score
+        conditions.append((momentum_pass, f"RSI {'>' if side == 'call' else '<'} {thresholds['rsi_base']}", rsi))
         explanations.append({
             'condition': 'Momentum (RSI)',
             'passed': momentum_pass,
@@ -1541,6 +1547,7 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
         volume_pass = option_volume > thresholds['volume_min']
         volume_score = weights['volume'] if volume_pass else 0
         weighted_score += volume_score
+        conditions.append((volume_pass, f"Volume > {thresholds['volume_min']}", option_volume))
         explanations.append({
             'condition': 'Volume',
             'passed': volume_pass,
@@ -1705,7 +1712,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
     if df.empty:
         return None
    
-   try:
+    try:
         fig = make_subplots(
             rows=3, cols=1,
             shared_xaxes=True,
