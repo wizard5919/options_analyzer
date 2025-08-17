@@ -957,6 +957,9 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         data = data.reindex(pd.date_range(start=data.index.min(), end=data.index.max(), freq='5T'))  # Fill missing bars
         data[['Open', 'High', 'Low', 'Close']] = data[['Open', 'High', 'Low', 'Close']].ffill()  # Forward-fill prices
         data['Volume'] = data['Volume'].fillna(0)  # Zero volume for gaps
+        # Recompute premarket after reindex
+        data['premarket'] = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
+        data['premarket'] = data['premarket'].fillna(False)
         data = data.reset_index().rename(columns={'index': 'Datetime'})
        
         # Compute all indicators in one go
@@ -1143,7 +1146,7 @@ def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Data
             puts['expiry'] = nearest_expiry
            
             # Validate we have essential columns
-            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest', 'bid', 'ask']  # Added bid/ask
+            required_cols = ['strike', 'lastPrice', 'volume', 'openInterest', 'bid', 'ask']
             calls_valid = all(col in calls.columns for col in required_cols)
             puts_valid = all(col in puts.columns for col in required_cols)
            
@@ -1295,7 +1298,7 @@ def get_fallback_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.
                 'delta': round(call_delta, 3),
                 'gamma': round(gamma, 3),
                 'theta': round(theta, 3),
-                'bid': round(call_price * 0.98, 2),  # Simulated bid/ask
+                'bid': round(call_price * 0.98, 2),
                 'ask': round(call_price * 1.02, 2)
             })
            
@@ -1310,7 +1313,7 @@ def get_fallback_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.
                 'delta': round(put_delta, 3),
                 'gamma': round(gamma, 3),
                 'theta': round(theta, 3),
-                'bid': round(put_price * 0.98, 2),  # Simulated bid/ask
+                'bid': round(put_price * 0.98, 2),
                 'ask': round(put_price * 1.02, 2)
             })
    
