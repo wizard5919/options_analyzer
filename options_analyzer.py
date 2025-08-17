@@ -34,7 +34,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# NEW: Auto-refresh for real-time updates
+# Auto-refresh for real-time updates
 refresh_interval = st_autorefresh(interval=1000, limit=None, key="price_refresh")
 
 # =============================
@@ -43,9 +43,9 @@ refresh_interval = st_autorefresh(interval=1000, limit=None, key="price_refresh"
 
 CONFIG = {
     'POLYGON_API_KEY': '',  # Will be set from user input
-    'ALPHA_VANTAGE_API_KEY': '',  # New: Alpha Vantage API key
-    'FMP_API_KEY': '',            # New: Financial Modeling Prep API key
-    'IEX_API_KEY': '',            # New: IEX Cloud API key
+    'ALPHA_VANTAGE_API_KEY': '',  
+    'FMP_API_KEY': '',            
+    'IEX_API_KEY': '',            
     'MAX_RETRIES': 5,
     'RETRY_DELAY': 2,
     'DATA_TIMEOUT': 30,
@@ -85,6 +85,12 @@ CONFIG = {
         '15min': 5,
         '30min': 7,
         '1h': 10
+    },
+    # NEW: Liquidity thresholds
+    'LIQUIDITY_THRESHOLDS': {
+        'min_open_interest': 100,
+        'min_volume': 100,
+        'max_bid_ask_spread_pct': 0.1  # 10%
     }
 }
 
@@ -1403,8 +1409,9 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
     except Exception:
         return 0.5, 0.05, 0.02
 
+# NEW: Enhanced validation with liquidity filters
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
-    """Validate that option has required data for analysis"""
+    """Validate that option has required data for analysis with liquidity filters"""
     try:
         required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']
         
@@ -1413,6 +1420,16 @@ def validate_option_data(option: pd.Series, spot_price: float) -> bool:
                 return False
         
         if option['lastPrice'] <= 0:
+            return False
+        
+        # Apply liquidity filters
+        min_open_interest = CONFIG['LIQUIDITY_THRESHOLDS']['min_open_interest']
+        min_volume = CONFIG['LIQUIDITY_THRESHOLDS']['min_volume']
+        
+        if option['openInterest'] < min_open_interest:
+            return False
+        
+        if option['volume'] < min_volume:
             return False
         
         # Fill in Greeks if missing
@@ -1469,7 +1486,7 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
     except Exception:
         return SIGNAL_THRESHOLDS[side].copy()
 
-# NEW: Enhanced signal generation with weighted scoring and explanations
+# NEW: Enhanced signal generation with weighted scoring, explanations, and transaction costs
 def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
     """Generate trading signal with weighted scoring and detailed explanations"""
     if stock_df.empty:
@@ -1494,7 +1511,13 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
         close = float(latest['Close'])
         ema_9 = float(latest['EMA_9']) if not pd.isna(latest['EMA_9']) else None
         ema_20 = float(latest['EMA_20']) if not pd.isna(latest['EMA_20']) else None
+        ema_50 = float(latest['EMA_50']) if not pd.isna(latest['EMA_50']) else None
+        ema_200 = float(latest['EMA_200']) if not pd.isna(latest['EMA_200']) else None
         rsi = float(latest['RSI']) if not pd.isna(latest['RSI']) else None
+        macd = float(latest['MACD']) if not pd.isna(latest['MACD']) else None
+        macd_signal = float(latest['MACD_signal']) if not pd.isna(latest['MACD_signal']) else None
+        keltner_upper = float(latest['KC_upper']) if not pd.isna(latest['KC_upper']) else None
+        keltner_lower = float(latest['KC_lower']) if not pd.isna(latest['KC_lower']) else None
         vwap = float(latest['VWAP']) if not pd.isna(latest['VWAP']) else None
         volume = float(latest['Volume'])
         avg_vol = float(latest['avg_vol']) if not pd.isna(latest['avg_vol']) else volume
@@ -1700,8 +1723,21 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
         if signal:
             entry_price = option['lastPrice']
             option_type = 'call' if side == 'call' else 'put'
-            profit_target = entry_price * (1 + CONFIG['PROFIT_TARGETS'][option_type])
-            stop_loss = entry_price * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
+            
+            # NEW: Incorporate transaction costs (slippage and commissions)
+            slippage_pct = 0.005  # 0.5% slippage
+            commission_per_contract = 0.65  # $0.65 per contract
+            num_contracts = 1  # Assuming 1 contract for calculation
+            
+            # Adjust entry price for slippage
+            entry_price_adjusted = entry_price * (1 + slippage_pct)
+            total_commission = commission_per_contract * num_contracts
+            
+            # Calculate profit targets with costs
+            profit_target = (entry_price_adjusted + total_commission) * (1 + CONFIG['PROFIT_TARGETS'][option_type])
+            
+            # Calculate stop loss with costs
+            stop_loss = (entry_price_adjusted + total_commission) * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
             
             # Calculate holding period
             expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
@@ -1732,7 +1768,11 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             'est_hourly_decay': est_hourly_decay,
             'est_remaining_decay': est_remaining_decay,
             'passed_conditions': [exp['condition'] for exp in explanations if exp['passed']],
-            'failed_conditions': [exp['condition'] for exp in explanations if not exp['passed']]
+            'failed_conditions': [exp['condition'] for exp in explanations if not exp['passed']],
+            # NEW: Add liquidity metrics
+            'open_interest': option['openInterest'],
+            'volume': option['volume'],
+            'implied_volatility': option['impliedVolatility']
         }
         
     except Exception as e:
@@ -1937,6 +1977,81 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
         return fig
     except Exception as e:
         st.error(f"Error creating chart: {str(e)}")
+        return None
+
+# =============================
+# NEW: PERFORMANCE MONITORING FUNCTIONS
+# =============================
+
+def measure_performance():
+    """Measure and display performance metrics"""
+    if 'performance_metrics' not in st.session_state:
+        st.session_state.performance_metrics = {
+            'start_time': time.time(),
+            'api_calls': 0,
+            'data_points_processed': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'memory_usage': 0
+        }
+    
+    # Update memory usage
+    try:
+        import psutil
+        process = psutil.Process()
+        st.session_state.performance_metrics['memory_usage'] = process.memory_info().rss / (1024 * 1024)  # in MB
+    except ImportError:
+        pass
+    
+    # Display metrics
+    with st.expander("⚡ Performance Metrics", expanded=True):
+        elapsed = time.time() - st.session_state.performance_metrics['start_time']
+        st.metric("Uptime", f"{elapsed:.1f} seconds")
+        st.metric("API Calls", st.session_state.performance_metrics['api_calls'])
+        st.metric("Data Points Processed", st.session_state.performance_metrics['data_points_processed'])
+        st.metric("Cache Hit Ratio", 
+                 f"{st.session_state.performance_metrics['cache_hits'] / max(1, st.session_state.performance_metrics['cache_hits'] + st.session_state.performance_metrics['cache_misses']) * 100:.1f}%")
+        if 'memory_usage' in st.session_state.performance_metrics:
+            st.metric("Memory Usage", f"{st.session_state.performance_metrics['memory_usage']:.1f} MB")
+
+# =============================
+# NEW: BACKTESTING FUNCTIONS
+# =============================
+
+def run_backtest(signals_df: pd.DataFrame, stock_df: pd.DataFrame, side: str):
+    """Run basic backtest on generated signals"""
+    if signals_df.empty or stock_df.empty:
+        return None
+    
+    try:
+        # Simplified backtest - calculate hypothetical P&L
+        results = []
+        for _, row in signals_df.iterrows():
+            entry_price = row['lastPrice']
+            exit_price = stock_df['Close'].iloc[-1]  # Current price as exit
+            
+            if side == 'call':
+                pnl = (exit_price - row['strike']) - entry_price if exit_price > row['strike'] else -entry_price
+            else:  # put
+                pnl = (row['strike'] - exit_price) - entry_price if exit_price < row['strike'] else -entry_price
+            
+            # Apply transaction costs
+            pnl = pnl * 0.95  # Assume 5% transaction costs
+            
+            results.append({
+                'contract': row['contractSymbol'],
+                'entry_price': entry_price,
+                'current_price': exit_price,
+                'pnl': pnl,
+                'pnl_pct': (pnl / entry_price) * 100,
+                'days_held': 0,  # Simplified
+                'score': row['score_percentage']
+            })
+        
+        backtest_df = pd.DataFrame(results)
+        return backtest_df.sort_values('pnl_pct', ascending=False)
+    except Exception as e:
+        st.error(f"Error in backtest: {str(e)}")
         return None
 
 # =============================
@@ -2156,6 +2271,9 @@ with st.sidebar:
         - Dynamic thresholds adapt to volatility
         - Detailed explanations show why signals pass/fail
         """)
+    
+    # NEW: Performance monitoring section
+    measure_performance()
 
 # NEW: Create placeholders for real-time metrics
 if 'price_placeholder' not in st.session_state:
@@ -2445,12 +2563,27 @@ if ticker:
                                     with col_a:
                                         st.metric("Score", f"{best_call['score_percentage']:.1f}%")
                                         st.metric("Delta", f"{best_call['delta']:.3f}")
+                                        st.metric("Open Interest", f"{best_call['open_interest']}")
                                     with col_b:
                                         st.metric("Profit Target", f"${best_call['profit_target']:.2f}")
                                         st.metric("Gamma", f"{best_call['gamma']:.3f}")
+                                        st.metric("Volume", f"{best_call['volume']}")
                                     with col_c:
                                         st.metric("Stop Loss", f"${best_call['stop_loss']:.2f}")
-                                        st.metric("Volume", f"{best_call['volume']:,.0f}")
+                                        st.metric("Implied Vol", f"{best_call['implied_volatility']*100:.1f}%")
+                                        st.metric("Holding Period", best_call['holding_period'])
+                            
+                            # NEW: Run backtest on signals
+                            with st.expander("🔬 Backtest Results", expanded=False):
+                                backtest_results = run_backtest(call_signals_df, df, 'call')
+                                if backtest_results is not None and not backtest_results.empty:
+                                    st.dataframe(backtest_results)
+                                    avg_pnl = backtest_results['pnl_pct'].mean()
+                                    win_rate = (backtest_results['pnl'] > 0).mean() * 100
+                                    st.metric("Average P&L", f"{avg_pnl:.1f}%")
+                                    st.metric("Win Rate", f"{win_rate:.1f}%")
+                                else:
+                                    st.info("No backtest results available")
                         else:
                             st.info("ℹ️ No call signals found matching current criteria.")
                             st.caption("💡 Try adjusting strike range, moneyness filter, or threshold weights")
@@ -2501,12 +2634,27 @@ if ticker:
                                     with col_a:
                                         st.metric("Score", f"{best_put['score_percentage']:.1f}%")
                                         st.metric("Delta", f"{best_put['delta']:.3f}")
+                                        st.metric("Open Interest", f"{best_put['open_interest']}")
                                     with col_b:
                                         st.metric("Profit Target", f"${best_put['profit_target']:.2f}")
                                         st.metric("Gamma", f"{best_put['gamma']:.3f}")
+                                        st.metric("Volume", f"{best_put['volume']}")
                                     with col_c:
                                         st.metric("Stop Loss", f"${best_put['stop_loss']:.2f}")
-                                        st.metric("Volume", f"{best_put['volume']:,.0f}")
+                                        st.metric("Implied Vol", f"{best_put['implied_volatility']*100:.1f}%")
+                                        st.metric("Holding Period", best_put['holding_period'])
+                            
+                            # NEW: Run backtest on signals
+                            with st.expander("🔬 Backtest Results", expanded=False):
+                                backtest_results = run_backtest(put_signals_df, df, 'put')
+                                if backtest_results is not None and not backtest_results.empty:
+                                    st.dataframe(backtest_results)
+                                    avg_pnl = backtest_results['pnl_pct'].mean()
+                                    win_rate = (backtest_results['pnl'] > 0).mean() * 100
+                                    st.metric("Average P&L", f"{avg_pnl:.1f}%")
+                                    st.metric("Win Rate", f"{win_rate:.1f}%")
+                                else:
+                                    st.info("No backtest results available")
                         else:
                             st.info("ℹ️ No put signals found matching current criteria.")
                             st.caption("💡 Try adjusting strike range, moneyness filter, or threshold weights")
@@ -2667,6 +2815,71 @@ if ticker:
                     
                     st.markdown("**Resistance Levels**")
                     for level in sr['resistance']:
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+            
+            with col2:
+                if '5min' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['5min']
+                    st.markdown("**5 Minute**")
+                    st.markdown(f"Sensitivity: {sr['sensitivity']*100:.2f}%")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support']:
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance']:
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+            
+            # Intraday timeframes
+            st.markdown("#### 📆 Intraday Timeframes (Swing Trades)")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if '15min' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['15min']
+                    st.markdown("**15 Minute**")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support'][:3]:  # Top 3
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance'][:3]:  # Top 3
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+            
+            with col2:
+                if '30min' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['30min']
+                    st.markdown("**30 Minute**")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support'][:3]:  # Top 3
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance'][:3]:  # Top 3
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+            
+            with col3:
+                if '1h' in st.session_state.sr_data:
+                    sr = st.session_state.sr_data['1h']
+                    st.markdown("**1 Hour**")
+                    
+                    st.markdown("**Support Levels**")
+                    for level in sr['support'][:3]:  # Top 3
+                        distance = abs(level - current_price) / current_price * 100
+                        st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
+                    
+                    st.markdown("**Resistance Levels**")
+                    for level in sr['resistance'][:3]:  # Top 3
                         distance = abs(level - current_price) / current_price * 100
                         st.markdown(f"- ${level:.2f} ({distance:.1f}% away)")
             
@@ -2932,7 +3145,7 @@ if ticker:
             st.error(f"❌ Error loading market context: {str(e)}")
     
     with tab6:
-        st.subheader("📰 Free Tier Usage Dashboard")
+        st.subheader("📊 Free Tier Usage Dashboard")
         
         if not st.session_state.API_CALL_LOG:
             st.info("No API calls recorded yet")
@@ -3071,9 +3284,7 @@ else:
         - **Conservative Refresh**: Use 120s+ intervals to avoid limits
         - **Focused Analysis**: Analyze one ticker at a time for best performance
         """)
-# Initialize session start time for performance tracking
-if 'session_start' not in st.session_state:
-    st.session_state.session_start = time.time()
+
 # Enhanced auto-refresh logic with better rate limiting
 if st.session_state.get('auto_refresh_enabled', False) and ticker:
     current_time = time.time()
