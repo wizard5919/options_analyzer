@@ -2753,14 +2753,14 @@ if ticker:
                 
                 st.write(f"🔍 **Filtered Options**: {len(calls_filtered)} calls, {len(puts_filtered)} puts")
                 
-                # Process signals using enhanced batch processing
+                                # Process signals using enhanced batch processing
                 col1, col2 = st.columns(2)
-                
+               
                 with col1:
                     st.subheader("📈 Enhanced Call Signals")
                     if not calls_filtered.empty:
                         call_signals_df = process_options_batch(calls_filtered, "call", df, current_price)
-                        
+                       
                         if not call_signals_df.empty:
                             # Display top signals with enhanced info
                             display_cols = [
@@ -2770,7 +2770,7 @@ if ticker:
                                 'holding_period', 'is_0dte'
                             ]
                             available_cols = [col for col in display_cols if col in call_signals_df.columns]
-                            
+                           
                             # Rename columns for better display
                             display_df = call_signals_df[available_cols].copy()
                             display_df = display_df.rename(columns={
@@ -2780,18 +2780,18 @@ if ticker:
                                 'holding_period': 'Hold Period',
                                 'is_0dte': '0DTE'
                             })
-                            
+                           
                             st.dataframe(
                                 display_df.round(3),
                                 use_container_width=True,
                                 hide_index=True
                             )
-                            
+                           
                             # Enhanced success message with stats
                             avg_score = call_signals_df['score_percentage'].mean()
                             top_score = call_signals_df['score_percentage'].max()
                             st.success(f"✅ **{len(call_signals_df)} call signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
-                            
+                           
                             # Show best signal details
                             if len(call_signals_df) > 0:
                                 best_call = call_signals_df.iloc[0]
@@ -2809,8 +2809,8 @@ if ticker:
                                         st.metric("Stop Loss", f"${best_call['stop_loss']:.2f}")
                                         st.metric("Implied Vol", f"{best_call['implied_volatility']*100:.1f}%")
                                         st.metric("Holding Period", best_call['holding_period'])
-                            
-                       # NEW: Run backtest on signals
+                           
+                            # NEW: Run backtest on signals
                             with st.expander("🔬 Backtest Results", expanded=False):
                                 backtest_results = run_backtest(call_signals_df, df, 'call')
                                 if backtest_results is not None and not backtest_results.empty:
@@ -2827,8 +2827,8 @@ if ticker:
                                         st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
                                 else:
                                     st.info("📊 No signals for backtesting")
-
-                               with col2:
+               
+                with col2:
                     st.subheader("📉 Enhanced Put Signals")
                     if not puts_filtered.empty:
                         put_signals_df = process_options_batch(puts_filtered, "put", df, current_price)
