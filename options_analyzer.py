@@ -2810,7 +2810,7 @@ if ticker:
                                         st.metric("Implied Vol", f"{best_call['implied_volatility']*100:.1f}%")
                                         st.metric("Holding Period", best_call['holding_period'])
                             
-                                                          # NEW: Run backtest on signals
+                       # NEW: Run backtest on signals
                             with st.expander("🔬 Backtest Results", expanded=False):
                                 backtest_results = run_backtest(call_signals_df, df, 'call')
                                 if backtest_results is not None and not backtest_results.empty:
@@ -2828,7 +2828,7 @@ if ticker:
                                 else:
                                     st.info("📊 No signals for backtesting")
 
-    with col2:
+                with col2:
         st.subheader("📉 Enhanced Put Signals")
         if not puts_filtered.empty:
             put_signals_df = process_options_batch(puts_filtered, "put", df, current_price)
@@ -3164,4 +3164,3 @@ if st.session_state.auto_refresh_enabled:
         st.session_state.refresh_counter += 1
         st.cache_data.clear()
         st.rerun()
-
