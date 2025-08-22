@@ -13,7 +13,7 @@ from typing import Optional, Tuple, Dict, List
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator, MACD, ADXIndicator, PSARIndicator
 from ta.volatility import AverageTrueRange, KeltnerChannel, BollingerBands
-from ta.volume import MoneyFlowIndex
+from ta.volume import MFIIndicator
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient
