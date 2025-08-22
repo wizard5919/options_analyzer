@@ -2881,7 +2881,7 @@ if ticker:
                                         st.metric("Stop Loss", f"${best_put['stop_loss']:.2f}")
                                         st.metric("Implied Vol", f"{best_put['implied_volatility']*100:.1f}%")
                                         st.metric("Holding Period", best_put['holding_period'])
-                            
+                             
                             # NEW: Run backtest on signals
                             with st.expander("🔬 Backtest Results", expanded=False):
                                 backtest_results = run_backtest(put_signals_df, df, 'put')
