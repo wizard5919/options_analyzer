@@ -2980,7 +2980,7 @@ with tab5:
     # Use tools to search for news
     # For example:
     # ```python
-            if 'profit_factor' in backtest_results.columns:
+           
                 st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
 
         else:
