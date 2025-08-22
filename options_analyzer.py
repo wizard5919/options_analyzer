@@ -2904,9 +2904,167 @@ if ticker:
         else:
             st.info("📊 No puts available")
 
-    # Remove the duplicated blocks below!
+except Exception as e:
+    st.error(f"Error in main analysis: {str(e)}")
 
-# Tabs section:
+with tab2:
+    st.subheader("📊 Technical Analysis Chart")
+    if not df.empty:
+        chart = create_stock_chart(df, st.session_state.sr_data)
+        if chart:
+            st.plotly_chart(chart, use_container_width=True)
+        else:
+            st.warning("⚠️ Unable to generate chart")
+    else:
+        st.warning("⚠️ No data available for chart")
+
+with tab3:
+    st.subheader("📈 Support/Resistance Levels")
+    if st.session_state.sr_data:
+        sr_plot = plot_sr_levels_enhanced(st.session_state.sr_data, current_price)
+        if sr_plot:
+            st.plotly_chart(sr_plot, use_container_width=True)
+        
+        # Display detailed table
+        all_levels = []
+        for tf, data in st.session_state.sr_data.items():
+            for level in data.get('support_details', []):
+                all_levels.append({
+                    'Timeframe': tf,
+                    'Type': 'Support',
+                    'Price': level['price'],
+                    'Strength': level['strength'],
+                    'Distance %': level['distance'] * 100,
+                    'Raw Count': len(level['raw_levels'])
+                })
+            for level in data.get('resistance_details', []):
+                all_levels.append({
+                    'Timeframe': tf,
+                    'Type': 'Resistance',
+                    'Price': level['price'],
+                    'Strength': level['strength'],
+                    'Distance %': level['distance'] * 100,
+                    'Raw Count': len(level['raw_levels'])
+                })
+        
+        if all_levels:
+            levels_df = pd.DataFrame(all_levels)
+            st.dataframe(levels_df.sort_values('Strength', ascending=False))
+    else:
+        st.warning("⚠️ No S/R data available")
+
+with tab4:
+    st.subheader("🔍 Signal Explanations")
+    if 'call_signals_df' in locals() and not call_signals_df.empty:
+        st.markdown("### 📈 Call Signals")
+        for idx, row in call_signals_df.iterrows():
+            with st.expander(f"{row['contractSymbol']} - Score: {row['score_percentage']:.1f}%"):
+                for exp in row['explanations']:
+                    status = "✅" if exp['passed'] else "❌"
+                    st.markdown(f"**{exp['condition']}**: {status} {exp['explanation']}")
+    
+    if 'put_signals_df' in locals() and not put_signals_df.empty:
+        st.markdown("### 📉 Put Signals")
+        for idx, row in put_signals_df.iterrows():
+            with st.expander(f"{row['contractSymbol']} - Score: {row['score_percentage']:.1f}%"):
+                for exp in row['explanations']:
+                    status = "✅" if exp['passed'] else "❌"
+                    st.markdown(f"**{exp['condition']}**: {status} {exp['explanation']}")
+    
+    if ('call_signals_df' not in locals() or call_signals_df.empty) and ('put_signals_df' not in locals() or put_signals_df.empty):
+        st.info("📊 No signals available for explanations")
+
+with tab5:
+    st.subheader("📰 Market Context")
+    st.info("🔍 Searching for recent market context...")
+    # Use tools to search for news
+    # For example:
+    # ```python
+            if 'profit_factor' in backtest_results.columns:
+                st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
+
+        else:
+            st.info("📊 No signals for backtesting")
+
+    with col2:
+        st.subheader("📉 Enhanced Put Signals")
+        if not puts_filtered.empty:
+            put_signals_df = process_options_batch(puts_filtered, "put", df, current_price)
+            
+            if not put_signals_df.empty:
+                # Display top signals with enhanced info
+                display_cols = [
+                    'contractSymbol', 'strike', 'lastPrice', 'volume',
+                    'delta', 'gamma', 'theta', 'moneyness',
+                    'score_percentage', 'profit_target', 'stop_loss',
+                    'holding_period', 'is_0dte'
+                ]
+                available_cols = [col for col in display_cols if col in put_signals_df.columns]
+                
+                # Rename columns for better display
+                display_df = put_signals_df[available_cols].copy()
+                display_df = display_df.rename(columns={
+                    'score_percentage': 'Score%',
+                    'profit_target': 'Target',
+                    'stop_loss': 'Stop',
+                    'holding_period': 'Hold Period',
+                    'is_0dte': '0DTE'
+                })
+                
+                st.dataframe(
+                    display_df.round(3),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Enhanced success message with stats
+                avg_score = put_signals_df['score_percentage'].mean()
+                top_score = put_signals_df['score_percentage'].max()
+                st.success(f"✅ **{len(put_signals_df)} put signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
+                
+                # Show best signal details
+                if len(put_signals_df) > 0:
+                    best_put = put_signals_df.iloc[0]
+                    with st.expander(f"🏆 Best Put Signal Details ({best_put['contractSymbol']})"):
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("Score", f"{best_put['score_percentage']:.1f}%")
+                            st.metric("Delta", f"{best_put['delta']:.3f}")
+                            st.metric("Open Interest", f"{best_put['open_interest']}")
+                        with col_b:
+                            st.metric("Profit Target", f"${best_put['profit_target']:.2f}")
+                            st.metric("Gamma", f"{best_put['gamma']:.3f}")
+                            st.metric("Volume", f"{best_put['volume']}")
+                        with col_c:
+                            st.metric("Stop Loss", f"${best_put['stop_loss']:.2f}")
+                            st.metric("Implied Vol", f"{best_put['implied_volatility']*100:.1f}%")
+                            st.metric("Holding Period", best_put['holding_period'])
+                
+                # NEW: Run backtest on signals
+                with st.expander("🔬 Backtest Results", expanded=False):
+                    backtest_results = run_backtest(put_signals_df, df, 'put')
+                    if backtest_results is not None and not backtest_results.empty:
+                        st.dataframe(backtest_results)
+                        avg_pnl = backtest_results['pnl_pct'].mean()
+                        win_rate = (backtest_results['avg_pnl'] > 0).mean() * 100
+                        st.metric("Average P&L", f"{avg_pnl:.1f}%")
+                        st.metric("Win Rate", f"{win_rate:.1f}%")
+                        if 'sharpe_ratio' in backtest_results.columns:
+                            st.metric("Sharpe Ratio", f"{backtest_results['sharpe_ratio'].iloc[0]:.2f}")
+                        if 'max_drawdown_pct' in backtest_results.columns:
+                            st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
+                        if 'profit_factor' in backtest_results.columns:
+                            st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
+                    else:
+                        st.info("📊 No signals for backtesting")
+            else:
+                st.info("📊 No put signals found")
+        else:
+            st.info("📊 No puts available")
+
+except Exception as e:
+    st.error(f"Error in main analysis: {str(e)}")
+
 with tab2:
     st.subheader("📊 Technical Analysis Chart")
     if not df.empty:
