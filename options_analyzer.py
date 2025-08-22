@@ -3136,7 +3136,7 @@ with tab4:
 with tab5:
     st.subheader("📰 Market Context")
     st.info("🔍 Searching for recent market context...")
-try:
+    try:
         stock = yf.Ticker(ticker)
         news = stock.news
         if news:
