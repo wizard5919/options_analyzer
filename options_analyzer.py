@@ -2810,21 +2810,21 @@ if ticker:
                                         st.metric("Implied Vol", f"{best_call['implied_volatility']*100:.1f}%")
                                         st.metric("Holding Period", best_call['holding_period'])
                             
-# NEW: Run backtest on signals
-with st.expander("🔬 Backtest Results", expanded=False):
-    backtest_results = run_backtest(call_signals_df, df, 'call')
-    if backtest_results is not None and not backtest_results.empty:
-        st.dataframe(backtest_results)
-        avg_pnl = backtest_results['pnl_pct'].mean()
-        win_rate = (backtest_results['avg_pnl'] > 0).mean() * 100  # Updated to avg_pnl
-        st.metric("Average P&L", f"{avg_pnl:.1f}%")
-        st.metric("Win Rate", f"{win_rate:.1f}%")
-        if 'sharpe_ratio' in backtest_results.columns:
-            st.metric("Sharpe Ratio", f"{backtest_results['sharpe_ratio'].iloc[0]:.2f}")
-        if 'max_drawdown_pct' in backtest_results.columns:
-            st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
-        if 'profit_factor' in backtest_results.columns:
-            st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
+                              # NEW: Run backtest on signals
+                                 with st.expander("🔬 Backtest Results", expanded=False):
+                                    backtest_results = run_backtest(call_signals_df, df, 'call')
+                            if backtest_results is not None and not backtest_results.empty:
+                                st.dataframe(backtest_results)
+                                avg_pnl = backtest_results['pnl_pct'].mean()
+                                win_rate = (backtest_results['avg_pnl'] > 0).mean() * 100  # Updated to avg_pnl
+                                st.metric("Average P&L", f"{avg_pnl:.1f}%")
+                                st.metric("Win Rate", f"{win_rate:.1f}%")
+                            if 'sharpe_ratio' in backtest_results.columns:
+                                st.metric("Sharpe Ratio", f"{backtest_results['sharpe_ratio'].iloc[0]:.2f}")
+                            if 'max_drawdown_pct' in backtest_results.columns:
+                                st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
+                                if 'profit_factor' in backtest_results.columns:
+                                st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
     else:
         st.info("📊 No signals for backtesting")
 
