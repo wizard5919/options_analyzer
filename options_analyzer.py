@@ -2824,7 +2824,7 @@ if ticker:
                                     if 'max_drawdown_pct' in backtest_results.columns:
                                         st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
                                     if 'profit_factor' in backtest_results.columns:
-                st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
+    st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
 
         else:
             st.info("📊 No signals for backtesting")
