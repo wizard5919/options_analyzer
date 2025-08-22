@@ -2753,7 +2753,7 @@ if ticker:
                 
                 st.write(f"🔍 **Filtered Options**: {len(calls_filtered)} calls, {len(puts_filtered)} puts")
                 
-                                # Process signals using enhanced batch processing
+                                                # Process signals using enhanced batch processing
                 col1, col2 = st.columns(2)
                
                 with col1:
@@ -2903,9 +2903,8 @@ if ticker:
                             st.info("📊 No put signals found")
                     else:
                         st.info("📊 No puts available")
-
-except Exception as e:
-    st.error(f"Error in main analysis: {str(e)}")
+    except Exception as e:
+        st.error(f"Error in main analysis: {str(e)}")
 
 with tab2:
     st.subheader("📊 Technical Analysis Chart")
