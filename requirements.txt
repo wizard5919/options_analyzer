@@ -12,3 +12,4 @@ aiohttp
 nest_asyncio
 streamlit-authenticator
 playwright
+ta-volume
