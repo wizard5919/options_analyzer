@@ -1103,7 +1103,7 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         if len(close) >= 14:
             mfi = MFIIndicator(high=high, low=low, close=close, volume=volume, window=14)
             df['MFI'] = mfi.money_flow_index()
-       else:
+        else:
             df['MFI'] = np.nan
         
         # NEW: Stochastic Oscillator
