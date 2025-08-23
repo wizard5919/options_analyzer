@@ -808,7 +808,7 @@ def is_market_open() -> bool:
     except Exception:
         return False
 def is_premarket() -> bool:
-    """Check if we're in premarket hours"""
+    """Check if we are in premarket hours"""
     try:
         eastern = pytz.timezone('US/Eastern')
         now = datetime.datetime.now(eastern)
@@ -821,7 +821,7 @@ def is_premarket() -> bool:
     except Exception:
         return False
 def is_early_market() -> bool:
-    """Check if we're in the first 30 minutes of market open"""
+    """Check if we are in the first 30 minutes of market open"""
     try:
         if not is_market_open():
             return False
@@ -906,6 +906,8 @@ def get_current_price(ticker: str) -> float:
         data = stock.history(period='1d', interval='1m', prepost=True)
         if not data.empty:
             return float(data['Close'].iloc[-1])
+        else:
+            return 0.0
     except Exception:
         pass
    
@@ -3096,7 +3098,6 @@ with tab5:
     st.info("🔍 Searching for recent market context...")
     # Use tools to search for news
     # For example:
-    # ```python
 with tab6:
     st.subheader("📊 Free Tier Usage")
     if st.session_state.API_CALL_LOG:
