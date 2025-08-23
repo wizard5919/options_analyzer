@@ -1,4 +1,3 @@
-
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -137,6 +136,15 @@ SIGNAL_THRESHOLDS = {
         }
     }
 }
+# Popular tickers list including stocks, ETFs, and cryptocurrencies
+POPULAR_TICKERS = [
+    # Stocks
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'BRK-B', 'JPM', 'V',
+    # ETFs
+    'SPY', 'QQQ', 'IWM', 'DIA', 'ARKK', 'VTI', 'VOO', 'VWO', 'EEM', 'GLD',
+    # Cryptocurrencies
+    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD', 'BNB-USD', 'DOT-USD', 'LINK-USD', 'LTC-USD'
+]
 # =============================
 # UTILITY FUNCTIONS FOR FREE DATA SOURCES
 # =============================
@@ -869,7 +877,7 @@ def get_current_price(ticker: str) -> float:
     # Try Financial Modeling Prep
     if CONFIG['FMP_API_KEY'] and can_make_request("FMP"):
         try:
-            url = f"https://financialmodelingprep.com/api/v3/quote-short/{ticker}?apikey={CONFIG['FMP_API_KEY']}"
+            url = f"https://site.financialmodelingprep.com/api/v3/quote-short/{ticker}?apikey={CONFIG['FMP_API_KEY']}"
             response = requests.get(url, timeout=2)
             response.raise_for_status()
             data = response.json()
@@ -2634,7 +2642,9 @@ if 'cache_placeholder' not in st.session_state:
 if 'refresh_placeholder' not in st.session_state:
     st.session_state.refresh_placeholder = st.empty()
 # Main interface
-ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+ticker_selected = st.selectbox("Select Ticker:", [""] + POPULAR_TICKERS, index=0)
+ticker_custom = st.text_input("Or Enter Custom Ticker:", value="").upper()
+ticker = (ticker_custom or ticker_selected).upper()
 if ticker:
     # Enhanced header with metrics
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -2793,7 +2803,8 @@ if ticker:
                     else:
                         st.success(f"✅ **REAL OPTIONS DATA** loaded: {len(all_calls)} calls, {len(all_puts)} puts")
                 else:
-                    st.stop()
+                    st.info("⚠️ No options available for this ticker (e.g., cryptocurrencies may not have traditional options). Showing technical analysis only.")
+                    # Continue to other tabs, but skip options signals
                
                 # Expiry selection
                 col1, col2 = st.columns(2)
@@ -2816,7 +2827,6 @@ if ticker:
                
                 if not expiries_to_use:
                     st.warning(f"⚠️ No expiries available for {expiry_mode} mode.")
-                    st.stop()
                
                 with col2:
                     st.info(f"📊 Analyzing **{len(expiries_to_use)}** expiries")
@@ -3086,7 +3096,7 @@ with tab5:
     st.info("🔍 Searching for recent market context...")
     # Use tools to search for news
     # For example:
-    # ```python:disable-run
+    # ```python
 with tab6:
     st.subheader("📊 Free Tier Usage")
     if st.session_state.API_CALL_LOG:
