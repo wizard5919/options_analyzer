@@ -1128,7 +1128,7 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
     return df
 # NEW: Real data fetching with fixed session handling
 @st.cache_data(ttl=1800, show_spinner=False) # 30-minute cache for real data
-def get_real_options_data(data: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
+def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
     """Get real options data with proper yfinance handling"""
   
     # Check if we can clear the rate limit status
@@ -1377,36 +1377,30 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
         moneyness = spot_price / option['strike']
       
         if 'C' in option.get('contractSymbol', ''):
-            if moneyness > 1.03:
-                delta = 0.95
-                gamma = 0.01
-            elif moneyness > 1.0:
-                delta = 0.65
-                gamma = 0.05
-            elif moneyness > 0.97:
-                delta = 0.50
-                gamma = 0.08
+            if moneyness > 1.05:
+                delta = 0.7 + (moneyness - 1) * 0.2
+                gamma = 0.02
+            elif moneyness > 0.95:
+                delta = 0.5
+                gamma = 0.08 if 'is_0dte' in option and option['is_0dte'] else 0.05
             else:
-                delta = 0.35
-                gamma = 0.05
+                delta = 0.3 - (1 - moneyness) * 0.2
+                gamma = 0.02
+            theta = -0.1 if 'is_0dte' in option and option['is_0dte'] else -0.05 if days_to_expiry <= 7 else -0.02
         else:
-            if moneyness < 0.97:
-                delta = -0.95
-                gamma = 0.01
-            elif moneyness < 1.0:
-                delta = -0.65
-                gamma = 0.05
-            elif moneyness < 1.03:
-                delta = -0.50
-                gamma = 0.08
+            if moneyness < 0.95:
+                delta = -0.7 - (1 - moneyness) * 0.2
+                gamma = 0.02
+            elif moneyness < 1.05:
+                delta = -0.5
+                gamma = 0.08 if 'is_0dte' in option and option['is_0dte'] else 0.05
             else:
-                delta = -0.35
-                gamma = 0.05
-      
-        theta = 0.05 if datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date() == datetime.date.today() else 0.02
+                delta = -0.3 + (moneyness - 1) * 0.2
+                gamma = 0.02
+            theta = -0.1 if 'is_0dte' in option and option['is_0dte'] else -0.05 if days_to_expiry <= 7 else -0.02
       
         return delta, gamma, theta
-    except Exception:
+    except:
         return 0.5, 0.05, 0.02
 # NEW: Enhanced validation with liquidity filters
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
@@ -3005,10 +2999,14 @@ if ticker:
     with tab_forum:
         st.subheader("🗣️ Community Forum")
         st.info("Forum integration coming soon. For now, check X/Twitter for discussions on this ticker.")
-  
+      
         # Placeholder for X search
         st.markdown("### Recent Discussions on X")
         st.warning("Note: Real-time X integration requires using the X search tool, which can be added separately.")
+      
+        # Example placeholder posts
+        st.markdown("**Post 1:** Great move on $TICKER today! #options")
+        st.markdown("**Post 2:** Watching resistance at $level. Thoughts? #trading")
   
 # Enhanced auto-refresh logic with better rate limiting
 if st.session_state.get('auto_refresh_enabled', False) and ticker:
