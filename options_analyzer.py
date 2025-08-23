@@ -25,11 +25,167 @@ except ImportError:
     warnings.warn("scipy not available. Support/Resistance analysis will use simplified method.")
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
+# =============================
+# STREAMLIT PAGE CONFIGURATION
+# =============================
 st.set_page_config(
-    page_title="Options Greeks Buy Signal Analyzer",
+    page_title="Options Analyzer Pro - TradingView Style",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# =============================
+# CUSTOM CSS FOR TRADINGVIEW STYLE
+# =============================
+st.markdown("""
+<style>
+    /* Main dark theme */
+    .main {
+        background-color: #131722;
+        color: #d1d4dc;
+    }
+   
+    /* Sidebar styling */
+    .css-1d391kg, .css-1d391kg p {
+        background-color: #1e222d;
+        color: #d1d4dc;
+    }
+   
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+        background-color: #1e222d;
+    }
+   
+    .stTabs [data-baseweb="tab"] {
+        height: 35px;
+        white-space: pre-wrap;
+        background-color: #1e222d;
+        border-radius: 4px 4px 0px 0px;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        color: #758696;
+        font-weight: 500;
+    }
+   
+    .stTabs [aria-selected="true"] {
+        background-color: #131722;
+        color: #ebebeb;
+    }
+   
+    /* Button styling */
+    .stButton button {
+        background-color: #2962ff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 8px 16px;
+        font-weight: 500;
+    }
+   
+    .stButton button:hover {
+        background-color: #1e53e5;
+        color: white;
+    }
+   
+    /* Input fields */
+    .stTextInput input {
+        background-color: #1e222d;
+        color: #d1d4dc;
+        border: 1px solid #2a2e39;
+    }
+   
+    /* Select boxes */
+    .stSelectbox select {
+        background-color: #1e222d;
+        color: #d1d4dc;
+    }
+   
+    /* Sliders */
+    .stSlider [data-testid="stThumb"] {
+        background-color: #2962ff;
+    }
+   
+    /* Metrics */
+    [data-testid="stMetricValue"] {
+        color: #d1d4dc;
+        font-weight: bold;
+    }
+   
+    [data-testid="stMetricLabel"] {
+        color: #758696;
+    }
+   
+    /* Dataframes */
+    .dataframe {
+        background-color: #1e222d;
+        color: #d1d4dc;
+    }
+   
+    /* Expanders */
+    .streamlit-expanderHeader {
+        background-color: #1e222d;
+        color: #d1d4dc;
+        font-weight: 600;
+    }
+   
+    /* Chart containers */
+    .element-container {
+        background-color: #131722;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+   
+    /* Custom TradingView-like chart header */
+    .chart-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background-color: #1e222d;
+        padding: 8px 16px;
+        border-radius: 4px 4px 0 0;
+        border-bottom: 1px solid #2a2e39;
+    }
+   
+    .timeframe-selector {
+        display: flex;
+        gap: 4px;
+    }
+   
+    .timeframe-btn {
+        background-color: #2a2e39;
+        color: #758696;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 12px;
+        cursor: pointer;
+    }
+   
+    .timeframe-btn.active {
+        background-color: #2962ff;
+        color: white;
+    }
+   
+    /* Signal cards */
+    .signal-card {
+        background-color: #1e222d;
+        border-radius: 4px;
+        padding: 12px;
+        margin-bottom: 8px;
+        border-left: 4px solid #2962ff;
+    }
+   
+    .signal-card.bullish {
+        border-left-color: #26a69a;
+    }
+   
+    .signal-card.bearish {
+        border-left-color: #ef5350;
+    }
+</style>
+""", unsafe_allow_html=True)
 # Auto-refresh for real-time updates
 refresh_interval = st_autorefresh(interval=1000, limit=None, key="price_refresh")
 # =============================
@@ -71,20 +227,14 @@ CONFIG = {
         '5min': 0.002,
         '15min': 0.003,
         '30min': 0.005,
-        '1h': 0.008,
-        '1d': 0.01,
-        '1wk': 0.015,
-        '1mo': 0.02
+        '1h': 0.008
     },
     'SR_WINDOW_SIZES': {
         '1min': 3,
         '5min': 3,
         '15min': 5,
         '30min': 7,
-        '1h': 10,
-        '1d': 14,
-        '1wk': 10,
-        '1mo': 6
+        '1h': 10
     },
     # NEW: Liquidity thresholds
     'LIQUIDITY_THRESHOLDS': {
@@ -432,10 +582,7 @@ def get_multi_timeframe_data_enhanced(ticker: str) -> Tuple[dict, float]:
         '5min': {'interval': '5m', 'period': '5d'},
         '15min': {'interval': '15m', 'period': '15d'},
         '30min': {'interval': '30m', 'period': '30d'},
-        '1h': {'interval': '60m', 'period': '60d'},
-        '1d': {'interval': '1d', 'period': '5y'},
-        '1wk': {'interval': '1wk', 'period': '10y'},
-        '1mo': {'interval': '1mo', 'period': 'max'}
+        '1h': {'interval': '60m', 'period': '60d'}
     }
   
     data = {}
@@ -663,10 +810,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             '5min': 'rgba(255,165,0,0.8)', # Orange
             '15min': 'rgba(255,255,0,0.8)', # Yellow
             '30min': 'rgba(0,255,0,0.8)', # Green
-            '1h': 'rgba(0,0,255,0.8)', # Blue
-            '1d': 'rgba(128,0,128,0.8)', # Purple
-            '1wk': 'rgba(0,128,128,0.8)', # Teal
-            '1mo': 'rgba(255,20,147,0.8)' # Pink
+            '1h': 'rgba(0,0,255,0.8)' # Blue
         }
       
         # Prepare data for plotting
@@ -751,7 +895,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             xaxis=dict(
                 title='Timeframe',
                 categoryorder='array',
-                categoryarray=['1min', '5min', '15min', '30min', '1h', '1d', '1wk', '1mo']
+                categoryarray=['1min', '5min', '15min', '30min', '1h']
             ),
             yaxis_title='Price ($)',
             hovermode='closest',
@@ -914,13 +1058,18 @@ def get_current_price(ticker: str) -> float:
     return 0.0
 # NEW: Combined stock data and indicators function for better caching
 @st.cache_data(ttl=CONFIG['STOCK_CACHE_TTL'], show_spinner=False)
-def get_stock_data_with_indicators(ticker: str, interval: str = '5m', period: str = '10d', resample: Optional[str] = None) -> pd.DataFrame:
+def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
     """Fetch stock data and compute all indicators in one cached function"""
     try:
+        # Determine time range
+        end = datetime.datetime.now()
+        start = end - datetime.timedelta(days=10)
+      
         data = yf.download(
             ticker,
-            period=period,
-            interval=interval,
+            start=start,
+            end=end,
+            interval="5m",
             auto_adjust=True,
             progress=False,
             prepost=True
@@ -946,16 +1095,6 @@ def get_stock_data_with_indicators(ticker: str, interval: str = '5m', period: st
         if len(data) < CONFIG['MIN_DATA_POINTS']:
             return pd.DataFrame()
       
-        # Resample if required
-        if resample:
-            data = data.resample(resample).agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
-      
         # Handle timezone
         eastern = pytz.timezone('US/Eastern')
       
@@ -971,7 +1110,7 @@ def get_stock_data_with_indicators(ticker: str, interval: str = '5m', period: st
       
         # NEW: Improve data gap handling with interpolation
         data = data.set_index('Datetime')
-        data = data.reindex(pd.date_range(start=data.index.min(), end=data.index.max(), freq=interval.upper())) # Fill missing bars
+        data = data.reindex(pd.date_range(start=data.index.min(), end=data.index.max(), freq='5T')) # Fill missing bars
         data[['Open', 'High', 'Low', 'Close']] = data[['Open', 'High', 'Low', 'Close']].ffill() # Forward-fill prices
         data['Volume'] = data['Volume'].fillna(0) # Zero volume for gaps
         # Recompute premarket after reindex
@@ -1076,16 +1215,6 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
             df['KC_lower'] = kc.keltner_channel_lband()
         else:
             for col in ['MACD', 'MACD_signal', 'MACD_hist', 'KC_upper', 'KC_middle', 'KC_lower']:
-                df[col] = np.nan
-      
-        # Bollinger Bands
-        if len(close) >= 20:
-            bb = BollingerBands(close=close, window=20, window_dev=2)
-            df['BB_upper'] = bb.bollinger_hband()
-            df['BB_middle'] = bb.bollinger_mband()
-            df['BB_lower'] = bb.bollinger_lband()
-        else:
-            for col in ['BB_upper', 'BB_middle', 'BB_lower']:
                 df[col] = np.nan
       
         # Calculate volume averages
@@ -1377,30 +1506,36 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
         moneyness = spot_price / option['strike']
       
         if 'C' in option.get('contractSymbol', ''):
-            if moneyness > 1.05:
-                delta = 0.7 + (moneyness - 1) * 0.2
-                gamma = 0.02
-            elif moneyness > 0.95:
-                delta = 0.5
-                gamma = 0.08 if 'is_0dte' in option and option['is_0dte'] else 0.05
+            if moneyness > 1.03:
+                delta = 0.95
+                gamma = 0.01
+            elif moneyness > 1.0:
+                delta = 0.65
+                gamma = 0.05
+            elif moneyness > 0.97:
+                delta = 0.50
+                gamma = 0.08
             else:
-                delta = 0.3 - (1 - moneyness) * 0.2
-                gamma = 0.02
-            theta = -0.1 if 'is_0dte' in option and option['is_0dte'] else -0.05 if days_to_expiry <= 7 else -0.02
+                delta = 0.35
+                gamma = 0.05
         else:
-            if moneyness < 0.95:
-                delta = -0.7 - (1 - moneyness) * 0.2
-                gamma = 0.02
-            elif moneyness < 1.05:
-                delta = -0.5
-                gamma = 0.08 if 'is_0dte' in option and option['is_0dte'] else 0.05
+            if moneyness < 0.97:
+                delta = -0.95
+                gamma = 0.01
+            elif moneyness < 1.0:
+                delta = -0.65
+                gamma = 0.05
+            elif moneyness < 1.03:
+                delta = -0.50
+                gamma = 0.08
             else:
-                delta = -0.3 + (moneyness - 1) * 0.2
-                gamma = 0.02
-            theta = -0.1 if 'is_0dte' in option and option['is_0dte'] else -0.05 if days_to_expiry <= 7 else -0.02
+                delta = -0.35
+                gamma = 0.05
+      
+        theta = 0.05 if datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date() == datetime.date.today() else 0.02
       
         return delta, gamma, theta
-    except:
+    except Exception:
         return 0.5, 0.05, 0.02
 # NEW: Enhanced validation with liquidity filters
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
@@ -1913,12 +2048,6 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_middle'], name='KC Middle', line=dict(color='green')), row=1, col=1)
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_lower'], name='KC Lower', line=dict(color='red', dash='dash')), row=1, col=1)
       
-        # Bollinger Bands
-        if 'BB_upper' in df.columns and not df['BB_upper'].isna().all():
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['BB_upper'], name='BB Upper', line=dict(color='purple', dash='dash')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['BB_middle'], name='BB Middle', line=dict(color='purple')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['BB_lower'], name='BB Lower', line=dict(color='purple', dash='dash')), row=1, col=1)
-      
         # NEW: Add VWAP line
         if 'VWAP' in df.columns and not df['VWAP'].isna().all():
             fig.add_trace(go.Scatter(
@@ -1948,31 +2077,17 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
       
         # Add support and resistance levels if available
         if sr_levels:
-            # Map timeframe to SR key
-            tf_sr_map = {
-                '5m': '5min',
-                '15m': '15min',
-                '30m': '30min',
-                '1H': '1h',
-                '4H': '1h',
-                '1D': '1d',
-                '1W': '1wk',
-                '1M': '1mo'
-            }
-            sr_key = tf_sr_map.get(timeframe, '5min')
-            sr = sr_levels.get(sr_key, {})
-          
             # Add support levels
-            for level in sr.get('support', []):
+            for level in sr_levels.get('5min', {}).get('support', []):
                 if isinstance(level, (int, float)) and not math.isnan(level):
                     fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
-                                 annotation_text=f"S: {level:.2f}", annotation_position="right")
+                                 annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
           
             # Add resistance levels
-            for level in sr.get('resistance', []):
+            for level in sr_levels.get('5min', {}).get('resistance', []):
                 if isinstance(level, (int, float)) and not math.isnan(level):
                     fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
-                                 annotation_text=f"R: {level:.2f}", annotation_position="right")
+                                 annotation_text=f"R: {level:.2f}", annotation_position="top right")
       
         fig.update_layout(
             height=800,
@@ -2077,7 +2192,7 @@ def run_backtest(signals_df: pd.DataFrame, stock_df: pd.DataFrame, side: str):
         st.error(f"Error in backtest: {str(e)}")
         return None
 # =============================
-# ENHANCED STREAMLIT INTERFACE
+# ENHANCED STREAMLIT INTERFACE WITH TRADINGVIEW LAYOUT
 # =============================
 # Initialize session state for enhanced auto-refresh
 if 'refresh_counter' not in st.session_state:
@@ -2100,7 +2215,7 @@ if 'rate_limited_until' in st.session_state:
         st.stop()
     else:
         del st.session_state['rate_limited_until']
-st.title("📈 Enhanced Options Greeks Analyzer")
+st.title("📈 Options Greeks Buy Signal Analyzer")
 st.markdown("**Performance Optimized** • Weighted Scoring • Smart Caching • Rate Limit Protection")
 # Enhanced sidebar
 with st.sidebar:
@@ -2366,8 +2481,8 @@ if ticker:
     with tab_general:
         try:
             with st.spinner("🔄 Loading enhanced analysis..."):
-                # Get stock data with indicators (cached) for signals (fixed to 5m)
-                df = get_stock_data_with_indicators(ticker, interval='5m', period='10d')
+                # Get stock data with indicators (cached)
+                df = get_stock_data_with_indicators(ticker)
               
                 if df.empty:
                     st.error("❌ Unable to fetch stock data. Please check ticker or wait for rate limits.")
@@ -2447,7 +2562,7 @@ if ticker:
                     if show_demo:
                         st.session_state.force_demo = True
                         st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
-                        expiries, all_calls, all_puts = get_fallback_options_data(ticker)
+                        expiries, calls, puts = get_fallback_options_data(ticker)
                     else:
                         # Suggest using other tabs
                         st.info("💡 **Alternative**: Use Technical Analysis or Support/Resistance tabs (work without options data)")
@@ -2732,11 +2847,11 @@ if ticker:
     with tab_chart:
         st.subheader("📈 Professional Candlestick Chart")
       
-        # Timeframe selector
+        # Timeframe selector buttons
         timeframes = ['5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']
-        selected_tf = st.selectbox("Select Timeframe", timeframes, index=0)
+        selected_tf = st.radio("Select Timeframe:", timeframes, horizontal=True, key="chart_timeframe")
       
-        # Timeframe config
+        # Fetch data for selected timeframe
         tf_config = {
             '5m': {'interval': '5m', 'period': '10d'},
             '15m': {'interval': '15m', 'period': '1mo'},
@@ -2752,8 +2867,7 @@ if ticker:
         chart_df = get_stock_data_with_indicators(ticker, **params)
       
         if not chart_df.empty:
-            # Create and display chart
-            chart_fig = create_stock_chart(chart_df, st.session_state.sr_data, timeframe=selected_tf)
+            chart_fig = create_stock_chart(chart_df, st.session_state.sr_data, selected_tf)
             if chart_fig:
                 st.plotly_chart(chart_fig, use_container_width=True)
             else:
@@ -2905,7 +3019,7 @@ if ticker:
     with tab_technical:
         try:
             if 'df' not in locals():
-                df = get_stock_data_with_indicators(ticker, interval='5m', period='10d')
+                df = get_stock_data_with_indicators(ticker)
           
             if not df.empty:
                 st.subheader("📊 Technical Analysis Dashboard")
@@ -3004,9 +3118,16 @@ if ticker:
         st.markdown("### Recent Discussions on X")
         st.warning("Note: Real-time X integration requires using the X search tool, which can be added separately.")
       
-        # Example placeholder posts
-        st.markdown("**Post 1:** Great move on $TICKER today! #options")
-        st.markdown("**Post 2:** Watching resistance at $level. Thoughts? #trading")
+        # Sample discussion threads
+        with st.expander("Sample Discussion Threads"):
+            threads = [
+                {"title": "SPY 0DTE Strategy Discussion", "replies": 42, "last_post": "2 hours ago"},
+                {"title": "Weekly Options Trading Tips", "replies": 18, "last_post": "5 hours ago"},
+                {"title": "Best Brokers for Options", "replies": 25, "last_post": "1 day ago"},
+            ]
+          
+            for thread in threads:
+                st.write(f"- {thread['title']} ({thread['replies']} replies, last {thread['last_post']})")
   
 # Enhanced auto-refresh logic with better rate limiting
 if st.session_state.get('auto_refresh_enabled', False) and ticker:
