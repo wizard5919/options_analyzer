@@ -2847,11 +2847,11 @@ if ticker:
     with tab_chart:
         st.subheader("📈 Professional Candlestick Chart")
       
-        # Timeframe selector buttons
+        # Timeframe selector
         timeframes = ['5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']
-        selected_tf = st.radio("Select Timeframe:", timeframes, horizontal=True, key="chart_timeframe")
+        selected_tf = st.selectbox("Select Timeframe", timeframes, index=0)
       
-        # Fetch data for selected timeframe
+        # Timeframe config
         tf_config = {
             '5m': {'interval': '5m', 'period': '10d'},
             '15m': {'interval': '15m', 'period': '1mo'},
@@ -2867,6 +2867,7 @@ if ticker:
         chart_df = get_stock_data_with_indicators(ticker, **params)
       
         if not chart_df.empty:
+            # Create and display chart
             chart_fig = create_stock_chart(chart_df, st.session_state.sr_data, selected_tf)
             if chart_fig:
                 st.plotly_chart(chart_fig, use_container_width=True)
