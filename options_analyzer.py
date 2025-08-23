@@ -2319,23 +2319,47 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 bgcolor="#1E222D",
                 bordercolor="#363C4E"
             ),
-            margin=dict(l=50, r=50, t=50, b=50),
+            margin=dict(l=50, r=50, t=50, b=80),  # Increased bottom margin for timeframe selector
+        )
+        
+        # Add timeframe selector at the bottom (TradingView style)
+        timeframe_buttons = [
+            dict(count=1, label="1D", step="day", stepmode="backward"),
+            dict(count=5, label="5D", step="day", stepmode="backward"),
+            dict(count=1, label="1M", step="month", stepmode="backward"),
+            dict(count=3, label="3M", step="month", stepmode="backward"),
+            dict(count=6, label="6M", step="month", stepmode="backward"),
+            dict(count=1, label="YTD", step="year", stepmode="todate"),
+            dict(count=1, label="1Y", step="year", stepmode="backward"),
+            dict(count=5, label="5Y", step="year", stepmode="backward"),
+            dict(step="all", label="All")
+        ]
+        
+        # Add the timeframe selector to the bottom x-axis
+        fig.update_layout(
             xaxis=dict(
                 rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1m", step="month", stepmode="backward"),
-                        dict(count=3, label="3m", step="month", stepmode="backward"),
-                        dict(count=6, label="6m", step="month", stepmode="backward"),
-                        dict(count=1, label="YTD", step="year", stepmode="todate"),
-                        dict(count=1, label="1y", step="year", stepmode="backward"),
-                        dict(step="all", label="All", stepmode="backward")
-                    ]),
+                    buttons=timeframe_buttons,
                     bgcolor="#1E222D",
                     activecolor="#2962FF",
                     bordercolor="#363C4E",
-                    font=dict(color="#D1D4DC")
+                    font=dict(color="#D1D4DC"),
+                    x=0,
+                    xanchor="left",
+                    y=0.98,
+                    yanchor="top"
                 ),
                 type="date"
+            )
+        )
+        
+        # Move the rangeselector to the bottom of the chart
+        fig.update_layout(
+            xaxis=dict(
+                rangeselector=dict(
+                    y=-0.15,  # Position below the chart
+                    yanchor="top"
+                )
             )
         )
         
@@ -2359,101 +2383,6 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
     
     except Exception as e:
         st.error(f"Error creating TradingView-style chart: {str(e)}")
-        return None
-
-# =============================
-# NEW: PERFORMANCE MONITORING FUNCTIONS
-# =============================
-def measure_performance():
-    """Measure and display performance metrics"""
-    if 'performance_metrics' not in st.session_state:
-        st.session_state.performance_metrics = {
-            'start_time': time.time(),
-            'api_calls': 0,
-            'data_points_processed': 0,
-            'cache_hits': 0,
-            'cache_misses': 0,
-            'memory_usage': 0
-        }
-    
-    # Update memory usage
-    try:
-        import psutil
-        process = psutil.Process()
-        st.session_state.performance_metrics['memory_usage'] = process.memory_info().rss / (1024 * 1024) # in MB
-    except ImportError:
-        pass
-    
-    # Display metrics
-    with st.expander("⚡ Performance Metrics", expanded=True):
-        elapsed = time.time() - st.session_state.performance_metrics['start_time']
-        st.metric("Uptime", f"{elapsed:.1f} seconds")
-        st.metric("API Calls", st.session_state.performance_metrics['api_calls'])
-        st.metric("Data Points Processed", st.session_state.performance_metrics['data_points_processed'])
-        st.metric("Cache Hit Ratio",
-                  f"{st.session_state.performance_metrics['cache_hits'] / max(1, st.session_state.performance_metrics['cache_hits'] + st.session_state.performance_metrics['cache_misses']) * 100:.1f}%")
-        if 'memory_usage' in st.session_state.performance_metrics:
-            st.metric("Memory Usage", f"{st.session_state.performance_metrics['memory_usage']:.1f} MB")
-
-# =============================
-# NEW: BACKTESTING FUNCTIONS
-# =============================
-def run_backtest(signals_df: pd.DataFrame, stock_df: pd.DataFrame, side: str):
-    """Run enhanced backtest with advanced metrics"""
-    if signals_df.empty or stock_df.empty:
-        return None
-
-    try:
-        results = []
-        returns = [] # For Sharpe/Max Drawdown
-        for _, row in signals_df.iterrows():
-            entry_price = row['lastPrice']
-            # Simulate historical exits: Use recent closes as proxy for multiple exits
-            recent_closes = stock_df['Close'].tail(10).values # Last 10 bars for sim
-            pnls = []
-            for exit_price in recent_closes:
-                if side == 'call':
-                    pnl = max(0, exit_price - row['strike']) - entry_price
-                else:
-                    pnl = max(0, row['strike'] - exit_price) - entry_price
-                pnl *= 0.95 # Transaction costs
-                pnls.append(pnl)
-            
-            avg_pnl = np.mean(pnls) if pnls else 0
-            pnl_pct = (avg_pnl / entry_price) * 100 if entry_price > 0 else 0
-            returns.append(pnl_pct / 100) # For metrics
-
-            results.append({
-                'contract': row['contractSymbol'],
-                'entry_price': entry_price,
-                'avg_pnl': avg_pnl,
-                'pnl_pct': pnl_pct,
-                'score': row['score_percentage']
-            })
-
-        backtest_df = pd.DataFrame(results).sort_values('pnl_pct', ascending=False)
-
-        # Advanced Metrics
-        if returns:
-            returns_arr = np.array(returns)
-            mean_ret = np.mean(returns_arr)
-            std_ret = np.std(returns_arr)
-            sharpe = mean_ret / std_ret * np.sqrt(252) if std_ret > 0 else 0 # Annualized, assuming daily
-
-            cum_returns = np.cumsum(returns_arr)
-            peak = np.maximum.accumulate(cum_returns)
-            drawdown = (cum_returns - peak) / peak if np.any(peak) else 0
-            max_drawdown = np.min(drawdown) * 100 if len(drawdown) > 0 else 0
-
-            profit_factor = np.sum(returns_arr[returns_arr > 0]) / abs(np.sum(returns_arr[returns_arr < 0])) if np.any(returns_arr < 0) else float('inf')
-
-            backtest_df['sharpe_ratio'] = sharpe
-            backtest_df['max_drawdown_pct'] = max_drawdown
-            backtest_df['profit_factor'] = profit_factor
-
-        return backtest_df
-    except Exception as e:
-        st.error(f"Error in backtest: {str(e)}")
         return None
 
 # =============================
