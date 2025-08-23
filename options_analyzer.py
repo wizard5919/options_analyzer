@@ -2049,28 +2049,27 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
         return 0.0
 
 def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None): 
-    """Create TradingView-style chart with indicators using Plotly - Optimized version matching the example"""
+    """Create TradingView-style chart with indicators using Plotly"""
     if df.empty or len(df) < 2:
         st.warning("⚠️ Insufficient data for charting")
         return None
     
     try:
-        # Create subplots with layout matching the TradingView example
+        # Create subplots with TradingView-like layout
         fig = make_subplots(
             rows=4, cols=1,
             shared_xaxes=True,
-            vertical_spacing=0.02,
-            row_heights=[0.6, 0.1, 0.15, 0.15],
+            vertical_spacing=0.03,
+            row_heights=[0.5, 0.15, 0.2, 0.15],  # Adjusted for TradingView proportions
             specs=[
                 [{"secondary_y": False}],
                 [{"secondary_y": False}],
                 [{"secondary_y": False}],
                 [{"secondary_y": False}]
-            ],
-            subplot_titles=('Price & Indicators', 'Volume', 'MACD (12,26,9)', 'RSI (14)')
+            ]
         )
         
-        # Add candlestick for price (matching TradingView candles)
+        # Add candlestick for price (TradingView style)
         fig.add_trace(
             go.Candlestick(
                 x=df['Datetime'],
@@ -2079,86 +2078,103 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 low=df['Low'],
                 close=df['Close'],
                 name='Price',
-                increasing_line_color='#636EFA',  # Blue for up candles
-                decreasing_line_color='#EF5350',  # Red for down candles
-                increasing_fillcolor='#636EFA',
-                decreasing_fillcolor='#EF5350',
+                increasing_line_color='#089981',  # TradingView green
+                decreasing_line_color='#F23645',  # TradingView red
+                increasing_fillcolor='#089981',
+                decreasing_fillcolor='#F23645',
                 line_width=1
             ),
             row=1, col=1
         )
         
-        # EMAs with colors
+        # EMAs with TradingView-like colors
         ema_colors = {
-            'EMA_9': '#F18F01',  # Orange
-            'EMA_20': '#C73E1D',  # Red
-            'EMA_50': '#3E92CC'   # Blue
+            'EMA_9': '#2962FF',   # Blue
+            'EMA_20': '#FF6D00',  # Orange
+            'EMA_50': '#AA00FF'   # Purple
         }
+        
         for ema_col, color in ema_colors.items():
             if ema_col in df.columns and not df[ema_col].isna().all() and len(df[ema_col].dropna()) >= 2:
                 fig.add_trace(
                     go.Scatter(
                         x=df['Datetime'],
                         y=df[ema_col],
-                        name=ema_col,
-                        line=dict(color=color, width=1),
-                        hovertemplate=f'{ema_col}: %{{y:.2f}}<extra></extra>'
+                        name=ema_col.replace('_', ' '),
+                        line=dict(color=color, width=1.5),
+                        hovertemplate=f'{ema_col.replace("_", " ")}: %{{y:.2f}}<extra></extra>'
                     ),
                     row=1, col=1
                 )
         
-        # Add Keltner Channel (matching the example)
-        if all(col in df.columns for col in ['KC_upper', 'KC_middle', 'KC_lower']) and not df['KC_upper'].isna().all():
-            # Upper band (red)
+        # Bollinger Bands (TradingView style)
+        if all(col in df.columns for col in ['BB_upper', 'BB_middle', 'BB_lower']) and not df['BB_upper'].isna().all():
+            # Upper band
             fig.add_trace(
                 go.Scatter(
                     x=df['Datetime'],
-                    y=df['KC_upper'],
-                    name='KC Upper',
-                    line=dict(color='#FF4500', width=1),  # Red
-                    hovertemplate='KC Upper: %{y:.2f}<extra></extra>'
+                    y=df['BB_upper'],
+                    name='BB Upper',
+                    line=dict(color='#787B86', width=1),  # TradingView gray
+                    hovertemplate='BB Upper: %{y:.2f}<extra></extra>',
+                    opacity=0.7
                 ),
                 row=1, col=1
             )
-            # Middle band (blue)
+            # Middle band
             fig.add_trace(
                 go.Scatter(
                     x=df['Datetime'],
-                    y=df['KC_middle'],
-                    name='KC Middle',
-                    line=dict(color='#3E92CC', width=1),  # Blue
-                    hovertemplate='KC Middle: %{y:.2f}<extra></extra>'
+                    y=df['BB_middle'],
+                    name='BB Middle',
+                    line=dict(color='#787B86', width=1, dash='dash'),  # TradingView gray dashed
+                    hovertemplate='BB Middle: %{y:.2f}<extra></extra>',
+                    opacity=0.7
                 ),
                 row=1, col=1
             )
-            # Lower band (green)
+            # Lower band
             fig.add_trace(
                 go.Scatter(
                     x=df['Datetime'],
-                    y=df['KC_lower'],
-                    name='KC Lower',
-                    line=dict(color='#32CD32', width=1),  # Green
-                    hovertemplate='KC Lower: %{y:.2f}<extra></extra>'
+                    y=df['BB_lower'],
+                    name='BB Lower',
+                    line=dict(color='#787B86', width=1),  # TradingView gray
+                    hovertemplate='BB Lower: %{y:.2f}<extra></extra>',
+                    opacity=0.7
+                ),
+                row=1, col=1
+            )
+            # Fill between bands
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Datetime'].tolist() + df['Datetime'].tolist()[::-1],
+                    y=df['BB_upper'].tolist() + df['BB_lower'].tolist()[::-1],
+                    fill='toself',
+                    fillcolor='rgba(120, 123, 134, 0.1)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    hoverinfo='skip',
+                    showlegend=False
                 ),
                 row=1, col=1
             )
         
-        # VWAP with purple color
+        # VWAP with TradingView-like style
         if 'VWAP' in df.columns and not df['VWAP'].isna().all() and len(df['VWAP'].dropna()) >= 2:
             fig.add_trace(
                 go.Scatter(
                     x=df['Datetime'],
                     y=df['VWAP'],
                     name='VWAP',
-                    line=dict(color='#9B7EDE', width=1.5, dash='dash'),  # Purple dash
+                    line=dict(color='#2196F3', width=1.5),  # Bright blue
                     hovertemplate='VWAP: %{y:.2f}<extra></extra>'
                 ),
                 row=1, col=1
             )
         
-        # Volume bars in separate panel (matching example)
+        # Volume bars in separate panel (TradingView style)
         if 'Volume' in df.columns and not df['Volume'].isna().all():
-            colors = ['#636EFA' if close >= open else '#EF5350'
+            colors = ['#089981' if close >= open else '#F23645'
                       for close, open in zip(df['Close'], df['Open'])]
             fig.add_trace(
                 go.Bar(
@@ -2166,13 +2182,13 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     y=df['Volume'],
                     name='Volume',
                     marker_color=colors,
-                    opacity=0.6,
+                    opacity=0.7,
                     hovertemplate='Volume: %{y:,.0f}<extra></extra>'
                 ),
                 row=2, col=1
             )
         
-        # MACD panel with colored histogram
+        # MACD panel with TradingView colors
         if all(col in df.columns for col in ['MACD', 'MACD_signal', 'MACD_hist']) and not df['MACD'].isna().all():
             # MACD line (blue)
             fig.add_trace(
@@ -2180,8 +2196,8 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['MACD'],
                     name='MACD',
-                    line=dict(color='#00BFFF', width=1.5),
-                    hovertemplate='MACD: %{y:.2f}<extra></extra>'
+                    line=dict(color='#2962FF', width=1.5),
+                    hovertemplate='MACD: %{y:.4f}<extra></extra>'
                 ),
                 row=3, col=1
             )
@@ -2191,135 +2207,95 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['MACD_signal'],
                     name='Signal',
-                    line=dict(color='#FF6347', width=1.5),
-                    hovertemplate='Signal: %{y:.2f}<extra></extra>'
+                    line=dict(color='#FF6D00', width=1.5),
+                    hovertemplate='Signal: %{y:.4f}<extra></extra>'
                 ),
                 row=3, col=1
             )
             # Histogram with green/red
-            hist_colors = ['#00FF00' if val >= 0 else '#FF0000' for val in df['MACD_hist']]
+            hist_colors = ['#089981' if val >= 0 else '#F23645' for val in df['MACD_hist']]
             fig.add_trace(
                 go.Bar(
                     x=df['Datetime'],
                     y=df['MACD_hist'],
                     name='Histogram',
                     marker_color=hist_colors,
-                    opacity=0.6,
-                    hovertemplate='Hist: %{y:.2f}<extra></extra>'
+                    opacity=0.7,
+                    hovertemplate='Hist: %{y:.4f}<extra></extra>'
                 ),
                 row=3, col=1
             )
-            fig.add_hline(y=0, line_color="#808080", opacity=0.5, row=3, col=1)
+            fig.add_hline(y=0, line_color="#787B86", opacity=0.5, row=3, col=1)
         
-        # RSI panel with levels (purple line)
+        # RSI panel with TradingView style
         if 'RSI' in df.columns and not df['RSI'].isna().all() and len(df['RSI'].dropna()) >= 2:
             fig.add_trace(
                 go.Scatter(
                     x=df['Datetime'],
                     y=df['RSI'],
                     name='RSI',
-                    line=dict(color='#7B68EE', width=1.5),
+                    line=dict(color='#2196F3', width=1.5),
                     hovertemplate='RSI: %{y:.1f}<extra></extra>'
                 ),
                 row=4, col=1
             )
-            # Overbought/oversold lines
-            fig.add_hline(y=70, line_dash="dash", line_color="#FF0000", opacity=0.7, row=4, col=1,
-                          annotation_text="70", annotation_position="right")
-            fig.add_hline(y=30, line_dash="dash", line_color="#00FF00", opacity=0.7, row=4, col=1,
-                          annotation_text="30", annotation_position="right")
-            fig.add_hline(y=50, line_dash="dot", line_color="#808080", opacity=0.5, row=4, col=1)
+            # Overbought/oversold lines (TradingView style)
+            fig.add_hline(y=70, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
+            fig.add_hline(y=50, line_dash="dot", line_color="#787B86", opacity=0.5, row=4, col=1)
         
-        # NEW: Add Parabolic SAR to main panel if available
-        if 'PSAR' in df.columns and not df['PSAR'].isna().all() and len(df['PSAR'].dropna()) >= 2:
+        # Stochastic panel (added as a 5th panel if needed)
+        if all(col in df.columns for col in ['Stoch_%K', 'Stoch_%D']) and not df['Stoch_%K'].isna().all():
+            # %K line
             fig.add_trace(
                 go.Scatter(
                     x=df['Datetime'],
-                    y=df['PSAR'],
-                    name='PSAR',
-                    mode='markers',
-                    marker=dict(color='#FFD700', size=4, symbol='circle'),
-                    hovertemplate='PSAR: %{y:.2f}<extra></extra>'
+                    y=df['Stoch_%K'],
+                    name='Stoch %K',
+                    line=dict(color='#2962FF', width=1.5),
+                    hovertemplate='%K: %{y:.1f}<extra></extra>'
                 ),
-                row=1, col=1
+                row=4, col=1
             )
+            # %D line
+            fig.add_trace(
+                go.Scatter(
+                    x=df['Datetime'],
+                    y=df['Stoch_%D'],
+                    name='Stoch %D',
+                    line=dict(color='#FF6D00', width=1.5),
+                    hovertemplate='%D: %{y:.1f}<extra></extra>'
+                ),
+                row=4, col=1
+            )
+            # Overbought/oversold lines
+            fig.add_hline(y=80, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
+            fig.add_hline(y=20, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
         
-        # Add support/resistance horizontal lines with labels
-        if sr_levels and '5min' in sr_levels:
-            # Supports in green
-            for level in sr_levels['5min'].get('support', []):
-                if isinstance(level, (int, float)) and not math.isnan(level):
-                    fig.add_hline(
-                        y=level,
-                        line_dash="dash",
-                        line_color="#00FF00",
-                        opacity=0.7,
-                        row=1, col=1,
-                        annotation_text=f"S: {level:.2f}",
-                        annotation_position="right",
-                        annotation_font_color="#00FF00"
-                    )
-            # Resistances in red
-            for level in sr_levels['5min'].get('resistance', []):
-                if isinstance(level, (int, float)) and not math.isnan(level):
-                    fig.add_hline(
-                        y=level,
-                        line_dash="dash",
-                        line_color="#FF0000",
-                        opacity=0.7,
-                        row=1, col=1,
-                        annotation_text=f"R: {level:.2f}",
-                        annotation_position="right",
-                        annotation_font_color="#FF0000"
-                    )
-        
-        # NEW: Add premarket shading
-        if 'premarket' in df.columns:
-            from itertools import groupby
-            for key, group in groupby(enumerate(df['premarket']), key=lambda x: x[1]):
-                if key:  # premarket == True
-                    group_list = list(group)
-                    start_idx = group_list[0][0]
-                    end_idx = group_list[-1][0]
-                    start_time = df['Datetime'].iloc[start_idx]
-                    end_time = df['Datetime'].iloc[end_idx]
-                    fig.add_vrect(
-                        x0=start_time,
-                        x1=end_time,
-                        fillcolor="#00008B",
-                        opacity=0.15,
-                        layer="below",
-                        line_width=0,
-                        row=1, col=1,
-                        annotation_text="Premarket",
-                        annotation_position="top left",
-                        annotation_font_size=10,
-                        annotation_font_color="#FFFFFF"
-                    )
-        
-        # Update axes
+        # Update axes to match TradingView style
         fig.update_xaxes(
             showgrid=True,
-            gridcolor='rgba(255,255,255,0.1)',
+            gridcolor='rgba(120, 123, 134, 0.2)',
             rangeslider_visible=False,
             type='date',
-            row=4, col=1  # Only show full x-axis on bottom panel
+            row=4, col=1
         )
+        
         fig.update_yaxes(
             showgrid=True,
-            gridcolor='rgba(255,255,255,0.1)'
+            gridcolor='rgba(120, 123, 134, 0.2)'
         )
         
         # Set ranges for oscillators
-        fig.update_yaxes(range=[-5, 105], row=4, col=1)  # RSI with buffer
+        fig.update_yaxes(range=[0, 100], row=4, col=1)  # RSI and Stochastic
         fig.update_yaxes(showgrid=False, row=2, col=1)  # Volume no grid
         
-        # Advanced layout updates matching TradingView
+        # TradingView-like layout
         fig.update_layout(
-            height=950,
+            height=800,
             title=dict(
-                text=f'Advanced Technical Analysis for {ticker}',
-                font=dict(size=20),
+                text=f'{ticker} - Advanced Technical Analysis',
+                font=dict(size=16),
                 x=0.5
             ),
             showlegend=True,
@@ -2329,57 +2305,41 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 y=1.02,
                 xanchor="right",
                 x=1,
-                bgcolor='rgba(30,30,30,0.8)',
-                bordercolor='#FFFFFF',
+                bgcolor='rgba(26, 26, 26, 0.8)',
+                bordercolor='rgba(120, 123, 134, 0.5)',
                 borderwidth=1,
                 font=dict(size=10)
             ),
             template='plotly_dark',
-            plot_bgcolor='#1A1A1A',
-            paper_bgcolor='#121212',
-            font=dict(color='#E0E0E0', size=12),
+            plot_bgcolor='#131722',  # TradingView dark background
+            paper_bgcolor='#131722',
+            font=dict(color='#D1D4DC'),
             hovermode='x unified',
             hoverlabel=dict(
-                bgcolor="#2A2A2A",
-                bordercolor="#FFFFFF"
+                bgcolor="#1E222D",
+                bordercolor="#363C4E"
             ),
-            margin=dict(l=40, r=40, t=60, b=40),
+            margin=dict(l=50, r=50, t=50, b=50),
             xaxis=dict(
                 rangeselector=dict(
                     buttons=list([
-                        dict(count=1, label="1m", step="minute", stepmode="backward"),
-                        dict(count=2, label="2m", step="minute", stepmode="backward"),
-                        dict(count=3, label="3m", step="minute", stepmode="backward"),
-                        dict(count=5, label="5m", step="minute", stepmode="backward"),
-                        dict(count=10, label="10m", step="minute", stepmode="backward"),
-                        dict(count=15, label="15m", step="minute", stepmode="backward"),
-                        dict(count=30, label="30m", step="minute", stepmode="backward"),
-                        dict(count=1, label="1h", step="hour", stepmode="backward"),
-                        dict(count=2, label="2h", step="hour", stepmode="backward"),
-                        dict(count=3, label="3h", step="hour", stepmode="backward"),
-                        dict(count=4, label="4h", step="hour", stepmode="backward"),
-                        dict(count=1, label="1d", step="day", stepmode="backward"),
-                        dict(count=5, label="5d", step="day", stepmode="backward"),
-                        dict(count=1, label="1M", step="month", stepmode="backward"),
-                        dict(count=3, label="3M", step="month", stepmode="backward"),
-                        dict(count=6, label="6M", step="month", stepmode="backward"),
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=3, label="3m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
                         dict(count=1, label="YTD", step="year", stepmode="todate"),
-                        dict(count=1, label="1Y", step="year", stepmode="backward"),
-                        dict(count=5, label="5Y", step="year", stepmode="backward"),
-                        dict(step="all", label="All")
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all", label="All", stepmode="backward")
                     ]),
-                    activecolor="#3E92CC",
-                    bgcolor="#1E1E1E",
-                    bordercolor="#FFFFFF",
-                    font=dict(color="#FFFFFF")
+                    bgcolor="#1E222D",
+                    activecolor="#2962FF",
+                    bordercolor="#363C4E",
+                    font=dict(color="#D1D4DC")
                 ),
-                type="date",
-                showgrid=True,
-                gridcolor='rgba(255,255,255,0.05)'
+                type="date"
             )
         )
         
-        # Add current price annotation
+        # Add current price annotation (TradingView style)
         current_price = df['Close'].iloc[-1]
         fig.add_annotation(
             x=df['Datetime'].iloc[-1],
@@ -2387,18 +2347,18 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             text=f"${current_price:.2f}",
             showarrow=True,
             arrowhead=2,
-            ax=40,
-            ay=0,
-            font=dict(color="#FFFFFF", size=12),
-            bgcolor="#3E92CC",
-            bordercolor="#FFFFFF",
+            ax=0,
+            ay=-40,
+            font=dict(color="#D1D4DC", size=12),
+            bgcolor="#2962FF",
+            bordercolor="#363C4E",
             row=1, col=1
         )
         
         return fig
     
     except Exception as e:
-        st.error(f"Error creating enhanced chart: {str(e)}")
+        st.error(f"Error creating TradingView-style chart: {str(e)}")
         return None
 
 # =============================
