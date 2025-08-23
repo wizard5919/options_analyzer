@@ -2011,19 +2011,19 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
     except Exception as e:
         st.error(f"Error in scanner score calculation: {str(e)}")
         return 0.0
-def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
+def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None): 
     """Create TradingView-style chart with indicators using Plotly"""
     if df.empty or len(df) < 2:
         st.warning("⚠️ Insufficient data for charting")
         return None
-   
+    
     try:
         # Create subplots with TradingView-like layout
         fig = make_subplots(
             rows=4, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.03,
-            row_heights=[0.5, 0.15, 0.2, 0.15], # Adjusted for TradingView proportions
+            row_heights=[0.5, 0.15, 0.2, 0.15],  # Adjusted for TradingView proportions
             specs=[
                 [{"secondary_y": False}],
                 [{"secondary_y": False}],
@@ -2031,7 +2031,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 [{"secondary_y": False}]
             ]
         )
-       
+        
         # Add candlestick for price (TradingView style)
         fig.add_trace(
             go.Candlestick(
@@ -2041,22 +2041,22 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 low=df['Low'],
                 close=df['Close'],
                 name='Price',
-                increasing_line_color='#089981', # TradingView green
-                decreasing_line_color='#F23645', # TradingView red
+                increasing_line_color='#089981',  # TradingView green
+                decreasing_line_color='#F23645',  # TradingView red
                 increasing_fillcolor='#089981',
                 decreasing_fillcolor='#F23645',
                 line_width=1
             ),
             row=1, col=1
         )
-       
+        
         # EMAs with TradingView-like colors
         ema_colors = {
-            'EMA_9': '#2962FF', # Blue
-            'EMA_20': '#FF6D00', # Orange
-            'EMA_50': '#AA00FF' # Purple
+            'EMA_9': '#2962FF',   # Blue
+            'EMA_20': '#FF6D00',  # Orange
+            'EMA_50': '#AA00FF'   # Purple
         }
-       
+        
         for ema_col, color in ema_colors.items():
             if ema_col in df.columns and not df[ema_col].isna().all() and len(df[ema_col].dropna()) >= 2:
                 fig.add_trace(
@@ -2069,7 +2069,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     ),
                     row=1, col=1
                 )
-       
+        
         # Bollinger Bands (TradingView style)
         if all(col in df.columns for col in ['BB_upper', 'BB_middle', 'BB_lower']) and not df['BB_upper'].isna().all():
             # Upper band
@@ -2078,7 +2078,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['BB_upper'],
                     name='BB Upper',
-                    line=dict(color='#787B86', width=1), # TradingView gray
+                    line=dict(color='#787B86', width=1),  # TradingView gray
                     hovertemplate='BB Upper: %{y:.2f}<extra></extra>',
                     opacity=0.7
                 ),
@@ -2090,7 +2090,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['BB_middle'],
                     name='BB Middle',
-                    line=dict(color='#787B86', width=1, dash='dash'), # TradingView gray dashed
+                    line=dict(color='#787B86', width=1, dash='dash'),  # TradingView gray dashed
                     hovertemplate='BB Middle: %{y:.2f}<extra></extra>',
                     opacity=0.7
                 ),
@@ -2102,7 +2102,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['BB_lower'],
                     name='BB Lower',
-                    line=dict(color='#787B86', width=1), # TradingView gray
+                    line=dict(color='#787B86', width=1),  # TradingView gray
                     hovertemplate='BB Lower: %{y:.2f}<extra></extra>',
                     opacity=0.7
                 ),
@@ -2121,7 +2121,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 ),
                 row=1, col=1
             )
-       
+        
         # VWAP with TradingView-like style
         if 'VWAP' in df.columns and not df['VWAP'].isna().all() and len(df['VWAP'].dropna()) >= 2:
             fig.add_trace(
@@ -2129,12 +2129,12 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['VWAP'],
                     name='VWAP',
-                    line=dict(color='#2196F3', width=1.5), # Bright blue
+                    line=dict(color='#2196F3', width=1.5),  # Bright blue
                     hovertemplate='VWAP: %{y:.2f}<extra></extra>'
                 ),
                 row=1, col=1
             )
-       
+        
         # Volume bars in separate panel (TradingView style)
         if 'Volume' in df.columns and not df['Volume'].isna().all():
             colors = ['#089981' if close >= open else '#F23645'
@@ -2150,7 +2150,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 ),
                 row=2, col=1
             )
-       
+        
         # MACD panel with TradingView colors
         if all(col in df.columns for col in ['MACD', 'MACD_signal', 'MACD_hist']) and not df['MACD'].isna().all():
             # MACD line (blue)
@@ -2189,7 +2189,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 row=3, col=1
             )
             fig.add_hline(y=0, line_color="#787B86", opacity=0.5, row=3, col=1)
-       
+        
         # RSI panel with TradingView style
         if 'RSI' in df.columns and not df['RSI'].isna().all() and len(df['RSI'].dropna()) >= 2:
             fig.add_trace(
@@ -2206,7 +2206,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             fig.add_hline(y=70, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
             fig.add_hline(y=50, line_dash="dot", line_color="#787B86", opacity=0.5, row=4, col=1)
-       
+        
         # Stochastic panel (added as a 5th panel if needed)
         if all(col in df.columns for col in ['Stoch_%K', 'Stoch_%D']) and not df['Stoch_%K'].isna().all():
             # %K line
@@ -2234,7 +2234,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             # Overbought/oversold lines
             fig.add_hline(y=80, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
             fig.add_hline(y=20, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
-       
+        
         # Update axes to match TradingView style
         fig.update_xaxes(
             showgrid=True,
@@ -2243,16 +2243,16 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             type='date',
             row=4, col=1
         )
-       
+        
         fig.update_yaxes(
             showgrid=True,
             gridcolor='rgba(120, 123, 134, 0.2)'
         )
-       
+        
         # Set ranges for oscillators
-        fig.update_yaxes(range=[0, 100], row=4, col=1) # RSI and Stochastic
-        fig.update_yaxes(showgrid=False, row=2, col=1) # Volume no grid
-       
+        fig.update_yaxes(range=[0, 100], row=4, col=1)  # RSI and Stochastic
+        fig.update_yaxes(showgrid=False, row=2, col=1)  # Volume no grid
+        
         # TradingView-like layout
         fig.update_layout(
             height=800,
@@ -2274,7 +2274,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 font=dict(size=10)
             ),
             template='plotly_dark',
-            plot_bgcolor='#131722', # TradingView dark background
+            plot_bgcolor='#131722',  # TradingView dark background
             paper_bgcolor='#131722',
             font=dict(color='#D1D4DC'),
             hovermode='x unified',
@@ -2282,26 +2282,50 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 bgcolor="#1E222D",
                 bordercolor="#363C4E"
             ),
-            margin=dict(l=50, r=50, t=50, b=50),
+            margin=dict(l=50, r=50, t=50, b=80),  # Increased bottom margin for timeframe selector
+        )
+        
+        # Add timeframe selector at the bottom (TradingView style)
+        timeframe_buttons = [
+            dict(count=1, label="1D", step="day", stepmode="backward"),
+            dict(count=5, label="5D", step="day", stepmode="backward"),
+            dict(count=1, label="1M", step="month", stepmode="backward"),
+            dict(count=3, label="3M", step="month", stepmode="backward"),
+            dict(count=6, label="6M", step="month", stepmode="backward"),
+            dict(count=1, label="YTD", step="year", stepmode="todate"),
+            dict(count=1, label="1Y", step="year", stepmode="backward"),
+            dict(count=5, label="5Y", step="year", stepmode="backward"),
+            dict(step="all", label="All")
+        ]
+        
+        # Add the timeframe selector to the bottom x-axis
+        fig.update_layout(
             xaxis=dict(
                 rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1m", step="month", stepmode="backward"),
-                        dict(count=3, label="3m", step="month", stepmode="backward"),
-                        dict(count=6, label="6m", step="month", stepmode="backward"),
-                        dict(count=1, label="YTD", step="year", stepmode="todate"),
-                        dict(count=1, label="1y", step="year", stepmode="backward"),
-                        dict(step="all", label="All", stepmode="backward")
-                    ]),
+                    buttons=timeframe_buttons,
                     bgcolor="#1E222D",
                     activecolor="#2962FF",
                     bordercolor="#363C4E",
-                    font=dict(color="#D1D4DC")
+                    font=dict(color="#D1D4DC"),
+                    x=0,
+                    xanchor="left",
+                    y=0.98,
+                    yanchor="top"
                 ),
                 type="date"
             )
         )
-       
+        
+        # Move the rangeselector to the bottom of the chart
+        fig.update_layout(
+            xaxis=dict(
+                rangeselector=dict(
+                    y=-0.15,  # Position below the chart
+                    yanchor="top"
+                )
+            )
+        )
+        
         # Add current price annotation (TradingView style)
         current_price = df['Close'].iloc[-1]
         fig.add_annotation(
@@ -2317,96 +2341,11 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             bordercolor="#363C4E",
             row=1, col=1
         )
-       
+        
         return fig
-   
+    
     except Exception as e:
         st.error(f"Error creating TradingView-style chart: {str(e)}")
-        return None
-# =============================
-# NEW: PERFORMANCE MONITORING FUNCTIONS
-# =============================
-def measure_performance():
-    """Measure and display performance metrics"""
-    if 'performance_metrics' not in st.session_state:
-        st.session_state.performance_metrics = {
-            'start_time': time.time(),
-            'api_calls': 0,
-            'data_points_processed': 0,
-            'cache_hits': 0,
-            'cache_misses': 0,
-            'memory_usage': 0
-        }
-   
-    # Update memory usage
-    try:
-        import psutil
-        process = psutil.Process()
-        st.session_state.performance_metrics['memory_usage'] = process.memory_info().rss / (1024 * 1024) # in MB
-    except ImportError:
-        pass
-   
-    # Display metrics
-    with st.expander("⚡ Performance Metrics", expanded=True):
-        elapsed = time.time() - st.session_state.performance_metrics['start_time']
-        st.metric("Uptime", f"{elapsed:.1f} seconds")
-        st.metric("API Calls", st.session_state.performance_metrics['api_calls'])
-        st.metric("Data Points Processed", st.session_state.performance_metrics['data_points_processed'])
-        st.metric("Cache Hit Ratio",
-                  f"{st.session_state.performance_metrics['cache_hits'] / max(1, st.session_state.performance_metrics['cache_hits'] + st.session_state.performance_metrics['cache_misses']) * 100:.1f}%")
-        if 'memory_usage' in st.session_state.performance_metrics:
-            st.metric("Memory Usage", f"{st.session_state.performance_metrics['memory_usage']:.1f} MB")
-# =============================
-# NEW: BACKTESTING FUNCTIONS
-# =============================
-def run_backtest(signals_df: pd.DataFrame, stock_df: pd.DataFrame, side: str):
-    """Run enhanced backtest with advanced metrics"""
-    if signals_df.empty or stock_df.empty:
-        return None
-    try:
-        results = []
-        returns = [] # For Sharpe/Max Drawdown
-        for _, row in signals_df.iterrows():
-            entry_price = row['lastPrice']
-            # Simulate historical exits: Use recent closes as proxy for multiple exits
-            recent_closes = stock_df['Close'].tail(10).values # Last 10 bars for sim
-            pnls = []
-            for exit_price in recent_closes:
-                if side == 'call':
-                    pnl = max(0, exit_price - row['strike']) - entry_price
-                else:
-                    pnl = max(0, row['strike'] - exit_price) - entry_price
-                pnl *= 0.95 # Transaction costs
-                pnls.append(pnl)
-           
-            avg_pnl = np.mean(pnls) if pnls else 0
-            pnl_pct = (avg_pnl / entry_price) * 100 if entry_price > 0 else 0
-            returns.append(pnl_pct / 100) # For metrics
-            results.append({
-                'contract': row['contractSymbol'],
-                'entry_price': entry_price,
-                'avg_pnl': avg_pnl,
-                'pnl_pct': pnl_pct,
-                'score': row['score_percentage']
-            })
-        backtest_df = pd.DataFrame(results).sort_values('pnl_pct', ascending=False)
-        # Advanced Metrics
-        if returns:
-            returns_arr = np.array(returns)
-            mean_ret = np.mean(returns_arr)
-            std_ret = np.std(returns_arr)
-            sharpe = mean_ret / std_ret * np.sqrt(252) if std_ret > 0 else 0 # Annualized, assuming daily
-            cum_returns = np.cumsum(returns_arr)
-            peak = np.maximum.accumulate(cum_returns)
-            drawdown = (cum_returns - peak) / peak if np.any(peak) else 0
-            max_drawdown = np.min(drawdown) * 100 if len(drawdown) > 0 else 0
-            profit_factor = np.sum(returns_arr[returns_arr > 0]) / abs(np.sum(returns_arr[returns_arr < 0])) if np.any(returns_arr < 0) else float('inf')
-            backtest_df['sharpe_ratio'] = sharpe
-            backtest_df['max_drawdown_pct'] = max_drawdown
-            backtest_df['profit_factor'] = profit_factor
-        return backtest_df
-    except Exception as e:
-        st.error(f"Error in backtest: {str(e)}")
         return None
 # =============================
 # ENHANCED STREAMLIT INTERFACE
@@ -2604,23 +2543,26 @@ with st.sidebar:
         st.caption(f"**Cache**: {time_since}s ago")
    
     # Performance tips
-    with st.expander("⚡ Performance Tips"):
-        st.markdown("""
-        **🚀 Speed Optimizations:**
-        - Data cached for 5 minutes (options) / 5 minutes (stocks)
-        - Vectorized signal processing (no slow loops)
-        - Smart refresh intervals prevent rate limits
-       
-        **💰 Cost Reduction:**
-        - Use conservative refresh intervals (120s+)
-        - Analyze one ticker at a time
-        - Consider Polygon Premium for heavy usage
-       
-        **📊 Better Signals:**
-        - Weighted scoring ranks best opportunities
-        - Dynamic thresholds adapt to volatility
-        - Detailed explanations show why signals pass/fail
-        """)
+with st.expander("⚡ Performance Tips"):
+    st.markdown("""
+    **🚀 Speed Optimizations:**
+    - Data cached for 5 minutes (options) / 5 minutes (stocks)
+    - Vectorized signal processing (no slow loops)
+    - Smart refresh intervals prevent rate limits
+    
+    **💰 Cost Reduction:**
+    - Use conservative refresh intervals (120s+)
+    - Analyze one ticker at a time
+    - Consider Polygon Premium for heavy usage
+    
+    **📊 Better Signals:**
+    - Weighted scoring ranks best opportunities
+    - Dynamic thresholds adapt to volatility
+    - Detailed explanations show why signals pass/fail
+    """)
+
+# NEW: Performance monitoring section
+measure_performance()  # This call should now work since the function is defined above
    
     # NEW: Performance monitoring section
     measure_performance()
