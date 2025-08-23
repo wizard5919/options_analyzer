@@ -2564,7 +2564,7 @@ with st.expander("⚡ Performance Tips"):
 
 
 # NEW: Performance monitoring section
-measure_performance()  # This call should now work since the function is defined above
+measure_performance()  
 # NEW: Create placeholders for real-time metrics
 if 'price_placeholder' not in st.session_state:
     st.session_state.price_placeholder = st.empty()
