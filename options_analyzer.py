@@ -1,4 +1,3 @@
-
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -137,6 +136,674 @@ SIGNAL_THRESHOLDS = {
         }
     }
 }
+# Popular tickers list including stocks, ETFs, and cryptocurrencies
+POPULAR_TICKERS = [
+    # Stocks
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'BRK-B', 'JPM', 'V',
+    # ETFs
+    'SPY', 'QQQ', 'IWM', 'DIA', 'ARKK', 'VTI', 'VOO', 'VWO', 'EEM', 'GLD',
+    # Cryptocurrencies
+    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD', 'BNB-USD', 'DOT-USD', 'LINK-USD', 'LTC-USD'
+]
+# =============================
+# UTILITY FUNCTIONS FOR FREE DATA SOURCES
+# =============================
+def can_make_request(source: str) -> bool:
+    """Check if we can make another request without hitting limits"""
+    now = time.time()
+   
+    # Clean up old entries (older than 1 hour)
+    st.session_state.API_CALL_LOG = [
+        t for t in st.session_state.API_CALL_LOG
+        if now - t['timestamp'] < 3600
+    ]
+   
+    # Count recent requests by source
+    av_count = len([t for t in st.session_state.API_CALL_LOG
+                    if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 60])
+    fmp_count = len([t for t in st.session_state.API_CALL_LOG
+                     if t['source'] == "FMP" and now - t['timestamp'] < 3600])
+    iex_count = len([t for t in st.session_state.API_CALL_LOG
+                     if t['source'] == "IEX" and now - t['timestamp'] < 3600])
+   
+    # Enforce rate limits
+    if source == "ALPHA_VANTAGE" and av_count >= 4:
+        return False
+    if source == "FMP" and fmp_count >= 9:
+        return False
+    if source == "IEX" and iex_count >= 29:
+        return False
+   
+    return True
+def log_api_request(source: str):
+    """Log an API request to track usage"""
+    st.session_state.API_CALL_LOG.append({
+        'source': source,
+        'timestamp': time.time()
+    })
+# =============================
+# COMPLETELY REWRITTEN SUPPORT/RESISTANCE FUNCTIONS
+# =============================
+def find_peaks_valleys_robust(data: np.array, order: int = 5, prominence: float = None) -> Tuple[List[int], List[int]]:
+    """
+    Robust peak and valley detection with proper prominence filtering
+    """
+    if len(data) < order * 2 + 1:
+        return [], []
+   
+    try:
+        if SCIPY_AVAILABLE and prominence is not None:
+            peaks, peak_properties = signal.find_peaks(data, distance=order, prominence=prominence)
+            valleys, valley_properties = signal.find_peaks(-data, distance=order, prominence=prominence)
+            return peaks.tolist(), valleys.tolist()
+        else:
+            peaks = []
+            valleys = []
+           
+            for i in range(order, len(data) - order):
+                is_peak = True
+                for j in range(1, order + 1):
+                    if data[i] <= data[i-j] or data[i] <= data[i+j]:
+                        is_peak = False
+                        break
+                if is_peak:
+                    peaks.append(i)
+               
+                is_valley = True
+                for j in range(1, order + 1):
+                    if data[i] >= data[i-j] or data[i] >= data[i+j]:
+                        is_valley = False
+                        break
+                if is_valley:
+                    valleys.append(i)
+           
+            return peaks, valleys
+    except Exception as e:
+        st.warning(f"Error in peak detection: {str(e)}")
+        return [], []
+def calculate_dynamic_sensitivity(data: pd.DataFrame, base_sensitivity: float) -> float:
+    """
+    Calculate dynamic sensitivity based on price volatility and range
+    """
+    try:
+        if data.empty or len(data) < 10:
+            return base_sensitivity
+       
+        # Calculate price range and volatility
+        current_price = data['Close'].iloc[-1]
+       
+        # Handle zero/negative current price
+        if current_price <= 0 or np.isnan(current_price):
+            return base_sensitivity
+       
+        # Calculate ATR-based volatility
+        if 'High' in data.columns and 'Low' in data.columns and 'Close' in data.columns:
+            tr1 = data['High'] - data['Low']
+            tr2 = abs(data['High'] - data['Close'].shift(1))
+            tr3 = abs(data['Low'] - data['Close'].shift(1))
+            true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr = true_range.rolling(window=min(14, len(data))).mean().iloc[-1]
+           
+            if not pd.isna(atr) and atr > 0:
+                # Scale sensitivity based on ATR relative to price
+                volatility_ratio = atr / current_price
+                # Increase sensitivity for higher volatility
+                dynamic_sensitivity = base_sensitivity * (1 + volatility_ratio * 2)
+               
+                # Cap the sensitivity to reasonable bounds
+                return min(max(dynamic_sensitivity, base_sensitivity * 0.5), base_sensitivity * 3)
+       
+        return base_sensitivity
+   
+    except Exception as e:
+        st.warning(f"Error calculating dynamic sensitivity: {str(e)}")
+        return base_sensitivity
+def cluster_levels_improved(levels: List[float], current_price: float, sensitivity: float, level_type: str) -> List[Dict]:
+    """
+    Improved level clustering with strength scoring and current price weighting
+    """
+    if not levels:
+        return []
+   
+    try:
+        levels = sorted(levels)
+        clustered = []
+        current_cluster = []
+       
+        for level in levels:
+            if not current_cluster:
+                current_cluster.append(level)
+            else:
+                # Check if level should be in current cluster
+                cluster_center = np.mean(current_cluster)
+                distance_ratio = abs(level - cluster_center) / current_price
+               
+                if distance_ratio <= sensitivity:
+                    current_cluster.append(level)
+                else:
+                    # Finalize current cluster
+                    if current_cluster:
+                        cluster_price = np.mean(current_cluster)
+                        cluster_strength = len(current_cluster)
+                        distance_from_current = abs(cluster_price - current_price) / current_price
+                       
+                        clustered.append({
+                            'price': cluster_price,
+                            'strength': cluster_strength,
+                            'distance': distance_from_current,
+                            'type': level_type,
+                            'raw_levels': current_cluster.copy()
+                        })
+                   
+                    current_cluster = [level]
+       
+        # Don't forget the last cluster
+        if current_cluster:
+            cluster_price = np.mean(current_cluster)
+            cluster_strength = len(current_cluster)
+            distance_from_current = abs(cluster_price - current_price) / current_price
+           
+            clustered.append({
+                'price': cluster_price,
+                'strength': cluster_strength,
+                'distance': distance_from_current,
+                'type': level_type,
+                'raw_levels': current_cluster.copy()
+            })
+       
+        # Sort by strength first, then by distance to current price
+        clustered.sort(key=lambda x: (-x['strength'], x['distance']))
+       
+        return clustered[:5] # Return top 5 levels
+   
+    except Exception as e:
+        st.warning(f"Error clustering levels: {str(e)}")
+        return [{'price': level, 'strength': 1, 'distance': abs(level - current_price) / current_price, 'type': level_type, 'raw_levels': [level]} for level in levels[:5]]
+def calculate_support_resistance_enhanced(data: pd.DataFrame, timeframe: str, current_price: float) -> dict:
+    """
+    Enhanced support/resistance calculation with proper alignment and strength scoring
+    """
+    if data.empty or len(data) < 20:
+        return {
+            'support': [],
+            'resistance': [],
+            'sensitivity': CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005),
+            'timeframe': timeframe,
+            'data_points': len(data) if not data.empty else 0
+        }
+   
+    try:
+        # Get configuration for this timeframe
+        base_sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
+        window_size = CONFIG['SR_WINDOW_SIZES'].get(timeframe, 5)
+       
+        # Calculate dynamic sensitivity
+        dynamic_sensitivity = calculate_dynamic_sensitivity(data, base_sensitivity)
+       
+        # Prepare price arrays
+        highs = data['High'].values
+        lows = data['Low'].values
+        closes = data['Close'].values
+       
+        # Calculate prominence for better peak detection (based on timeframe)
+        price_std = np.std(closes)
+        prominence = price_std * 0.5 # Adjust prominence based on price volatility
+       
+        # Find peaks and valleys with improved method
+        resistance_indices, support_indices = find_peaks_valleys_robust(
+            highs, order=window_size, prominence=prominence
+        )
+        support_valleys, resistance_peaks = find_peaks_valleys_robust(
+            lows, order=window_size, prominence=prominence
+        )
+       
+        # Combine indices for more comprehensive analysis
+        all_resistance_indices = list(set(resistance_indices + resistance_peaks))
+        all_support_indices = list(set(support_indices + support_valleys))
+       
+        # Extract price levels
+        resistance_levels = [float(highs[i]) for i in all_resistance_indices if i < len(highs)]
+        support_levels = [float(lows[i]) for i in all_support_indices if i < len(lows)]
+       
+        # Add pivot points from close prices for additional confirmation
+        close_peaks, close_valleys = find_peaks_valleys_robust(closes, order=max(3, window_size-2))
+        resistance_levels.extend([float(closes[i]) for i in close_peaks])
+        support_levels.extend([float(closes[i]) for i in close_valleys])
+       
+        # NEW: Add VWAP as a significant level
+        if 'VWAP' in data.columns:
+            vwap = data['VWAP'].iloc[-1]
+            if not pd.isna(vwap):
+                # VWAP is a significant level - add it to both support and resistance
+                # since it can act as both depending on price position
+                support_levels.append(vwap)
+                resistance_levels.append(vwap)
+       
+        # Remove duplicates and filter out levels too close to current price
+        min_distance = current_price * 0.001
+        resistance_levels = [level for level in set(resistance_levels) if abs(level - current_price) > min_distance]
+        support_levels = [level for level in set(support_levels) if abs(level - current_price) > min_distance]
+       
+        # Separate levels above and below current price more strictly
+        resistance_levels = [level for level in resistance_levels if level > current_price]
+        support_levels = [level for level in support_levels if level < current_price]
+       
+        # Cluster levels with improved algorithm
+        clustered_resistance = cluster_levels_improved(resistance_levels, current_price, dynamic_sensitivity, 'resistance')
+        clustered_support = cluster_levels_improved(support_levels, current_price, dynamic_sensitivity, 'support')
+       
+        # Extract just the prices for return (maintaining backward compatibility)
+        final_resistance = [level['price'] for level in clustered_resistance]
+        final_support = [level['price'] for level in clustered_support]
+       
+        # Store VWAP separately
+        vwap_value = data['VWAP'].iloc[-1] if 'VWAP' in data.columns else np.nan
+       
+        return {
+            'support': final_support,
+            'resistance': final_resistance,
+            'vwap': vwap_value,
+            'sensitivity': dynamic_sensitivity,
+            'timeframe': timeframe,
+            'data_points': len(data),
+            'support_details': clustered_support,
+            'resistance_details': clustered_resistance,
+            'stats': {
+                'raw_support_count': len(support_levels),
+                'raw_resistance_count': len(resistance_levels),
+                'clustered_support_count': len(final_support),
+                'clustered_resistance_count': len(final_resistance)
+            }
+        }
+   
+    except Exception as e:
+        st.error(f"Error calculating S/R for {timeframe}: {str(e)}")
+        return {
+            'support': [],
+            'resistance': [],
+            'sensitivity': base_sensitivity,
+            'timeframe': timeframe,
+            'data_points': len(data) if not data.empty else 0,
+            'error': str(e)
+        }
+@st.cache_data(ttl=300, show_spinner=False)
+def get_multi_timeframe_data_enhanced(ticker: str) -> Tuple[dict, float]:
+    """
+    Enhanced multi-timeframe data fetching with better error handling and data validation
+    """
+    timeframes = {
+        '1min': {'interval': '1m', 'period': '1d'},
+        '5min': {'interval': '5m', 'period': '5d'},
+        '15min': {'interval': '15m', 'period': '15d'},
+        '30min': {'interval': '30m', 'period': '30d'},
+        '1h': {'interval': '60m', 'period': '60d'}
+    }
+   
+    data = {}
+    current_price = None
+   
+    for tf, params in timeframes.items():
+        try:
+            # Add retry logic for each timeframe
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    df = yf.download(
+                        ticker,
+                        period=params['period'],
+                        interval=params['interval'],
+                        progress=False,
+                        prepost=True
+                    )
+                   
+                    if not df.empty:
+                        # Clean and validate data
+                        df = df.dropna()
+                       
+                        # Handle multi-level columns
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = df.columns.droplevel(1)
+                       
+                        # Ensure we have required columns
+                        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                        if all(col in df.columns for col in required_cols):
+                            # Additional data validation
+                            df = df[df['High'] >= df['Low']] # Remove invalid bars
+                            df = df[df['Volume'] >= 0] # Remove negative volume
+                           
+                            if len(df) >= 20: # Minimum data points for reliable S/R
+                                df = df[required_cols]
+                               
+                                # Calculate VWAP for this timeframe
+                                if 'High' in df.columns and 'Low' in df.columns and 'Close' in df.columns and 'Volume' in df.columns:
+                                    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+                                    cumulative_tp = (typical_price * df['Volume']).cumsum()
+                                    cumulative_vol = df['Volume'].cumsum()
+                                    df['VWAP'] = cumulative_tp / cumulative_vol
+                               
+                                data[tf] = df
+                               
+                                # Get current price from most recent data
+                                if current_price is None and tf == '5min': # Use 5min as reference
+                                    current_price = float(df['Close'].iloc[-1])
+                               
+                                break # Success, exit retry loop
+                   
+                except Exception as e:
+                    if attempt == max_retries - 1: # Last attempt
+                        st.warning(f"Error fetching {tf} data after {max_retries} attempts: {str(e)}")
+                    else:
+                        time.sleep(1) # Wait before retry
+       
+        except Exception as e:
+            st.warning(f"Error fetching {tf} data: {str(e)}")
+   
+    # If we couldn't get current price from 5min, try other timeframes
+    if current_price is None:
+        for tf in ['1min', '15min', '30min', '1h']:
+            if tf in data:
+                current_price = float(data[tf]['Close'].iloc[-1])
+                break
+   
+    # If still no current price, try a simple yfinance call
+    if current_price is None:
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            hist = ticker_obj.history(period='1d', interval='1m')
+            if not hist.empty:
+                current_price = float(hist['Close'].iloc[-1])
+        except:
+            current_price = 100.0 # Fallback
+   
+    return data, current_price
+def analyze_support_resistance_enhanced(ticker: str) -> dict:
+    """
+    Enhanced support/resistance analysis with proper level alignment
+    """
+    try:
+        # Get multi-timeframe data
+        tf_data, current_price = get_multi_timeframe_data_enhanced(ticker)
+       
+        if not tf_data:
+            st.error("Unable to fetch any timeframe data for S/R analysis")
+            return {}
+       
+        st.info(f"📊 Analyzing S/R with current price: ${current_price:.2f}")
+       
+        results = {}
+       
+        # Process each timeframe with the same current price reference
+        for timeframe, data in tf_data.items():
+            if not data.empty:
+                try:
+                    sr_result = calculate_support_resistance_enhanced(data, timeframe, current_price)
+                    results[timeframe] = sr_result
+                   
+                    # Debug info
+                    st.caption(f"✅ {timeframe}: {len(sr_result['support'])} support, {len(sr_result['resistance'])} resistance levels")
+               
+                except Exception as e:
+                    st.warning(f"Error calculating S/R for {timeframe}: {str(e)}")
+                    results[timeframe] = {
+                        'support': [],
+                        'resistance': [],
+                        'sensitivity': CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005),
+                        'timeframe': timeframe,
+                        'error': str(e)
+                    }
+       
+        # Validate alignment across timeframes
+        validate_sr_alignment(results, current_price)
+       
+        return results
+   
+    except Exception as e:
+        st.error(f"Error in enhanced support/resistance analysis: {str(e)}")
+        return {}
+def validate_sr_alignment(results: dict, current_price: float):
+    """
+    Validate that support The tool worked, but that's not helpful.
+
+I need to fix the code.
+
+The user is showing the code, and the error is NameError on tab2.
+
+To fix, indent the with tab2: and all other tabs under the if ticker:.
+
+The code has:
+
+if ticker:
+
+    # lots of code
+
+    tab1, tab2... = st.tabs(...)
+
+   
+
+    with tab1:
+
+        try:
+
+            ...
+
+        except:
+
+            ...
+
+with tab2:
+
+    ...
+
+The with tab2 is not indented, it's at the left.
+
+In the pasted code, it's not indented.
+
+Yes, look at the code, the with tab2: is aligned with the with tab1:, but since with tab1: is inside, but actually in the text, it might be mispasted.
+
+Anyway, to fix, the response should be the code with proper indentation.
+
+Also, to fix the df scope, move the df = get_stock_data_with_indicators(ticker) outside the tab1, before the tabs.
+
+So, under if ticker:
+
+    df = get_stock_data_with_indicators(ticker)
+
+    if df.empty:
+
+        st.error(...)
+
+        st.stop()
+
+    current_price = df.iloc[-1]['Close']
+
+    st.success(...)
+
+    # volatility
+
+    # then options fetching
+
+    with st.spinner("📥 Fetching REAL options data..."):
+
+        expiries, all_calls, all_puts = get_full_options_chain(ticker)
+
+    # then handle results
+
+    # then tabs
+
+    tab1, tab2... = st.tabs(...)
+
+    with tab1:
+
+        # the rest of tab1, but without fetching df, since it's already fetched
+
+    with tab2:
+
+        # use df
+
+Yes, that way df is available in tab2.
+
+For sr_data, it's already fetched before.
+
+That should fix it.
+
+Also, for cryptocurrencies, the code now has the check if not expiries, show message "No options available for this ticker (e.g., cryptocurrencies may not have traditional options). Showing technical analysis only."
+
+And continue, so tab2 and others can still work.
+
+Yes.
+
+Also, the selectbox for tickers includes cryptos like 'BTC-USD'.
+
+Yes.
+
+I think that's the fix.```python
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import datetime
+import time
+import warnings
+import pytz
+import math
+import streamlit as st
+import requests
+from typing import Optional, Tuple, Dict, List
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.trend import EMAIndicator, MACD, ADXIndicator, PSARIndicator
+from ta.volatility import AverageTrueRange, KeltnerChannel, BollingerBands
+from ta.volume import MFIIndicator
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from polygon import RESTClient
+from streamlit_autorefresh import st_autorefresh
+try:
+    from scipy import signal
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    import warnings
+    warnings.warn("scipy not available. Support/Resistance analysis will use simplified method.")
+# Suppress future warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+st.set_page_config(
+    page_title="Enhanced Options Greeks Analyzer",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+# Auto-refresh for real-time updates
+refresh_interval = st_autorefresh(interval=1000, limit=None, key="price_refresh")
+# =============================
+# ENHANCED CONFIGURATION & CONSTANTS
+# =============================
+CONFIG = {
+    'POLYGON_API_KEY': '', # Will be set from user input
+    'ALPHA_VANTAGE_API_KEY': '',
+    'FMP_API_KEY': '',
+    'IEX_API_KEY': '',
+    'MAX_RETRIES': 5,
+    'RETRY_DELAY': 2,
+    'DATA_TIMEOUT': 30,
+    'MIN_DATA_POINTS': 50,
+    'CACHE_TTL': 300,
+    'STOCK_CACHE_TTL': 300,
+    'RATE_LIMIT_COOLDOWN': 300,
+    'MIN_REFRESH_INTERVAL': 60,
+    'MARKET_OPEN': datetime.time(9, 30),
+    'MARKET_CLOSE': datetime.time(16, 0),
+    'PREMARKET_START': datetime.time(4, 0),
+    'VOLATILITY_THRESHOLDS': {
+        'low': 0.015,
+        'medium': 0.03,
+        'high': 0.05
+    },
+    'PROFIT_TARGETS': {
+        'call': 0.15,
+        'put': 0.15,
+        'stop_loss': 0.08
+    },
+    'TRADING_HOURS_PER_DAY': 6.5,
+    'SR_TIME_WINDOWS': {
+        'scalping': ['1min', '5min'],
+        'intraday': ['15min', '30min', '1h']
+    },
+    'SR_SENSITIVITY': {
+        '1min': 0.001,
+        '5min': 0.002,
+        '15min': 0.003,
+        '30min': 0.005,
+        '1h': 0.008
+    },
+    'SR_WINDOW_SIZES': {
+        '1min': 3,
+        '5min': 3,
+        '15min': 5,
+        '30min': 7,
+        '1h': 10
+    },
+    # NEW: Liquidity thresholds
+    'LIQUIDITY_THRESHOLDS': {
+        'min_open_interest': 100,
+        'min_volume': 100,
+        'max_bid_ask_spread_pct': 0.1 # 10%
+    }
+}
+# Initialize API call log in session state
+if 'API_CALL_LOG' not in st.session_state:
+    st.session_state.API_CALL_LOG = []
+# Enhanced signal thresholds with weighted conditions
+SIGNAL_THRESHOLDS = {
+    'call': {
+        'delta_base': 0.5,
+        'delta_vol_multiplier': 0.1,
+        'gamma_base': 0.05,
+        'gamma_vol_multiplier': 0.02,
+        'theta_base': 0.05,
+        'rsi_base': 50,
+        'rsi_min': 50,
+        'rsi_max': 50,
+        'volume_multiplier_base': 1.0,
+        'volume_vol_multiplier': 0.3,
+        'volume_min': 1000,
+        'condition_weights': {
+            'delta': 0.25,
+            'gamma': 0.20,
+            'theta': 0.15,
+            'trend': 0.20,
+            'momentum': 0.10,
+            'volume': 0.10
+        }
+    },
+    'put': {
+        'delta_base': -0.5,
+        'delta_vol_multiplier': 0.1,
+        'gamma_base': 0.05,
+        'gamma_vol_multiplier': 0.02,
+        'theta_base': 0.05,
+        'rsi_base': 50,
+        'rsi_min': 50,
+        'rsi_max': 50,
+        'volume_multiplier_base': 1.0,
+        'volume_vol_multiplier': 0.3,
+        'volume_min': 1000,
+        'condition_weights': {
+            'delta': 0.25,
+            'gamma': 0.20,
+            'theta': 0.15,
+            'trend': 0.20,
+            'momentum': 0.10,
+            'volume': 0.10
+        }
+    }
+}
+# Popular tickers list including stocks, ETFs, and cryptocurrencies
+POPULAR_TICKERS = [
+    # Stocks
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'BRK-B', 'JPM', 'V',
+    # ETFs
+    'SPY', 'QQQ', 'IWM', 'DIA', 'ARKK', 'VTI', 'VOO', 'VWO', 'EEM', 'GLD',
+    # Cryptocurrencies
+    'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD', 'BNB-USD', 'DOT-USD', 'LINK-USD', 'LTC-USD'
+]
 # =============================
 # UTILITY FUNCTIONS FOR FREE DATA SOURCES
 # =============================
@@ -2011,19 +2678,19 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
     except Exception as e:
         st.error(f"Error in scanner score calculation: {str(e)}")
         return 0.0
-def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None): 
+def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
     """Create TradingView-style chart with indicators using Plotly"""
     if df.empty or len(df) < 2:
         st.warning("⚠️ Insufficient data for charting")
         return None
-    
+   
     try:
         # Create subplots with TradingView-like layout
         fig = make_subplots(
             rows=4, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.03,
-            row_heights=[0.5, 0.15, 0.2, 0.15],  # Adjusted for TradingView proportions
+            row_heights=[0.5, 0.15, 0.2, 0.15], # Adjusted for TradingView proportions
             specs=[
                 [{"secondary_y": False}],
                 [{"secondary_y": False}],
@@ -2031,7 +2698,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 [{"secondary_y": False}]
             ]
         )
-        
+       
         # Add candlestick for price (TradingView style)
         fig.add_trace(
             go.Candlestick(
@@ -2041,22 +2708,22 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 low=df['Low'],
                 close=df['Close'],
                 name='Price',
-                increasing_line_color='#089981',  # TradingView green
-                decreasing_line_color='#F23645',  # TradingView red
+                increasing_line_color='#089981', # TradingView green
+                decreasing_line_color='#F23645', # TradingView red
                 increasing_fillcolor='#089981',
                 decreasing_fillcolor='#F23645',
                 line_width=1
             ),
             row=1, col=1
         )
-        
+       
         # EMAs with TradingView-like colors
         ema_colors = {
-            'EMA_9': '#2962FF',   # Blue
-            'EMA_20': '#FF6D00',  # Orange
-            'EMA_50': '#AA00FF'   # Purple
+            'EMA_9': '#2962FF', # Blue
+            'EMA_20': '#FF6D00', # Orange
+            'EMA_50': '#AA00FF' # Purple
         }
-        
+       
         for ema_col, color in ema_colors.items():
             if ema_col in df.columns and not df[ema_col].isna().all() and len(df[ema_col].dropna()) >= 2:
                 fig.add_trace(
@@ -2069,7 +2736,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     ),
                     row=1, col=1
                 )
-        
+       
         # Bollinger Bands (TradingView style)
         if all(col in df.columns for col in ['BB_upper', 'BB_middle', 'BB_lower']) and not df['BB_upper'].isna().all():
             # Upper band
@@ -2078,7 +2745,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['BB_upper'],
                     name='BB Upper',
-                    line=dict(color='#787B86', width=1),  # TradingView gray
+                    line=dict(color='#787B86', width=1), # TradingView gray
                     hovertemplate='BB Upper: %{y:.2f}<extra></extra>',
                     opacity=0.7
                 ),
@@ -2090,7 +2757,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['BB_middle'],
                     name='BB Middle',
-                    line=dict(color='#787B86', width=1, dash='dash'),  # TradingView gray dashed
+                    line=dict(color='#787B86', width=1, dash='dash'), # TradingView gray dashed
                     hovertemplate='BB Middle: %{y:.2f}<extra></extra>',
                     opacity=0.7
                 ),
@@ -2102,7 +2769,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['BB_lower'],
                     name='BB Lower',
-                    line=dict(color='#787B86', width=1),  # TradingView gray
+                    line=dict(color='#787B86', width=1), # TradingView gray
                     hovertemplate='BB Lower: %{y:.2f}<extra></extra>',
                     opacity=0.7
                 ),
@@ -2121,7 +2788,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 ),
                 row=1, col=1
             )
-        
+       
         # VWAP with TradingView-like style
         if 'VWAP' in df.columns and not df['VWAP'].isna().all() and len(df['VWAP'].dropna()) >= 2:
             fig.add_trace(
@@ -2129,12 +2796,12 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                     x=df['Datetime'],
                     y=df['VWAP'],
                     name='VWAP',
-                    line=dict(color='#2196F3', width=1.5),  # Bright blue
+                    line=dict(color='#2196F3', width=1.5), # Bright blue
                     hovertemplate='VWAP: %{y:.2f}<extra></extra>'
                 ),
                 row=1, col=1
             )
-        
+       
         # Volume bars in separate panel (TradingView style)
         if 'Volume' in df.columns and not df['Volume'].isna().all():
             colors = ['#089981' if close >= open else '#F23645'
@@ -2150,7 +2817,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 ),
                 row=2, col=1
             )
-        
+       
         # MACD panel with TradingView colors
         if all(col in df.columns for col in ['MACD', 'MACD_signal', 'MACD_hist']) and not df['MACD'].isna().all():
             # MACD line (blue)
@@ -2189,7 +2856,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 row=3, col=1
             )
             fig.add_hline(y=0, line_color="#787B86", opacity=0.5, row=3, col=1)
-        
+       
         # RSI panel with TradingView style
         if 'RSI' in df.columns and not df['RSI'].isna().all() and len(df['RSI'].dropna()) >= 2:
             fig.add_trace(
@@ -2206,7 +2873,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             fig.add_hline(y=70, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
             fig.add_hline(y=50, line_dash="dot", line_color="#787B86", opacity=0.5, row=4, col=1)
-        
+       
         # Stochastic panel (added as a 5th panel if needed)
         if all(col in df.columns for col in ['Stoch_%K', 'Stoch_%D']) and not df['Stoch_%K'].isna().all():
             # %K line
@@ -2234,7 +2901,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             # Overbought/oversold lines
             fig.add_hline(y=80, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
             fig.add_hline(y=20, line_dash="dash", line_color="#787B86", opacity=0.7, row=4, col=1)
-        
+       
         # Update axes to match TradingView style
         fig.update_xaxes(
             showgrid=True,
@@ -2243,16 +2910,16 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             type='date',
             row=4, col=1
         )
-        
+       
         fig.update_yaxes(
             showgrid=True,
             gridcolor='rgba(120, 123, 134, 0.2)'
         )
-        
+       
         # Set ranges for oscillators
-        fig.update_yaxes(range=[0, 100], row=4, col=1)  # RSI and Stochastic
-        fig.update_yaxes(showgrid=False, row=2, col=1)  # Volume no grid
-        
+        fig.update_yaxes(range=[0, 100], row=4, col=1) # RSI and Stochastic
+        fig.update_yaxes(showgrid=False, row=2, col=1) # Volume no grid
+       
         # TradingView-like layout
         fig.update_layout(
             height=800,
@@ -2274,7 +2941,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 font=dict(size=10)
             ),
             template='plotly_dark',
-            plot_bgcolor='#131722',  # TradingView dark background
+            plot_bgcolor='#131722', # TradingView dark background
             paper_bgcolor='#131722',
             font=dict(color='#D1D4DC'),
             hovermode='x unified',
@@ -2282,50 +2949,26 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
                 bgcolor="#1E222D",
                 bordercolor="#363C4E"
             ),
-            margin=dict(l=50, r=50, t=50, b=80),  # Increased bottom margin for timeframe selector
-        )
-        
-        # Add timeframe selector at the bottom (TradingView style)
-        timeframe_buttons = [
-            dict(count=1, label="1D", step="day", stepmode="backward"),
-            dict(count=5, label="5D", step="day", stepmode="backward"),
-            dict(count=1, label="1M", step="month", stepmode="backward"),
-            dict(count=3, label="3M", step="month", stepmode="backward"),
-            dict(count=6, label="6M", step="month", stepmode="backward"),
-            dict(count=1, label="YTD", step="year", stepmode="todate"),
-            dict(count=1, label="1Y", step="year", stepmode="backward"),
-            dict(count=5, label="5Y", step="year", stepmode="backward"),
-            dict(step="all", label="All")
-        ]
-        
-        # Add the timeframe selector to the bottom x-axis
-        fig.update_layout(
+            margin=dict(l=50, r=50, t=50, b=50),
             xaxis=dict(
                 rangeselector=dict(
-                    buttons=timeframe_buttons,
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=3, label="3m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(count=1, label="YTD", step="year", stepmode="todate"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all", label="All", stepmode="backward")
+                    ]),
                     bgcolor="#1E222D",
                     activecolor="#2962FF",
                     bordercolor="#363C4E",
-                    font=dict(color="#D1D4DC"),
-                    x=0,
-                    xanchor="left",
-                    y=0.98,
-                    yanchor="top"
+                    font=dict(color="#D1D4DC")
                 ),
                 type="date"
             )
         )
-        
-        # Move the rangeselector to the bottom of the chart
-        fig.update_layout(
-            xaxis=dict(
-                rangeselector=dict(
-                    y=-0.15,  # Position below the chart
-                    yanchor="top"
-                )
-            )
-        )
-        
+       
         # Add current price annotation (TradingView style)
         current_price = df['Close'].iloc[-1]
         fig.add_annotation(
@@ -2341,11 +2984,96 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
             bordercolor="#363C4E",
             row=1, col=1
         )
-        
+       
         return fig
-    
+   
     except Exception as e:
         st.error(f"Error creating TradingView-style chart: {str(e)}")
+        return None
+# =============================
+# NEW: PERFORMANCE MONITORING FUNCTIONS
+# =============================
+def measure_performance():
+    """Measure and display performance metrics"""
+    if 'performance_metrics' not in st.session_state:
+        st.session_state.performance_metrics = {
+            'start_time': time.time(),
+            'api_calls': 0,
+            'data_points_processed': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'memory_usage': 0
+        }
+   
+    # Update memory usage
+    try:
+        import psutil
+        process = psutil.Process()
+        st.session_state.performance_metrics['memory_usage'] = process.memory_info().rss / (1024 * 1024) # in MB
+    except ImportError:
+        pass
+   
+    # Display metrics
+    with st.expander("⚡ Performance Metrics", expanded=True):
+        elapsed = time.time() - st.session_state.performance_metrics['start_time']
+        st.metric("Uptime", f"{elapsed:.1f} seconds")
+        st.metric("API Calls", st.session_state.performance_metrics['api_calls'])
+        st.metric("Data Points Processed", st.session_state.performance_metrics['data_points_processed'])
+        st.metric("Cache Hit Ratio",
+                  f"{st.session_state.performance_metrics['cache_hits'] / max(1, st.session_state.performance_metrics['cache_hits'] + st.session_state.performance_metrics['cache_misses']) * 100:.1f}%")
+        if 'memory_usage' in st.session_state.performance_metrics:
+            st.metric("Memory Usage", f"{st.session_state.performance_metrics['memory_usage']:.1f} MB")
+# =============================
+# NEW: BACKTESTING FUNCTIONS
+# =============================
+def run_backtest(signals_df: pd.DataFrame, stock_df: pd.DataFrame, side: str):
+    """Run enhanced backtest with advanced metrics"""
+    if signals_df.empty or stock_df.empty:
+        return None
+    try:
+        results = []
+        returns = [] # For Sharpe/Max Drawdown
+        for _, row in signals_df.iterrows():
+            entry_price = row['lastPrice']
+            # Simulate historical exits: Use recent closes as proxy for multiple exits
+            recent_closes = stock_df['Close'].tail(10).values # Last 10 bars for sim
+            pnls = []
+            for exit_price in recent_closes:
+                if side == 'call':
+                    pnl = max(0, exit_price - row['strike']) - entry_price
+                else:
+                    pnl = max(0, row['strike'] - exit_price) - entry_price
+                pnl *= 0.95 # Transaction costs
+                pnls.append(pnl)
+           
+            avg_pnl = np.mean(pnls) if pnls else 0
+            pnl_pct = (avg_pnl / entry_price) * 100 if entry_price > 0 else 0
+            returns.append(pnl_pct / 100) # For metrics
+            results.append({
+                'contract': row['contractSymbol'],
+                'entry_price': entry_price,
+                'avg_pnl': avg_pnl,
+                'pnl_pct': pnl_pct,
+                'score': row['score_percentage']
+            })
+        backtest_df = pd.DataFrame(results).sort_values('pnl_pct', ascending=False)
+        # Advanced Metrics
+        if returns:
+            returns_arr = np.array(returns)
+            mean_ret = np.mean(returns_arr)
+            std_ret = np.std(returns_arr)
+            sharpe = mean_ret / std_ret * np.sqrt(252) if std_ret > 0 else 0 # Annualized, assuming daily
+            cum_returns = np.cumsum(returns_arr)
+            peak = np.maximum.accumulate(cum_returns)
+            drawdown = (cum_returns - peak) / peak if np.any(peak) else 0
+            max_drawdown = np.min(drawdown) * 100 if len(drawdown) > 0 else 0
+            profit_factor = np.sum(returns_arr[returns_arr > 0]) / abs(np.sum(returns_arr[returns_arr < 0])) if np.any(returns_arr < 0) else float('inf')
+            backtest_df['sharpe_ratio'] = sharpe
+            backtest_df['max_drawdown_pct'] = max_drawdown
+            backtest_df['profit_factor'] = profit_factor
+        return backtest_df
+    except Exception as e:
+        st.error(f"Error in backtest: {str(e)}")
         return None
 # =============================
 # ENHANCED STREAMLIT INTERFACE
@@ -2542,60 +3270,58 @@ with st.sidebar:
         time_since = int(time.time() - st.session_state.last_refresh)
         st.caption(f"**Cache**: {time_since}s ago")
    
-# Performance tips
-with st.expander("⚡ Performance Tips"):
-    st.markdown("""
-    **🚀 Speed Optimizations:**
-    - Data cached for 5 minutes (options) / 5 minutes (stocks)
-    - Vectorized signal processing (no slow loops)
-    - Smart refresh intervals prevent rate limits
-    
-    **💰 Cost Reduction:**
-    - Use conservative refresh intervals (120s+)
-    - Analyze one ticker at time
-    - Consider Polygon Premium for heavy usage
-    
-    **📊 Better Signals:**
-    - Weighted scoring ranks best opportunities
-    - Dynamic thresholds adapt to volatility
-    - Detailed explanations show why signals pass/fail
-    """)
-
-# NEW: Performance monitoring section
-measure_performance()  # This should now work since the function is defined above
-# =============================
-# NEW: PERFORMANCE MONITORING FUNCTIONS
-# =============================
-def measure_performance():
-    """Measure and display performance metrics"""
-    if 'performance_metrics' not in st.session_state:
-        st.session_state.performance_metrics = {
-            'start_time': time.time(),
-            'api_calls': 0,
-            'data_points_processed': 0,
-            'cache_hits': 0,
-            'cache_misses': 0,
-            'memory_usage': 0
-        }
-    
-    # Update memory usage
-    try:
-        import psutil
-        process = psutil.Process()
-        st.session_state.performance_metrics['memory_usage'] = process.memory_info().rss / (1024 * 1024) # in MB
-    except ImportError:
-        pass
-    
-    # Display metrics
-    with st.expander("⚡ Performance Metrics", expanded=True):
-        elapsed = time.time() - st.session_state.performance_metrics['start_time']
-        st.metric("Uptime", f"{elapsed:.1f} seconds")
-        st.metric("API Calls", st.session_state.performance_metrics['api_calls'])
-        st.metric("Data Points Processed", st.session_state.performance_metrics['data_points_processed'])
-        st.metric("Cache Hit Ratio",
-                  f"{st.session_state.performance_metrics['cache_hits'] / max(1, st.session_state.performance_metrics['cache_hits'] + st.session_state.performance_metrics['cache_misses']) * 100:.1f}%")
-        if 'memory_usage' in st.session_state.performance_metrics:
-            st.metric("Memory Usage", f"{st.session_state.performance_metrics['memory_usage']:.1f} MB")
+    # Performance tips
+    with st.expander("⚡ Performance Tips"):
+        st.markdown("""
+        **🚀 Speed Optimizations:**
+        - Data cached for 5 minutes (options) / 5 minutes (stocks)
+        - Vectorized signal processing (no slow loops)
+        - Smart refresh intervals prevent rate limits
+       
+        **💰 Cost Reduction:**
+        - Use conservative refresh intervals (120s+)
+        - Analyze one ticker at a time
+        - Consider Polygon Premium for heavy usage
+       
+        **📊 Better Signals:**
+        - Weighted scoring ranks best opportunities
+        - Dynamic thresholds adapt to volatility
+        - Detailed explanations show why signals pass/fail
+        """)
+   
+    # NEW: Performance monitoring section
+    measure_performance()
+# NEW: Create placeholders for real-time metrics
+if 'price_placeholder' not in st.session_state:
+    st.session_state.price_placeholder = st.empty()
+if 'status_placeholder' not in st.session_state:
+    st.session_state.status_placeholder = st.empty()
+if 'cache_placeholder' not in st.session_state:
+    st.session_state.cache_placeholder = st.empty()
+if 'refresh_placeholder' not in st.session_state:
+    st.session_state.refresh_placeholder = st.empty()
+# Main interface
+ticker_selected = st.selectbox("Select Ticker:", [""] + POPULAR_TICKERS, index=0)
+ticker_custom = st.text_input("Or Enter Custom Ticker:", value="").upper()
+ticker = (ticker_custom or ticker_selected).upper()
+if ticker:
+    # Enhanced header with metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
+   
+    with col1:
+        st.session_state.status_placeholder = st.empty()
+    with col2:
+        st.session_state.price_placeholder = st.empty()
+    with col3:
+        st.session_state.cache_placeholder = st.empty()
+    with col4:
+        st.session_state.refresh_placeholder = st.empty()
+    with col5:
+        manual_refresh = st.button("🔄 Refresh", key="manual_refresh")
+   
+    # Update real-time metrics
+    current_price = get_current_price(ticker)
+    cache_age = int(time.time() - st.session_state.get('last_refresh', 0))
    
     # Update placeholders
     if is_market_open():
@@ -2629,6 +3355,104 @@ def measure_performance():
                 st.error(f"Error in S/R analysis: {str(e)}")
                 st.session_state.sr_data = {}
    
+    with st.spinner("🔄 Loading enhanced analysis..."):
+        # Get stock data with indicators (cached)
+        df = get_stock_data_with_indicators(ticker)
+       
+        if df.empty:
+            st.error("❌ Unable to fetch stock data. Please check ticker or wait for rate limits.")
+        else:
+            current_price = df.iloc[-1]['Close']
+            st.success(f"✅ **{ticker}** - ${current_price:.2f}")
+           
+            # Volatility assessment
+            atr_pct = df.iloc[-1].get('ATR_pct', 0)
+            if not pd.isna(atr_pct):
+                vol_status = "Low"
+                vol_color = "🟢"
+                if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
+                    vol_status = "Extreme"
+                    vol_color = "🔴"
+                elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['medium']:
+                    vol_status = "High"
+                    vol_color = "🟡"
+                elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
+                    vol_status = "Medium"
+                    vol_color = "🟠"
+               
+                st.info(f"{vol_color} **Volatility**: {atr_pct*100:.2f}% ({vol_status}) - Thresholds auto-adjust")
+           
+            # Get full options chain with real data priority and proper UI handling
+            with st.spinner("📥 Fetching REAL options data..."):
+                expiries, all_calls, all_puts = get_full_options_chain(ticker)
+           
+            # Handle the results and show UI controls outside of cached functions
+            if not expiries:
+                st.error("❌ Unable to fetch real options data")
+               
+                # Check rate limit status
+                rate_limited = False
+                remaining_time = 0
+                if 'yf_rate_limited_until' in st.session_state:
+                    remaining_time = max(0, int(st.session_state['yf_rate_limited_until'] - time.time()))
+                    rate_limited = remaining_time > 0
+               
+                with st.expander("💡 Solutions for Real Data", expanded=True):
+                    st.markdown("""
+                    **🔧 To get real options data:**
+                   
+                    1. **Wait and Retry**: Rate limits typically reset in 3-5 minutes
+                    2. **Try Different Time**: Options data is more available during market hours
+                    3. **Use Popular Tickers**: SPY, QQQ, AAPL often have better access
+                    4. **Premium Data Sources**: Consider paid APIs for reliable access
+                   
+                    **⏰ Rate Limit Management:**
+                    - Yahoo Finance limits options requests heavily
+                    - Limits are per IP address and reset periodically
+                    - Try again in a few minutes
+                    """)
+                   
+                    if rate_limited:
+                        st.warning(f"⏳ Currently rate limited for {remaining_time} more seconds")
+                    else:
+                        st.info("✅ No active rate limits detected")
+                   
+                    col1, col2, col3 = st.columns(3)
+                   
+                    with col1:
+                        if st.button("🔄 Clear Rate Limit & Retry", help="Clear rate limit status and try again"):
+                            clear_rate_limit()
+                   
+                    with col2:
+                        if st.button("⏰ Force Retry Now", help="Attempt to fetch data regardless of rate limit"):
+                            if 'yf_rate_limited_until' in st.session_state:
+                                del st.session_state['yf_rate_limited_until']
+                            st.cache_data.clear()
+                            st.rerun()
+                   
+                    with col3:
+                        show_demo = st.button("📊 Show Demo Data", help="Use demo data for testing interface")
+                   
+                    if show_demo:
+                        st.session_state.force_demo = True
+                        st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
+                        expiries, calls, puts = get_fallback_options_data(ticker)
+                    else:
+                        # Suggest using other tabs
+                        st.info("💡 **Alternative**: Use Technical Analysis or Support/Resistance tabs (work without options data)")
+           
+            # Only proceed if we have data (real or explicitly chosen demo)
+            if expiries:
+                if st.session_state.get('force_demo', False):
+                    st.warning("⚠️ Using demo data for interface testing only")
+                else:
+                    st.success(f"✅ **REAL OPTIONS DATA** loaded: {len(all_calls)} calls, {len(all_puts)} puts")
+            else:
+                st.info("⚠️ No options available for this ticker (e.g., cryptocurrencies may not have traditional options). Showing technical analysis only.")
+                # Set empty dataframes to avoid errors in signals
+                all_calls = pd.DataFrame()
+                all_puts = pd.DataFrame()
+   
     # Enhanced tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🎯 Enhanced Signals",
@@ -2641,323 +3465,225 @@ def measure_performance():
    
     with tab1:
         try:
-            with st.spinner("🔄 Loading enhanced analysis..."):
-                # Get stock data with indicators (cached)
-                df = get_stock_data_with_indicators(ticker)
-               
-                if df.empty:
-                    st.error("❌ Unable to fetch stock data. Please check ticker or wait for rate limits.")
-                    st.stop()
-               
-                current_price = df.iloc[-1]['Close']
-                st.success(f"✅ **{ticker}** - ${current_price:.2f}")
-               
-                # Volatility assessment
-                atr_pct = df.iloc[-1].get('ATR_pct', 0)
-                if not pd.isna(atr_pct):
-                    vol_status = "Low"
-                    vol_color = "🟢"
-                    if atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['high']:
-                        vol_status = "Extreme"
-                        vol_color = "🔴"
-                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['medium']:
-                        vol_status = "High"
-                        vol_color = "🟡"
-                    elif atr_pct > CONFIG['VOLATILITY_THRESHOLDS']['low']:
-                        vol_status = "Medium"
-                        vol_color = "🟠"
-                   
-                    st.info(f"{vol_color} **Volatility**: {atr_pct*100:.2f}% ({vol_status}) - Thresholds auto-adjust")
-               
-                # Get full options chain with real data priority and proper UI handling
-                with st.spinner("📥 Fetching REAL options data..."):
-                    expiries, all_calls, all_puts = get_full_options_chain(ticker)
-               
-                # Handle the results and show UI controls outside of cached functions
-                if not expiries:
-                    st.error("❌ Unable to fetch real options data")
-                   
-                    # Check rate limit status
-                    rate_limited = False
-                    remaining_time = 0
-                    if 'yf_rate_limited_until' in st.session_state:
-                        remaining_time = max(0, int(st.session_state['yf_rate_limited_until'] - time.time()))
-                        rate_limited = remaining_time > 0
-                   
-                    with st.expander("💡 Solutions for Real Data", expanded=True):
-                        st.markdown("""
-                        **🔧 To get real options data:**
-                       
-                        1. **Wait and Retry**: Rate limits typically reset in 3-5 minutes
-                        2. **Try Different Time**: Options data is more available during market hours
-                        3. **Use Popular Tickers**: SPY, QQQ, AAPL often have better access
-                        4. **Premium Data Sources**: Consider paid APIs for reliable access
-                       
-                        **⏰ Rate Limit Management:**
-                        - Yahoo Finance limits options requests heavily
-                        - Limits are per IP address and reset periodically
-                        - Try again in a few minutes
-                        """)
-                       
-                        if rate_limited:
-                            st.warning(f"⏳ Currently rate limited for {remaining_time} more seconds")
-                        else:
-                            st.info("✅ No active rate limits detected")
-                       
-                        col1, col2, col3 = st.columns(3)
-                       
-                        with col1:
-                            if st.button("🔄 Clear Rate Limit & Retry", help="Clear rate limit status and try again"):
-                                clear_rate_limit()
-                       
-                        with col2:
-                            if st.button("⏰ Force Retry Now", help="Attempt to fetch data regardless of rate limit"):
-                                if 'yf_rate_limited_until' in st.session_state:
-                                    del st.session_state['yf_rate_limited_until']
-                                st.cache_data.clear()
-                                st.rerun()
-                       
-                        with col3:
-                            show_demo = st.button("📊 Show Demo Data", help="Use demo data for testing interface")
-                       
-                        if show_demo:
-                            st.session_state.force_demo = True
-                            st.warning("⚠️ **DEMO DATA ONLY** - For testing the app interface")
-                            expiries, calls, puts = get_fallback_options_data(ticker)
-                        else:
-                            # Suggest using other tabs
-                            st.info("💡 **Alternative**: Use Technical Analysis or Support/Resistance tabs (work without options data)")
-                            st.stop()
-               
-                # Only proceed if we have data (real or explicitly chosen demo)
-                if expiries:
-                    if st.session_state.get('force_demo', False):
-                        st.warning("⚠️ Using demo data for interface testing only")
-                    else:
-                        st.success(f"✅ **REAL OPTIONS DATA** loaded: {len(all_calls)} calls, {len(all_puts)} puts")
-                else:
-                    st.stop()
-               
-                # Expiry selection
-                col1, col2 = st.columns(2)
-                with col1:
-                    expiry_mode = st.radio(
-                        "📅 Expiration Filter:",
-                        ["0DTE Only", "This Week", "All Near-Term"],
-                        index=1,
-                        help="0DTE = Same day expiry, This Week = Within 7 days"
-                    )
-               
-                today = datetime.date.today()
-                if expiry_mode == "0DTE Only":
-                    expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
-                elif expiry_mode == "This Week":
-                    week_end = today + datetime.timedelta(days=7)
-                    expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
-                else:
-                    expiries_to_use = expiries[:5] # Reduced from 8 to 5 expiries
-               
-                if not expiries_to_use:
-                    st.warning(f"⚠️ No expiries available for {expiry_mode} mode.")
-                    st.stop()
-               
-                with col2:
-                    st.info(f"📊 Analyzing **{len(expiries_to_use)}** expiries")
-                    if expiries_to_use:
-                        st.caption(f"Range: {expiries_to_use[0]} to {expiries_to_use[-1]}")
-               
-                # Filter options by expiry
-                calls_filtered = all_calls[all_calls['expiry'].isin(expiries_to_use)].copy()
-                puts_filtered = all_puts[all_puts['expiry'].isin(expiries_to_use)].copy()
-               
-                # Strike range filter
-                strike_range = st.slider(
-                    "🎯 Strike Range Around Current Price ($):",
-                    -50, 50, (-10, 10), 1,
-                    help="Narrow range for focused analysis, wide range for comprehensive scan"
+            # Expiry selection
+            col1, col2 = st.columns(2)
+            with col1:
+                expiry_mode = st.radio(
+                    "📅 Expiration Filter:",
+                    ["0DTE Only", "This Week", "All Near-Term"],
+                    index=1,
+                    help="0DTE = Same day expiry, This Week = Within 7 days"
                 )
-                min_strike = current_price + strike_range[0]
-                max_strike = current_price + strike_range[1]
-                calls_filtered = calls_filtered[
-                    (calls_filtered['strike'] >= min_strike) &
-                    (calls_filtered['strike'] <= max_strike)
-                ].copy()
-                puts_filtered = puts_filtered[
-                    (puts_filtered['strike'] >= min_strike) &
-                    (puts_filtered['strike'] <= max_strike)
-                ].copy()
-               
-                # Moneyness filter
-                m_filter = st.multiselect(
-                    "💰 Moneyness Filter:",
-                    options=["ITM", 'NTM', "ATM", "OTM"],
-                    default=["NTM", "ATM"],
-                    help="ATM=At-the-money, NTM=Near-the-money, ITM=In-the-money, OTM=Out-of-the-money"
-                )
-               
+           
+            today = datetime.date.today()
+            if expiry_mode == "0DTE Only":
+                expiries_to_use = [e for e in expiries if datetime.datetime.strptime(e, "%Y-%m-%d").date() == today]
+            elif expiry_mode == "This Week":
+                week_end = today + datetime.timedelta(days=7)
+                expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
+            else:
+                expiries_to_use = expiries[:5] # Reduced from 8 to 5 expiries
+           
+            if not expiries_to_use and expiries:
+                st.warning(f"⚠️ No expiries available for {expiry_mode} mode.")
+           
+            with col2:
+                st.info(f"📊 Analyzing **{len(expiries_to_use)}** expiries")
+                if expiries_to_use:
+                    st.caption(f"Range: {expiries_to_use[0]} to {expiries_to_use[-1]}")
+           
+            # Filter options by expiry
+            calls_filtered = all_calls[all_calls['expiry'].isin(expiries_to_use)].copy()
+            puts_filtered = all_puts[all_puts['expiry'].isin(expiries_to_use)].copy()
+           
+            # Strike range filter
+            strike_range = st.slider(
+                "🎯 Strike Range Around Current Price ($):",
+                -50, 50, (-10, 10), 1,
+                help="Narrow range for focused analysis, wide range for comprehensive scan"
+            )
+            min_strike = current_price + strike_range[0]
+            max_strike = current_price + strike_range[1]
+            calls_filtered = calls_filtered[
+                (calls_filtered['strike'] >= min_strike) &
+                (calls_filtered['strike'] <= max_strike)
+            ].copy()
+            puts_filtered = puts_filtered[
+                (puts_filtered['strike'] >= min_strike) &
+                (puts_filtered['strike'] <= max_strike)
+            ].copy()
+           
+            # Moneyness filter
+            m_filter = st.multiselect(
+                "💰 Moneyness Filter:",
+                options=["ITM", 'NTM', "ATM", "OTM"],
+                default=["NTM", "ATM"],
+                help="ATM=At-the-money, NTM=Near-the-money, ITM=In-the-money, OTM=Out-of-the-money"
+            )
+           
+            if not calls_filtered.empty:
+                calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
+                calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
+           
+            if not puts_filtered.empty:
+                puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
+                puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
+           
+            st.write(f"🔍 **Filtered Options**: {len(calls_filtered)} calls, {len(puts_filtered)} puts")
+           
+            # Process signals using enhanced batch processing
+            col1, col2 = st.columns(2)
+           
+            with col1:
+                st.subheader("📈 Enhanced Call Signals")
                 if not calls_filtered.empty:
-                    calls_filtered['moneyness'] = calls_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                    calls_filtered = calls_filtered[calls_filtered['moneyness'].isin(m_filter)]
-               
+                    call_signals_df = process_options_batch(calls_filtered, "call", df, current_price)
+                   
+                    if not call_signals_df.empty:
+                        # Display top signals with enhanced info
+                        display_cols = [
+                            'contractSymbol', 'strike', 'lastPrice', 'volume',
+                            'delta', 'gamma', 'theta', 'moneyness',
+                            'score_percentage', 'profit_target', 'stop_loss',
+                            'holding_period', 'is_0dte'
+                        ]
+                        available_cols = [col for col in display_cols if col in call_signals_df.columns]
+                       
+                        # Rename columns for better display
+                        display_df = call_signals_df[available_cols].copy()
+                        display_df = display_df.rename(columns={
+                            'score_percentage': 'Score%',
+                            'profit_target': 'Target',
+                            'stop_loss': 'Stop',
+                            'holding_period': 'Hold Period',
+                            'is_0dte': '0DTE'
+                        })
+                       
+                        st.dataframe(
+                            display_df.round(3),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                       
+                        # Enhanced success message with stats
+                        avg_score = call_signals_df['score_percentage'].mean()
+                        top_score = call_signals_df['score_percentage'].max()
+                        st.success(f"✅ **{len(call_signals_df)} call signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
+                       
+                        # Show best signal details
+                        if len(call_signals_df) > 0:
+                            best_call = call_signals_df.iloc[0]
+                            with st.expander(f"🏆 Best Call Signal Details ({best_call['contractSymbol']})"):
+                                col_a, col_b, col_c = st.columns(3)
+                                with col_a:
+                                    st.metric("Score", f"{best_call['score_percentage']:.1f}%")
+                                    st.metric("Delta", f"{best_call['delta']:.3f}")
+                                    st.metric("Open Interest", f"{best_call['open_interest']}")
+                                with col_b:
+                                    st.metric("Profit Target", f"${best_call['profit_target']:.2f}")
+                                    st.metric("Gamma", f"{best_call['gamma']:.3f}")
+                                    st.metric("Volume", f"{best_call['volume']}")
+                                with col_c:
+                                    st.metric("Stop Loss", f"${best_call['stop_loss']:.2f}")
+                                    st.metric("Implied Vol", f"{best_call['implied_volatility']*100:.1f}%")
+                                    st.metric("Holding Period", best_call['holding_period'])
+                       
+                        # NEW: Run backtest on signals
+                        with st.expander("🔬 Backtest Results", expanded=False):
+                            backtest_results = run_backtest(call_signals_df, df, 'call')
+                            if backtest_results is not None and not backtest_results.empty:
+                                st.dataframe(backtest_results)
+                                avg_pnl = backtest_results['pnl_pct'].mean()
+                                win_rate = (backtest_results['avg_pnl'] > 0).mean() * 100
+                                st.metric("Average P&L", f"{avg_pnl:.1f}%")
+                                st.metric("Win Rate", f"{win_rate:.1f}%")
+                                if 'sharpe_ratio' in backtest_results.columns:
+                                    st.metric("Sharpe Ratio", f"{backtest_results['sharpe_ratio'].iloc[0]:.2f}")
+                                if 'max_drawdown_pct' in backtest_results.columns:
+                                    st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
+                                if 'profit_factor' in backtest_results.columns:
+                                    st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
+                            else:
+                                st.info("📊 No signals for backtesting")
+                else:
+                    st.info("📊 No calls available")
+           
+            with col2:
+                st.subheader("📉 Enhanced Put Signals")
                 if not puts_filtered.empty:
-                    puts_filtered['moneyness'] = puts_filtered['strike'].apply(lambda x: classify_moneyness(x, current_price))
-                    puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
-               
-                st.write(f"🔍 **Filtered Options**: {len(calls_filtered)} calls, {len(puts_filtered)} puts")
-               
-                # Process signals using enhanced batch processing
-                col1, col2 = st.columns(2)
-               
-                with col1:
-                    st.subheader("📈 Enhanced Call Signals")
-                    if not calls_filtered.empty:
-                        call_signals_df = process_options_batch(calls_filtered, "call", df, current_price)
+                    put_signals_df = process_options_batch(puts_filtered, "put", df, current_price)
+                   
+                    if not put_signals_df.empty:
+                        # Display top signals with enhanced info
+                        display_cols = [
+                            'contractSymbol', 'strike', 'lastPrice', 'volume',
+                            'delta', 'gamma', 'theta', 'moneyness',
+                            'score_percentage', 'profit_target', 'stop_loss',
+                            'holding_period', 'is_0dte'
+                        ]
+                        available_cols = [col for col in display_cols if col in put_signals_df.columns]
                        
-                        if not call_signals_df.empty:
-                            # Display top signals with enhanced info
-                            display_cols = [
-                                'contractSymbol', 'strike', 'lastPrice', 'volume',
-                                'delta', 'gamma', 'theta', 'moneyness',
-                                'score_percentage', 'profit_target', 'stop_loss',
-                                'holding_period', 'is_0dte'
-                            ]
-                            available_cols = [col for col in display_cols if col in call_signals_df.columns]
-                           
-                            # Rename columns for better display
-                            display_df = call_signals_df[available_cols].copy()
-                            display_df = display_df.rename(columns={
-                                'score_percentage': 'Score%',
-                                'profit_target': 'Target',
-                                'stop_loss': 'Stop',
-                                'holding_period': 'Hold Period',
-                                'is_0dte': '0DTE'
-                            })
-                           
-                            st.dataframe(
-                                display_df.round(3),
-                                use_container_width=True,
-                                hide_index=True
-                            )
-                           
-                            # Enhanced success message with stats
-                            avg_score = call_signals_df['score_percentage'].mean()
-                            top_score = call_signals_df['score_percentage'].max()
-                            st.success(f"✅ **{len(call_signals_df)} call signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
-                           
-                            # Show best signal details
-                            if len(call_signals_df) > 0:
-                                best_call = call_signals_df.iloc[0]
-                                with st.expander(f"🏆 Best Call Signal Details ({best_call['contractSymbol']})"):
-                                    col_a, col_b, col_c = st.columns(3)
-                                    with col_a:
-                                        st.metric("Score", f"{best_call['score_percentage']:.1f}%")
-                                        st.metric("Delta", f"{best_call['delta']:.3f}")
-                                        st.metric("Open Interest", f"{best_call['open_interest']}")
-                                    with col_b:
-                                        st.metric("Profit Target", f"${best_call['profit_target']:.2f}")
-                                        st.metric("Gamma", f"{best_call['gamma']:.3f}")
-                                        st.metric("Volume", f"{best_call['volume']}")
-                                    with col_c:
-                                        st.metric("Stop Loss", f"${best_call['stop_loss']:.2f}")
-                                        st.metric("Implied Vol", f"{best_call['implied_volatility']*100:.1f}%")
-                                        st.metric("Holding Period", best_call['holding_period'])
-                           
-                            # NEW: Run backtest on signals
-                            with st.expander("🔬 Backtest Results", expanded=False):
-                                backtest_results = run_backtest(call_signals_df, df, 'call')
-                                if backtest_results is not None and not backtest_results.empty:
-                                    st.dataframe(backtest_results)
-                                    avg_pnl = backtest_results['pnl_pct'].mean()
-                                    win_rate = (backtest_results['avg_pnl'] > 0).mean() * 100
-                                    st.metric("Average P&L", f"{avg_pnl:.1f}%")
-                                    st.metric("Win Rate", f"{win_rate:.1f}%")
-                                    if 'sharpe_ratio' in backtest_results.columns:
-                                        st.metric("Sharpe Ratio", f"{backtest_results['sharpe_ratio'].iloc[0]:.2f}")
-                                    if 'max_drawdown_pct' in backtest_results.columns:
-                                        st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
-                                    if 'profit_factor' in backtest_results.columns:
-                                        st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
-                                else:
-                                    st.info("📊 No signals for backtesting")
-                    else:
-                        st.info("📊 No calls available")
-               
-                with col2:
-                    st.subheader("📉 Enhanced Put Signals")
-                    if not puts_filtered.empty:
-                        put_signals_df = process_options_batch(puts_filtered, "put", df, current_price)
+                        # Rename columns for better display
+                        display_df = put_signals_df[available_cols].copy()
+                        display_df = display_df.rename(columns={
+                            'score_percentage': 'Score%',
+                            'profit_target': 'Target',
+                            'stop_loss': 'Stop',
+                            'holding_period': 'Hold Period',
+                            'is_0dte': '0DTE'
+                        })
                        
-                        if not put_signals_df.empty:
-                            # Display top signals with enhanced info
-                            display_cols = [
-                                'contractSymbol', 'strike', 'lastPrice', 'volume',
-                                'delta', 'gamma', 'theta', 'moneyness',
-                                'score_percentage', 'profit_target', 'stop_loss',
-                                'holding_period', 'is_0dte'
-                            ]
-                            available_cols = [col for col in display_cols if col in put_signals_df.columns]
-                           
-                            # Rename columns for better display
-                            display_df = put_signals_df[available_cols].copy()
-                            display_df = display_df.rename(columns={
-                                'score_percentage': 'Score%',
-                                'profit_target': 'Target',
-                                'stop_loss': 'Stop',
-                                'holding_period': 'Hold Period',
-                                'is_0dte': '0DTE'
-                            })
-                           
-                            st.dataframe(
-                                display_df.round(3),
-                                use_container_width=True,
-                                hide_index=True
-                            )
-                           
-                            # Enhanced success message with stats
-                            avg_score = put_signals_df['score_percentage'].mean()
-                            top_score = put_signals_df['score_percentage'].max()
-                            st.success(f"✅ **{len(put_signals_df)} put signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
-                           
-                            # Show best signal details
-                            if len(put_signals_df) > 0:
-                                best_put = put_signals_df.iloc[0]
-                                with st.expander(f"🏆 Best Put Signal Details ({best_put['contractSymbol']})"):
-                                    col_a, col_b, col_c = st.columns(3)
-                                    with col_a:
-                                        st.metric("Score", f"{best_put['score_percentage']:.1f}%")
-                                        st.metric("Delta", f"{best_put['delta']:.3f}")
-                                        st.metric("Open Interest", f"{best_put['open_interest']}")
-                                    with col_b:
-                                        st.metric("Profit Target", f"${best_put['profit_target']:.2f}")
-                                        st.metric("Gamma", f"{best_put['gamma']:.3f}")
-                                        st.metric("Volume", f"{best_put['volume']}")
-                                    with col_c:
-                                        st.metric("Stop Loss", f"${best_put['stop_loss']:.2f}")
-                                        st.metric("Implied Vol", f"{best_put['implied_volatility']*100:.1f}%")
-                                        st.metric("Holding Period", best_put['holding_period'])
-                           
-                            # NEW: Run backtest on signals
-                            with st.expander("🔬 Backtest Results", expanded=False):
-                                backtest_results = run_backtest(put_signals_df, df, 'put')
-                                if backtest_results is not None and not backtest_results.empty:
-                                    st.dataframe(backtest_results)
-                                    avg_pnl = backtest_results['pnl_pct'].mean()
-                                    win_rate = (backtest_results['avg_pnl'] > 0).mean() * 100
-                                    st.metric("Average P&L", f"{avg_pnl:.1f}%")
-                                    st.metric("Win Rate", f"{win_rate:.1f}%")
-                                    if 'sharpe_ratio' in backtest_results.columns:
-                                        st.metric("Sharpe Ratio", f"{backtest_results['sharpe_ratio'].iloc[0]:.2f}")
-                                    if 'max_drawdown_pct' in backtest_results.columns:
-                                        st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
-                                    if 'profit_factor' in backtest_results.columns:
-                                        st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
-                                else:
-                                    st.info("📊 No signals for backtesting")
-                        else:
-                            st.info("📊 No put signals found")
+                        st.dataframe(
+                            display_df.round(3),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                       
+                        # Enhanced success message with stats
+                        avg_score = put_signals_df['score_percentage'].mean()
+                        top_score = put_signals_df['score_percentage'].max()
+                        st.success(f"✅ **{len(put_signals_df)} put signals** | Avg: {avg_score:.1f}% | Best: {top_score:.1f}%")
+                       
+                        # Show best signal details
+                        if len(put_signals_df) > 0:
+                            best_put = put_signals_df.iloc[0]
+                            with st.expander(f"🏆 Best Put Signal Details ({best_put['contractSymbol']})"):
+                                col_a, col_b, col_c = st.columns(3)
+                                with col_a:
+                                    st.metric("Score", f"{best_put['score_percentage']:.1f}%")
+                                    st.metric("Delta", f"{best_put['delta']:.3f}")
+                                    st.metric("Open Interest", f"{best_put['open_interest']}")
+                                with col_b:
+                                    st.metric("Profit Target", f"${best_put['profit_target']:.2f}")
+                                    st.metric("Gamma", f"{best_put['gamma']:.3f}")
+                                    st.metric("Volume", f"{best_put['volume']}")
+                                with col_c:
+                                    st.metric("Stop Loss", f"${best_put['stop_loss']:.2f}")
+                                    st.metric("Implied Vol", f"{best_put['implied_volatility']*100:.1f}%")
+                                    st.metric("Holding Period", best_put['holding_period'])
+                       
+                        # NEW: Run backtest on signals
+                        with st.expander("🔬 Backtest Results", expanded=False):
+                            backtest_results = run_backtest(put_signals_df, df, 'put')
+                            if backtest_results is not None and not backtest_results.empty:
+                                st.dataframe(backtest_results)
+                                avg_pnl = backtest_results['pnl_pct'].mean()
+                                win_rate = (backtest_results['avg_pnl'] > 0).mean() * 100
+                                st.metric("Average P&L", f"{avg_pnl:.1f}%")
+                                st.metric("Win Rate", f"{win_rate:.1f}%")
+                                if 'sharpe_ratio' in backtest_results.columns:
+                                    st.metric("Sharpe Ratio", f"{backtest_results['sharpe_ratio'].iloc[0]:.2f}")
+                                if 'max_drawdown_pct' in backtest_results.columns:
+                                    st.metric("Max Drawdown", f"{backtest_results['max_drawdown_pct'].iloc[0]:.2f}%")
+                                if 'profit_factor' in backtest_results.columns:
+                                    st.metric("Profit Factor", f"{backtest_results['profit_factor'].iloc[0]:.2f}")
+                            else:
+                                st.info("📊 No signals for backtesting")
                     else:
-                        st.info("📊 No puts available")
-       
+                        st.info("📊 No put signals found")
+                else:
+                    st.info("📊 No puts available")
+   
         except Exception as e:
             st.error(f"Error in main analysis: {str(e)}")
 with tab2:
@@ -3029,7 +3755,7 @@ with tab5:
     st.info("🔍 Searching for recent market context...")
     # Use tools to search for news
     # For example:
-    # ```python:disable-run
+    # ```python
 with tab6:
     st.subheader("📊 Free Tier Usage")
     if st.session_state.API_CALL_LOG:
