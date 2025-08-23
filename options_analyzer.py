@@ -2552,7 +2552,7 @@ with st.expander("⚡ Performance Tips"):
     
     **💰 Cost Reduction:**
     - Use conservative refresh intervals (120s+)
-    - Analyze one ticker at a time
+    - Analyze one ticker at time
     - Consider Polygon Premium for heavy usage
     
     **📊 Better Signals:**
@@ -2561,39 +2561,41 @@ with st.expander("⚡ Performance Tips"):
     - Detailed explanations show why signals pass/fail
     """)
 
-
-
 # NEW: Performance monitoring section
-measure_performance()  
-# NEW: Create placeholders for real-time metrics
-if 'price_placeholder' not in st.session_state:
-    st.session_state.price_placeholder = st.empty()
-if 'status_placeholder' not in st.session_state:
-    st.session_state.status_placeholder = st.empty()
-if 'cache_placeholder' not in st.session_state:
-    st.session_state.cache_placeholder = st.empty()
-if 'refresh_placeholder' not in st.session_state:
-    st.session_state.refresh_placeholder = st.empty()
-# Main interface
-ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
-if ticker:
-    # Enhanced header with metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
-   
-    with col1:
-        st.session_state.status_placeholder = st.empty()
-    with col2:
-        st.session_state.price_placeholder = st.empty()
-    with col3:
-        st.session_state.cache_placeholder = st.empty()
-    with col4:
-        st.session_state.refresh_placeholder = st.empty()
-    with col5:
-        manual_refresh = st.button("🔄 Refresh", key="manual_refresh")
-   
-    # Update real-time metrics
-    current_price = get_current_price(ticker)
-    cache_age = int(time.time() - st.session_state.get('last_refresh', 0))
+measure_performance()  # This should now work since the function is defined above
+# =============================
+# NEW: PERFORMANCE MONITORING FUNCTIONS
+# =============================
+def measure_performance():
+    """Measure and display performance metrics"""
+    if 'performance_metrics' not in st.session_state:
+        st.session_state.performance_metrics = {
+            'start_time': time.time(),
+            'api_calls': 0,
+            'data_points_processed': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'memory_usage': 0
+        }
+    
+    # Update memory usage
+    try:
+        import psutil
+        process = psutil.Process()
+        st.session_state.performance_metrics['memory_usage'] = process.memory_info().rss / (1024 * 1024) # in MB
+    except ImportError:
+        pass
+    
+    # Display metrics
+    with st.expander("⚡ Performance Metrics", expanded=True):
+        elapsed = time.time() - st.session_state.performance_metrics['start_time']
+        st.metric("Uptime", f"{elapsed:.1f} seconds")
+        st.metric("API Calls", st.session_state.performance_metrics['api_calls'])
+        st.metric("Data Points Processed", st.session_state.performance_metrics['data_points_processed'])
+        st.metric("Cache Hit Ratio",
+                  f"{st.session_state.performance_metrics['cache_hits'] / max(1, st.session_state.performance_metrics['cache_hits'] + st.session_state.performance_metrics['cache_misses']) * 100:.1f}%")
+        if 'memory_usage' in st.session_state.performance_metrics:
+            st.metric("Memory Usage", f"{st.session_state.performance_metrics['memory_usage']:.1f} MB")
    
     # Update placeholders
     if is_market_open():
