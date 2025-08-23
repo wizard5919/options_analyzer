@@ -2542,7 +2542,7 @@ with st.sidebar:
         time_since = int(time.time() - st.session_state.last_refresh)
         st.caption(f"**Cache**: {time_since}s ago")
    
-    # Performance tips
+# Performance tips
 with st.expander("⚡ Performance Tips"):
     st.markdown("""
     **🚀 Speed Optimizations:**
@@ -2560,6 +2560,9 @@ with st.expander("⚡ Performance Tips"):
     - Dynamic thresholds adapt to volatility
     - Detailed explanations show why signals pass/fail
     """)
+
+# NEW: Performance monitoring section
+measure_performance()  # This should be at the same indentation level as the expander
 
 # NEW: Performance monitoring section
 measure_performance()  # This call should now work since the function is defined above
