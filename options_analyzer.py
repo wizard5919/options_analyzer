@@ -17,7 +17,7 @@ from plotly.subplots import make_subplots
 from polygon import RESTClient
 from streamlit_autorefresh import st_autorefresh
 try:
-    from scipy import signal
+from scipy import signal
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
@@ -411,34 +411,29 @@ def calculate_dynamic_sensitivity(data: pd.DataFrame, base_sensitivity: float) -
         return base_sensitivity
 
 def cluster_levels_improved(levels: List[float], current_price: float, sensitivity: float, level_type: str) -> List[Dict]:
-    """
-    Improved level clustering with strength scoring and current price weighting
-    """
     if not levels:
         return []
-  
+ 
     try:
         levels = sorted(levels)
         clustered = []
         current_cluster = []
-      
+ 
         for level in levels:
             if not current_cluster:
                 current_cluster.append(level)
             else:
-                # Check if level should be in current cluster
                 cluster_center = np.mean(current_cluster)
                 distance_ratio = abs(level - cluster_center) / current_price
-              
+ 
                 if distance_ratio <= sensitivity:
                     current_cluster.append(level)
                 else:
-                    # Finalize current cluster
                     if current_cluster:
                         cluster_price = np.mean(current_cluster)
                         cluster_strength = len(current_cluster)
                         distance_from_current = abs(cluster_price - current_price) / current_price
-                      
+ 
                         clustered.append({
                             'price': cluster_price,
                             'strength': cluster_strength,
@@ -446,15 +441,14 @@ def cluster_levels_improved(levels: List[float], current_price: float, sensitivi
                             'type': level_type,
                             'raw_levels': current_cluster.copy()
                         })
-                  
+ 
                     current_cluster = [level]
-      
-        # Don't forget the last cluster
+ 
         if current_cluster:
             cluster_price = np.mean(current_cluster)
             cluster_strength = len(current_cluster)
             distance_from_current = abs(cluster_price - current_price) / current_price
-          
+ 
             clustered.append({
                 'price': cluster_price,
                 'strength': cluster_strength,
@@ -462,13 +456,11 @@ def cluster_levels_improved(levels: List[float], current_price: float, sensitivi
                 'type': level_type,
                 'raw_levels': current_cluster.copy()
             })
-      
-        # Sort by strength first, then by distance to current price
+ 
         clustered.sort(key=lambda x: (-x['strength'], x['distance']))
-   
-        # Return only the STRONGEST level for each type
-        return clustered[:1]  # Changed from [:5] to [:1]
-      
+ 
+        return clustered[:1]  # Strongest level
+ 
     except Exception as e:
         st.warning(f"Error clustering levels: {str(e)}")
         return [{'price': level, 'strength': 1, 'distance': abs(level - current_price) / current_price, 'type': level_type, 'raw_levels': [level]} for level in levels[:5]]
