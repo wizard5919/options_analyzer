@@ -226,7 +226,6 @@ CONFIG = {
         'scalping': ['1min', '5min'],
         'intraday': ['15min', '30min', '1h']
     },
-    'SR_SENSITIVITY': {
     'SR_WINDOW_SIZES': {
         '1min': 3,
         '5min': 3,
@@ -487,7 +486,7 @@ def calculate_support_resistance_enhanced(data: pd.DataFrame, timeframe: str, cu
    
     try:
         # Get configuration for this timeframe
-        base_sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
+        base_sensitivity = 0.005
         window_size = CONFIG['SR_WINDOW_SIZES'].get(timeframe, 5)
        
         # Calculate dynamic sensitivity
