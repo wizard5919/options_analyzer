@@ -2436,15 +2436,43 @@ if 'rate_limited_until' in st.session_state:
 st.title("📈 Options Analyzer Pro")
 st.markdown("**TradingView-Style Layout** • **Professional Analysis** • **Real-time Signals**")
 
-# Create top navigation tabs
+# Create top navigation tabs with blue color
+st.markdown("""
+<style>
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+        background-color: #1e222d;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 35px;
+        white-space: pre-wrap;
+        background-color: #1e222d;
+        border-radius: 4px 4px 0px 0px;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        color: #758696;
+        font-weight: 500;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #2962ff;
+        color: white;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Create tabs with the specified names
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "General",
-    "Chart",
-    "News & Analysis",
-    "Financials",
-    "Technical",
-    "Forum"
+    "General", "Chart", "News & Analysis", "Financials", "Technical", "Forum"
 ])
+
+# Add ticker input and welcome message
+ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+
+if not ticker:
+    st.info("👋 Welcome! Enter a stock ticker above to begin enhanced options analysis.")
 
 # Enhanced sidebar
 with st.sidebar:
@@ -3267,34 +3295,45 @@ with tab5: # Technical tab
     if ticker:
         # Support/Resistance analysis
         st.subheader("Key Support & Resistance Levels")
-        if st.session_state.sr_data:
-            sr_fig = plot_sr_levels_enhanced(st.session_state.sr_data, get_current_price(ticker))
+        
+        # Get current price
+        current_price = get_current_price(ticker)
+        
+        # Get multi-timeframe data
+        tf_data, _ = get_multi_timeframe_data_enhanced(ticker)
+        
+        # Calculate S/R for all timeframes
+        sr_results = {}
+        timeframes_to_show = ['5min', '15min', '30min', '1h', '2h', '4h', 'daily']
+        
+        for tf in timeframes_to_show:
+            if tf in tf_data and not tf_data[tf].empty:
+                sr_results[tf] = calculate_support_resistance_enhanced(tf_data[tf], tf, current_price)
+        
+        # Display S/R levels in a structured way
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Strong Support Levels")
+            for tf in timeframes_to_show:
+                if tf in sr_results and sr_results[tf]['support']:
+                    # Get the strongest support level (closest to current price)
+                    strongest_support = min(sr_results[tf]['support'], key=lambda x: abs(x - current_price))
+                    st.write(f"**{tf}**: ${strongest_support:.2f}")
+        
+        with col2:
+            st.subheader("Strong Resistance Levels")
+            for tf in timeframes_to_show:
+                if tf in sr_results and sr_results[tf]['resistance']:
+                    # Get the strongest resistance level (closest to current price)
+                    strongest_resistance = min(sr_results[tf]['resistance'], key=lambda x: abs(x - current_price))
+                    st.write(f"**{tf}**: ${strongest_resistance:.2f}")
+        
+        # Also show the enhanced S/R plot
+        if sr_results:
+            sr_fig = plot_sr_levels_enhanced(sr_results, current_price)
             if sr_fig:
                 st.plotly_chart(sr_fig, use_container_width=True)
-           
-            # Detailed levels - show only the strongest level for each timeframe
-            with st.expander("Detailed Levels"):
-                for timeframe, data in st.session_state.sr_data.items():
-                    if 'support' in data and 'resistance' in data and (data['support'] or data['resistance']):
-                        col1, col2 = st.columns(2)
-                       
-                        with col1:
-                            st.write(f"**{timeframe} Support**")
-                            if data['support']:
-                                # Show only the strongest support level
-                                strongest_support = min(data['support'], key=lambda x: abs(x - current_price))
-                                st.write(f"- ${strongest_support:.2f}")
-                            else:
-                                st.write("- No strong support")
-                       
-                        with col2:
-                            st.write(f"**{timeframe} Resistance**")
-                            if data['resistance']:
-                                # Show only the strongest resistance level
-                                strongest_resistance = min(data['resistance'], key=lambda x: abs(x - current_price))
-                                st.write(f"- ${strongest_resistance:.2f}")
-                            else:
-                                st.write("- No strong resistance")
         else:
             st.info("Run analysis to see support/resistance levels")
       
