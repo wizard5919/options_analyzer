@@ -227,12 +227,6 @@ CONFIG = {
         'intraday': ['15min', '30min', '1h']
     },
     'SR_SENSITIVITY': {
-        '1min': 0.001,
-        '5min': 0.002,
-        '15min': 0.003,
-        '30min': 0.005,
-        '1h': 0.008
-    },
     'SR_WINDOW_SIZES': {
         '1min': 3,
         '5min': 3,
@@ -469,9 +463,10 @@ def cluster_levels_improved(levels: List[float], current_price: float, sensitivi
             })
        
         # Sort by strength first, then by distance to current price
-        clustered.sort(key=lambda x: (-x['strength'], x['distance']))
-       
-        return clustered[:5] # Return top 5 levels
+    clustered.sort(key=lambda x: (-x['strength'], x['distance']))
+    
+    # Return only the STRONGEST level for each type
+    return clustered[:1]  # Changed from [:5] to [:1]
        
     except Exception as e:
         st.warning(f"Error clustering levels: {str(e)}")
@@ -829,34 +824,34 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             '1h': 'rgba(0,0,255,0.8)' # Blue
         }
        
-        # Prepare data for plotting
-        support_data = []
-        resistance_data = []
-       
-        for tf, sr in data.items():
-            color = timeframe_colors.get(tf, 'gray')
-           
-            # Add support levels
-            for level in sr.get('support', []):
-                if isinstance(level, (int, float)) and not math.isnan(level) and level < current_price:
-                    support_data.append({
-                        'timeframe': tf,
-                        'price': float(level),
-                        'type': 'Support',
-                        'color': color,
-                        'distance_pct': abs(level - current_price) / current_price * 100
-                    })
-           
-            # Add resistance levels
-            for level in sr.get('resistance', []):
-                if isinstance(level, (int, float)) and not math.isnan(level) and level > current_price:
-                    resistance_data.append({
-                        'timeframe': tf,
-                        'price': float(level),
-                        'type': 'Resistance',
-                        'color': color,
-                        'distance_pct': abs(level - current_price) / current_price * 100
-                    })
+         # Prepare data for plotting - only take the strongest level for each timeframe
+    support_data = []
+    resistance_data = []
+    
+    for tf, sr in data.items():
+        color = timeframe_colors.get(tf, 'gray')
+        
+        # Add only the STRONGEST support level for this timeframe
+        if sr.get('support'):
+            strongest_support = min(sr['support'], key=lambda x: abs(x - current_price))
+            support_data.append({
+                'timeframe': tf,
+                'price': float(strongest_support),
+                'type': 'Support',
+                'color': color,
+                'distance_pct': abs(strongest_support - current_price) / current_price * 100
+            })
+        
+        # Add only the STRONGEST resistance level for this timeframe
+        if sr.get('resistance'):
+            strongest_resistance = min(sr['resistance'], key=lambda x: abs(x - current_price))
+            resistance_data.append({
+                'timeframe': tf,
+                'price': float(strongest_resistance),
+                'type': 'Resistance',
+                'color': color,
+                'distance_pct': abs(strongest_resistance - current_price) / current_price * 100
+            })
        
         # Plot support levels
         if support_data:
@@ -3255,32 +3250,40 @@ with tab4:  # Financials tab
         except Exception as e:
             st.error(f"Error loading financial data: {str(e)}")
 
-with tab5:  # Technical tab
+with tab5: # Technical tab
     st.header("📈 Technical Analysis")
-   
+    
     if ticker:
         # Support/Resistance analysis
-        st.subheader("Support & Resistance Levels")
+        st.subheader("Key Support & Resistance Levels")
         if st.session_state.sr_data:
             sr_fig = plot_sr_levels_enhanced(st.session_state.sr_data, get_current_price(ticker))
             if sr_fig:
                 st.plotly_chart(sr_fig, use_container_width=True)
-           
-            # Detailed levels
+            
+            # Detailed levels - show only the strongest level for each timeframe
             with st.expander("Detailed Levels"):
                 for timeframe, data in st.session_state.sr_data.items():
-                    if 'support' in data and 'resistance' in data:
+                    if 'support' in data and 'resistance' in data and (data['support'] or data['resistance']):
                         col1, col2 = st.columns(2)
-                       
+                        
                         with col1:
                             st.write(f"**{timeframe} Support**")
-                            for level in data['support']:
-                                st.write(f"- ${level:.2f}")
-                       
+                            if data['support']:
+                                # Show only the strongest support level
+                                strongest_support = min(data['support'], key=lambda x: abs(x - current_price))
+                                st.write(f"- ${strongest_support:.2f}")
+                            else:
+                                st.write("- No strong support")
+                        
                         with col2:
                             st.write(f"**{timeframe} Resistance**")
-                            for level in data['resistance']:
-                                st.write(f"- ${level:.2f}")
+                            if data['resistance']:
+                                # Show only the strongest resistance level
+                                strongest_resistance = min(data['resistance'], key=lambda x: abs(x - current_price))
+                                st.write(f"- ${strongest_resistance:.2f}")
+                            else:
+                                st.write("- No strong resistance")
         else:
             st.info("Run analysis to see support/resistance levels")
        
