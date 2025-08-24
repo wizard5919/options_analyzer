@@ -1099,7 +1099,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         
         if data.empty:
             return pd.DataFrame()
-            
+        
         # Handle multi-level columns - flatten them
         if isinstance(data.columns, pd.MultiIndex):
             # Keep only the first level of column names
@@ -1108,11 +1108,15 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         # Reset index to make Datetime a column
         data = data.reset_index()
         
-        # Rename the index column to 'Datetime' if it exists
-        if 'index' in data.columns:
-            data = data.rename(columns={'index': 'Datetime'})
-        elif 'Date' in data.columns:
-            data = data.rename(columns={'Date': 'Datetime'})
+        # Check if we have a datetime column and rename it properly
+        datetime_col = None
+        for col in data.columns:
+            if col.lower() in ['date', 'datetime', 'time', 'index']:
+                datetime_col = col
+                break
+                
+        if datetime_col and datetime_col != 'Datetime':
+            data = data.rename(columns={datetime_col: 'Datetime'})
         elif 'Datetime' not in data.columns:
             # If no datetime column found, create one from the index
             data = data.reset_index()
@@ -1137,18 +1141,21 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         if len(data) < CONFIG['MIN_DATA_POINTS']:
             return pd.DataFrame()
        
-        # Handle timezone
+        # Handle timezone - ensure we're working with a Series, not DataFrame
         eastern = pytz.timezone('US/Eastern')
        
-        if data['Datetime'].dt.tz is None:
-            data['Datetime'] = data['Datetime'].dt.tz_localize(pytz.utc)
+        # Make sure we're working with a Series, not DataFrame
+        datetime_series = data['Datetime']
+        if hasattr(datetime_series, 'dt') and datetime_series.dt.tz is None:
+            datetime_series = datetime_series.dt.tz_localize(pytz.utc)
        
-        data['Datetime'] = data['Datetime'].dt.tz_convert(eastern)
+        datetime_series = datetime_series.dt.tz_convert(eastern)
+        data['Datetime'] = datetime_series
        
         # Add premarket indicator
         data['premarket'] = (data['Datetime'].dt.time >= CONFIG['PREMARKET_START']) & (data['Datetime'].dt.time < CONFIG['MARKET_OPEN'])
        
-        # NEW: Improve data gap handling with interpolation
+        # Set Datetime as index for reindexing
         data = data.set_index('Datetime')
         data = data.reindex(pd.date_range(start=data.index.min(), end=data.index.max(), freq='5T'))  # Fill missing bars
         data[['Open', 'High', 'Low', 'Close']] = data[['Open', 'High', 'Low', 'Close']].ffill()  # Forward-fill prices
@@ -1165,6 +1172,8 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
        
     except Exception as e:
         st.error(f"Error fetching stock data: {str(e)}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
         return pd.DataFrame()
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Compute all technical indicators efficiently"""
