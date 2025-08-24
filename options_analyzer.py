@@ -2670,12 +2670,8 @@ with tab1: # General tab
         # UPDATED: Enhanced Support/Resistance Analysis with better error handling
         if not st.session_state.sr_data or st.session_state.last_ticker != ticker:
             with st.spinner("🔍 Analyzing support/resistance levels..."):
-                try:
-                    st.session_state.sr_data = analyze_support_resistance_enhanced(ticker)
-                    st.session_state.last_ticker = ticker
-                except Exception as e:
-                    st.error(f"Error in S/R analysis: {str(e)}")
-                    st.session_state.sr_data = {}
+                st.session_state.sr_data = analyze_support_resistance_enhanced(ticker)
+                st.session_state.last_ticker = ticker
       
         try:
             with st.spinner("🔄 Loading enhanced analysis..."):
