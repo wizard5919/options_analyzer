@@ -2088,25 +2088,23 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             df = df.loc[:, ~df.columns.duplicated(keep='first')]
    
         # Reset index to add datetime column
-df = df.reset_index()
-
-# Find and standardize the datetime column name
-date_col = next((col for col in ['Datetime', 'Date', 'index'] if col in df.columns), None)
-if date_col:
-    if date_col != 'Datetime':
-        df = df.rename(columns={date_col: 'Datetime'})
-else:
-    st.warning("No datetime column found after reset - using first column as fallback")
-    if len(df.columns) > 0:
-        df = df.rename(columns={df.columns[0]: 'Datetime'})
-
-# Convert to datetime if the column exists
-if 'Datetime' in df.columns:
-    df['Datetime'] = pd.to_datetime(df['Datetime'], errors='coerce')
-    df = df.dropna(subset=['Datetime'])  # Drop any invalid dates
-else:
-    st.error("Failed to create 'Datetime' column")
-    return None
+        df = df.reset_index()
+        # Find and standardize the datetime column name
+        date_col = next((col for col in ['Datetime', 'Date', 'index'] if col in df.columns), None)
+        if date_col:
+            if date_col != 'Datetime':
+                df = df.rename(columns={date_col: 'Datetime'})
+        else:
+            st.warning("No datetime column found after reset - using first column as fallback")
+            if len(df.columns) > 0:
+                df = df.rename(columns={df.columns[0]: 'Datetime'})
+        # Convert to datetime if the column exists
+        if 'Datetime' in df.columns:
+            df['Datetime'] = pd.to_datetime(df['Datetime'], errors='coerce')
+            df = df.dropna(subset=['Datetime']) # Drop any invalid dates
+        else:
+            st.error("Failed to create 'Datetime' column")
+            return None
    
         # Proceed with chart creation (rest of the function remains the same)
         # Create subplots with 3 rows
@@ -2194,7 +2192,7 @@ else:
                     if isinstance(level, (int, float)) and not math.isnan(level):
                         fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
                                      annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
-                      
+               
                 # Add resistance levels
                 for level in sr_levels[tf_key].get('resistance', []):
                     if isinstance(level, (int, float)) and not math.isnan(level):
