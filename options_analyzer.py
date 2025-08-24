@@ -1096,22 +1096,42 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
             progress=False,
             prepost=True
         )
+        
         if data.empty:
             return pd.DataFrame()
-        # Handle multi-level columns
+            
+        # Handle multi-level columns - flatten them
         if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.droplevel(1)
-       
+            # Keep only the first level of column names
+            data.columns = data.columns.get_level_values(0)
+        
+        # Reset index to make Datetime a column
+        data = data.reset_index()
+        
+        # Rename the index column to 'Datetime' if it exists
+        if 'index' in data.columns:
+            data = data.rename(columns={'index': 'Datetime'})
+        elif 'Date' in data.columns:
+            data = data.rename(columns={'Date': 'Datetime'})
+        elif 'Datetime' not in data.columns:
+            # If no datetime column found, create one from the index
+            data = data.reset_index()
+            if 'index' in data.columns:
+                data = data.rename(columns={'index': 'Datetime'})
+        
         # Ensure we have required columns
         required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         missing_cols = [col for col in required_cols if col not in data.columns]
         if missing_cols:
+            st.error(f"Missing required columns: {missing_cols}")
             return pd.DataFrame()
+        
         # Clean and validate data
         data = data.dropna(how='all')
        
         for col in required_cols:
             data[col] = pd.to_numeric(data[col], errors='coerce')
+        
         data = data.dropna(subset=required_cols)
        
         if len(data) < CONFIG['MIN_DATA_POINTS']:
@@ -1120,24 +1140,24 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         # Handle timezone
         eastern = pytz.timezone('US/Eastern')
        
-        if data.index.tz is None:
-            data.index = data.index.tz_localize(pytz.utc)
+        if data['Datetime'].dt.tz is None:
+            data['Datetime'] = data['Datetime'].dt.tz_localize(pytz.utc)
        
-        data.index = data.index.tz_convert(eastern)
+        data['Datetime'] = data['Datetime'].dt.tz_convert(eastern)
        
         # Add premarket indicator
-        data['premarket'] = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
-       
-        data = data.reset_index(drop=False)
+        data['premarket'] = (data['Datetime'].dt.time >= CONFIG['PREMARKET_START']) & (data['Datetime'].dt.time < CONFIG['MARKET_OPEN'])
        
         # NEW: Improve data gap handling with interpolation
         data = data.set_index('Datetime')
         data = data.reindex(pd.date_range(start=data.index.min(), end=data.index.max(), freq='5T'))  # Fill missing bars
         data[['Open', 'High', 'Low', 'Close']] = data[['Open', 'High', 'Low', 'Close']].ffill()  # Forward-fill prices
         data['Volume'] = data['Volume'].fillna(0)  # Zero volume for gaps
+        
         # Recompute premarket after reindex
         data['premarket'] = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
         data['premarket'] = data['premarket'].fillna(False)
+        
         data = data.reset_index().rename(columns={'index': 'Datetime'})
        
         # Compute all indicators in one go
