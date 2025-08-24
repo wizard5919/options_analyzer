@@ -2675,9 +2675,6 @@ if 'cache_placeholder' not in st.session_state:
 if 'refresh_placeholder' not in st.session_state:
     st.session_state.refresh_placeholder = st.empty()
 
-# Main interface - Ticker input at the top
-ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
-
 # Tab content
 with tab1: # General tab
     st.header("🎯 Enhanced Options Signals")
