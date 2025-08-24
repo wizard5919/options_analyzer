@@ -2078,7 +2078,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
     if df.empty:
         st.error("DataFrame is empty - cannot create chart")
         return None
-   
+  
     try:
         # NEW: Flatten MultiIndex columns if present (handles recent yfinance changes)
         if isinstance(df.columns, pd.MultiIndex):
@@ -2086,7 +2086,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             df.columns = df.columns.get_level_values(0)
             # Drop duplicate columns if any (e.g., if 'Adj Close' exists)
             df = df.loc[:, ~df.columns.duplicated(keep='first')]
-   
+  
         # Reset index to add datetime column
         df = df.reset_index()
         # Find and standardize the datetime column name
@@ -2105,18 +2105,74 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
         else:
             st.error("Failed to create 'Datetime' column")
             return None
-   
-        # Get latest values for annotations
-        latest = df.iloc[-1]
-        current_price = latest['Close']
-        current_volume = latest.get('Volume', 0)
-        macd_val = latest.get('MACD', 0)
-        macd_signal = latest.get('MACD_signal', 0)
-        macd_hist = latest.get('MACD_hist', 0)
-        rsi_val = latest.get('RSI', 0)
-   
-        # Proceed with chart creation
-        # Create subplots with 4 rows: Price, Volume, MACD, RSI
+  
+        # Compute indicators if not present
+        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        if all(col in df.columns for col in required_cols):
+            # Convert to numeric
+            for col in required_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df = df.dropna(subset=required_cols)
+          
+            if not df.empty:
+                close = df['Close'].astype(float)
+                high = df['High'].astype(float)
+                low = df['Low'].astype(float)
+                volume = df['Volume'].astype(float)
+              
+                # EMAs
+                for period in [9, 20, 50, 200]:
+                    if len(close) >= period:
+                        ema = EMAIndicator(close=close, window=period)
+                        df[f'EMA_{period}'] = ema.ema_indicator()
+                    else:
+                        df[f'EMA_{period}'] = np.nan
+                  
+                # RSI
+                if len(close) >= 14:
+                    rsi = RSIIndicator(close=close, window=14)
+                    df['RSI'] = rsi.rsi()
+                else:
+                    df['RSI'] = np.nan
+                  
+                # VWAP simplified
+                typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+                cumulative_tp = (typical_price * df['Volume']).cumsum()
+                cumulative_vol = df['Volume'].cumsum()
+                df['VWAP'] = cumulative_tp / cumulative_vol
+                  
+                # ATR
+                if len(close) >= 14:
+                    atr = AverageTrueRange(high=high, low=low, close=close, window=14)
+                    df['ATR'] = atr.average_true_range()
+                    current_price = df['Close'].iloc[-1]
+                    if current_price > 0:
+                        df['ATR_pct'] = df['ATR'] / close
+                    else:
+                        df['ATR_pct'] = np.nan
+                else:
+                    df['ATR'] = np.nan
+                    df['ATR_pct'] = np.nan
+                  
+                # MACD and Keltner Channels
+                if len(close) >= 26:
+                    macd = MACD(close=close)
+                    df['MACD'] = macd.macd()
+                    df['MACD_signal'] = macd.macd_signal()
+                    df['MACD_hist'] = macd.macd_diff()
+                  
+                    kc = KeltnerChannel(high=high, low=low, close=close)
+                    df['KC_upper'] = kc.keltner_channel_hband()
+                    df['KC_middle'] = kc.keltner_channel_mband()
+                    df['KC_lower'] = kc.keltner_channel_lband()
+                else:
+                    for col in ['MACD', 'MACD_signal', 'MACD_hist', 'KC_upper', 'KC_middle', 'KC_lower']:
+                        df[col] = np.nan
+                  
+                # Volume average
+                df['avg_vol'] = df['Volume'].rolling(window=min(14, len(df))).mean()
+  
+        # Proceed with chart creation (rest of the function remains the same)
         fig = make_subplots(
             rows=4, cols=1,
             shared_xaxes=True,
@@ -2124,8 +2180,8 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             row_heights=[0.6, 0.15, 0.15, 0.15],
             specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}]]
         )
-       
-        # Candlestick chart with TradingView-like colors
+      
+        # Candlestick chart
         fig.add_trace(
             go.Candlestick(
                 x=df['Datetime'],
@@ -2139,9 +2195,9 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             ),
             row=1, col=1
         )
-       
-        # EMAs with colors matching example
-        ema_colors = ['lime', 'cyan', 'magenta', 'yellow']  # Adjusted to better match TradingView/example
+      
+        # EMAs
+        ema_colors = ['lime', 'cyan', 'magenta', 'yellow']
         for i, period in enumerate([9, 20, 50, 200]):
             col_name = f'EMA_{period}'
             if col_name in df.columns and not df[col_name].isna().all():
@@ -2151,7 +2207,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                     name=f'EMA {period}',
                     line=dict(color=ema_colors[i])
                 ), row=1, col=1)
-       
+      
         # Keltner Channels
         for col, color, name in [
             ('KC_upper', 'red', 'KC Upper'),
@@ -2165,7 +2221,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                     name=name,
                     line=dict(color=color, dash='dash' if col != 'KC_middle' else 'solid')
                 ), row=1, col=1)
-       
+      
         # VWAP line
         if 'VWAP' in df.columns and not df['VWAP'].isna().all():
             fig.add_trace(go.Scatter(
@@ -2174,25 +2230,15 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 name='VWAP',
                 line=dict(color='cyan', width=2)
             ), row=1, col=1)
-       
-        # Volume as separate pane with colored bars
+      
+        # Volume
         if 'Volume' in df.columns and not df['Volume'].isna().all():
             colors = ['green' if o < c else 'red' for o, c in zip(df['Open'], df['Close'])]
             fig.add_trace(
                 go.Bar(x=df['Datetime'], y=df['Volume'], name='Volume', marker_color=colors),
                 row=2, col=1
             )
-            # Add Volume annotation
-            fig.add_annotation(
-                text=f"VOL {current_volume:.0f}",
-                xref="paper", yref="paper",
-                x=0.01, y=0.95,  # Position near top-left of volume pane
-                showarrow=False,
-                font=dict(color="white", size=12),
-                align="left",
-                row=2, col=1
-            )
-       
+      
         # MACD
         if 'MACD' in df.columns and not df['MACD'].isna().all():
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=3, col=1)
@@ -2201,33 +2247,13 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             if 'MACD_hist' in df.columns and not df['MACD_hist'].isna().all():
                 hist_colors = ['green' if val >= 0 else 'red' for val in df['MACD_hist']]
                 fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color=hist_colors), row=3, col=1)
-            # Add MACD annotation
-            fig.add_annotation(
-                text=f"MACD (12,26,9) {macd_val:.3f} {macd_signal:.3f} {macd_hist:.3f}",
-                xref="paper", yref="paper",
-                x=0.01, y=0.95,
-                showarrow=False,
-                font=dict(color="white", size=12),
-                align="left",
-                row=3, col=1
-            )
-       
+      
         # RSI
         if 'RSI' in df.columns and not df['RSI'].isna().all():
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=4, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
-            # Add RSI annotation
-            fig.add_annotation(
-                text=f"RSI (14) {rsi_val:.2f}",
-                xref="paper", yref="paper",
-                x=0.01, y=0.95,
-                showarrow=False,
-                font=dict(color="white", size=12),
-                align="left",
-                row=4, col=1
-            )
-       
+      
         # Add support and resistance levels if available
         if sr_levels:
             tf_key = timeframe.replace('m', 'min').replace('H', 'h').replace('D', 'd').replace('W', 'w').replace('M', 'm')
@@ -2237,13 +2263,13 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                     if isinstance(level, (int, float)) and not math.isnan(level):
                         fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
                                      annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
-               
+              
                 # Add resistance levels
                 for level in sr_levels[tf_key].get('resistance', []):
                     if isinstance(level, (int, float)) and not math.isnan(level):
                         fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
                                      annotation_text=f"R: {level:.2f}", annotation_position="top right")
-       
+      
         fig.update_layout(
             height=800,
             title=f'Price Chart - {timeframe}',
@@ -2253,10 +2279,10 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             plot_bgcolor='#131722',
             paper_bgcolor='#131722',
             font=dict(color='#d1d4dc'),
-            xaxis=dict(showgrid=False),  # Hide x-grid for cleaner look
-            yaxis=dict(showgrid=False)   # Hide y-grid
+            xaxis=dict(showgrid=False), # Hide x-grid for cleaner look
+            yaxis=dict(showgrid=False) # Hide y-grid
         )
-       
+      
         # Move all Y-axes to right and hide left
         for row in [1,2,3,4]:
             fig.update_yaxes(
@@ -2267,9 +2293,9 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 showticklabels=False, side='left', showgrid=False, zeroline=False,
                 row=row, col=1
             )  # Completely hide left Y-axis ticks and labels
-       
+      
         return fig
-       
+      
     except Exception as e:
         st.error(f"Error creating chart: {str(e)}")
         import traceback
