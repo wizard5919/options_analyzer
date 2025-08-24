@@ -488,7 +488,7 @@ def calculate_support_resistance_enhanced(data: pd.DataFrame, timeframe: str, cu
    
     try:
         # Get configuration for this timeframe
-        base_sensitivity = 0.005
+        base_sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
         window_size = CONFIG['SR_WINDOW_SIZES'].get(timeframe, 5)
        
         # Calculate dynamic sensitivity
