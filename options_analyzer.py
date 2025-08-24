@@ -1080,7 +1080,7 @@ def get_current_price(ticker: str) -> float:
 
 # NEW: Combined stock data and indicators function for better caching
 @st.cache_data(ttl=CONFIG['STOCK_CACHE_TTL'], show_spinner=False)
-def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
+def get_stock_data_with_indicators(ticker, interval=None, **kwargs):
     """Fetch stock data and compute all indicators in one cached function"""
     try:
         # Determine time range
