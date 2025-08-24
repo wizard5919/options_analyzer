@@ -1193,12 +1193,13 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         low = df['Low'].astype(float)
         volume = df['Volume'].astype(float)
         # EMAs
-        for period in [9, 20, 50, 200]:
-            if len(close) >= period:
-                ema = EMAIndicator(close=close, window=period)
-                df[f'EMA_{period}'] = ema.ema_indicator()
-            else:
-                df[f'EMA_{period}'] = np.nan
+        # EMAs
+for period in [9, 20, 50, 200]:
+    if len(close) >= period:
+        ema = EMAIndicator(close=close, window=period)
+        df[f'EMA_{period}'] = ema.ema_indicator()
+    else:
+        df[f'EMA_{period}'] = np.nan
          
         # RSI
         if len(close) >= 14:
