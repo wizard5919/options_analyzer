@@ -43,19 +43,19 @@ st.markdown("""
         background-color: #131722;
         color: #d1d4dc;
     }
-   
+  
     /* Sidebar styling */
     .css-1d391kg, .css-1d391kg p {
         background-color: #1e222d;
         color: #d1d4dc;
     }
-   
+  
     /* Tabs styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 2px;
         background-color: #1e222d;
     }
-   
+  
     .stTabs [data-baseweb="tab"] {
         height: 35px;
         white-space: pre-wrap;
@@ -67,12 +67,12 @@ st.markdown("""
         color: #758696;
         font-weight: 500;
     }
-   
+  
     .stTabs [aria-selected="true"] {
         background-color: #131722;
         color: #ebebeb;
     }
-   
+  
     /* Button styling */
     .stButton button {
         background-color: #2962ff;
@@ -82,53 +82,53 @@ st.markdown("""
         padding: 8px 16px;
         font-weight: 500;
     }
-   
+  
     .stButton button:hover {
         background-color: #1e53e5;
         color: white;
     }
-   
+  
     /* Input fields */
     .stTextInput input {
         background-color: #1e222d;
         color: #d1d4dc;
         border: 1px solid #2a2e39;
     }
-   
+  
     /* Select boxes */
     .stSelectbox select {
         background-color: #1e222d;
         color: #d1d4dc;
     }
-   
+  
     /* Sliders */
     .stSlider [data-testid="stThumb"] {
         background-color: #2962ff;
     }
-   
+  
     /* Metrics */
     [data-testid="stMetricValue"] {
         color: #d1d4dc;
         font-weight: bold;
     }
-   
+  
     [data-testid="stMetricLabel"] {
         color: #758696;
     }
-   
+  
     /* Dataframes */
     .dataframe {
         background-color: #1e222d;
         color: #d1d4dc;
     }
-   
+  
     /* Expanders */
     .streamlit-expanderHeader {
         background-color: #1e222d;
         color: #d1d4dc;
         font-weight: 600;
     }
-   
+  
     /* Chart containers */
     .element-container {
         background-color: #131722;
@@ -136,7 +136,7 @@ st.markdown("""
         padding: 10px;
         margin-bottom: 10px;
     }
-   
+  
     /* Custom TradingView-like chart header */
     .chart-header {
         display: flex;
@@ -147,12 +147,12 @@ st.markdown("""
         border-radius: 4px 4px 0 0;
         border-bottom: 1px solid #2a2e39;
     }
-   
+  
     .timeframe-selector {
         display: flex;
         gap: 4px;
     }
-   
+  
     .timeframe-btn {
         background-color: #2a2e39;
         color: #758696;
@@ -162,12 +162,12 @@ st.markdown("""
         font-size: 12px;
         cursor: pointer;
     }
-   
+  
     .timeframe-btn.active {
         background-color: #2962ff;
         color: white;
     }
-   
+  
     /* Signal cards */
     .signal-card {
         background-color: #1e222d;
@@ -176,11 +176,11 @@ st.markdown("""
         margin-bottom: 8px;
         border-left: 4px solid #2962ff;
     }
-   
+  
     .signal-card.bullish {
         border-left-color: #26a69a;
     }
-   
+  
     .signal-card.bearish {
         border-left-color: #ef5350;
     }
@@ -297,13 +297,13 @@ SIGNAL_THRESHOLDS = {
 def can_make_request(source: str) -> bool:
     """Check if we can make another request without hitting limits"""
     now = time.time()
-  
+ 
     # Clean up old entries (older than 1 hour)
     st.session_state.API_CALL_LOG = [
         t for t in st.session_state.API_CALL_LOG
         if now - t['timestamp'] < 3600
     ]
-  
+ 
     # Count recent requests by source
     av_count = len([t for t in st.session_state.API_CALL_LOG
                    if t['source'] == "ALPHA_VANTAGE" and now - t['timestamp'] < 60])
@@ -311,7 +311,7 @@ def can_make_request(source: str) -> bool:
                     if t['source'] == "FMP" and now - t['timestamp'] < 3600])
     iex_count = len([t for t in st.session_state.API_CALL_LOG
                    if t['source'] == "IEX" and now - t['timestamp'] < 3600])
-  
+ 
     # Enforce rate limits
     if source == "ALPHA_VANTAGE" and av_count >= 4:
         return False
@@ -319,7 +319,7 @@ def can_make_request(source: str) -> bool:
         return False
     if source == "IEX" and iex_count >= 29:
         return False
-  
+ 
     return True
 def log_api_request(source: str):
     """Log an API request to track usage"""
@@ -336,7 +336,7 @@ def find_peaks_valleys_robust(data: np.array, order: int = 5, prominence: float 
     """
     if len(data) < order * 2 + 1:
         return [], []
-  
+ 
     try:
         if SCIPY_AVAILABLE and prominence is not None:
             peaks, peak_properties = signal.find_peaks(data, distance=order, prominence=prominence)
@@ -1011,6 +1011,8 @@ def is_extended_hours() -> bool:
 @st.cache_data(ttl=5, show_spinner=False)
 def get_current_price(ticker: str) -> float:
     """Get real-time price from multiple free sources"""
+    if not is_extended_hours():
+        st.warning("Market is closed. Using last available price.")
     # Try Polygon first if available
     if CONFIG['POLYGON_API_KEY']:
         try:
@@ -2245,7 +2247,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 for level in sr_levels[tf_key].get('resistance', []):
                     if isinstance(level, (int, float)) and not math.isnan(level):
                         fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
-                                    annotation_text=f"R: {level:.2f}", annotation_position="top right")
+                                     annotation_text=f"R: {level:.2f}", annotation_position="top right")
      
         fig.update_layout(
             height=800,
@@ -2607,11 +2609,11 @@ ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM"
 # Tab content
 with tab1: # General tab
     st.header("🎯 Enhanced Options Signals")
-  
+ 
     if ticker:
         # Enhanced header with metrics
         col1, col2, col3, col4, col5 = st.columns(5)
-      
+     
         with col1:
             st.session_state.status_placeholder = st.empty()
         with col2:
@@ -2622,7 +2624,7 @@ with tab1: # General tab
             st.session_state.refresh_placeholder = st.empty()
         with col5:
             manual_refresh = st.button("🔄 Refresh", key="manual_refresh")
-      
+     
         # Update real-time metrics
         current_price = get_current_price(ticker)
         # Initialize session state variables if needed
@@ -2644,7 +2646,7 @@ with tab1: # General tab
             st.session_state.frozen_cache_age = int(time.time() - st.session_state.last_refresh)
         # Update the status for next check
         st.session_state.last_extended_hours_status = current_extended_hours
-      
+     
         # Update placeholders
         if is_market_open():
             st.session_state.status_placeholder.success("🟢 OPEN")
@@ -2652,27 +2654,27 @@ with tab1: # General tab
             st.session_state.status_placeholder.warning("🟡 PRE")
         else:
             st.session_state.status_placeholder.info("🔴 CLOSED")
-      
+     
         if current_price > 0:
             st.session_state.price_placeholder.metric("Price", f"${current_price:.2f}")
         else:
             st.session_state.price_placeholder.error("❌ Price Error")
-      
+     
         st.session_state.cache_placeholder.metric("Cache Age", f"{cache_age}s")
         st.session_state.refresh_placeholder.metric("Refreshes", st.session_state.refresh_counter)
-      
+     
         if manual_refresh:
             st.cache_data.clear()
             st.session_state.last_refresh = time.time()
             st.session_state.refresh_counter += 1
             st.rerun()
-      
+     
         # UPDATED: Enhanced Support/Resistance Analysis with better error handling
         if not st.session_state.sr_data or st.session_state.last_ticker != ticker:
             with st.spinner("🔍 Analyzing support/resistance levels..."):
                 st.session_state.sr_data = analyze_support_resistance_enhanced(ticker)
                 st.session_state.last_ticker = ticker
-      
+     
         try:
             with st.spinner("🔄 Loading enhanced analysis..."):
                 # Get stock data with indicators (cached)
