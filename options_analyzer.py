@@ -1083,18 +1083,18 @@ def get_current_price(ticker: str) -> float:
     return 0.0
 # NEW: Combined stock data and indicators function for better caching
 # -------------------------------
-# Main: Fetch Stock Data
+# Stock Data Fetcher with Caching
 # -------------------------------
 @st.cache_data(ttl=CONFIG['STOCK_CACHE_TTL'], show_spinner=False)
 def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
     """Fetch stock data and compute all indicators in one cached function"""
     try:
-        # ⏸ Stop if market is closed
+        # Market closed → return last known dataset
         if not is_market_open():
-            st.warning("⏸ Market is closed. The app will resume at 4:00 AM ET.")
-            st.stop()
+            st.warning("⏸ Market is closed. Showing last available data.")
+            return st.session_state.get(f"{ticker}_last_data", pd.DataFrame())
 
-        # Determine time range
+        # Market open → fetch new data
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=10)
 
@@ -1111,11 +1111,10 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         if data.empty:
             return pd.DataFrame()
 
-        # Handle multi-level columns - flatten them
+        # Handle multi-level columns
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
 
-        # Reset index to make Datetime a column
         data = data.reset_index()
 
         # Ensure datetime column exists
@@ -1139,7 +1138,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
             st.error(f"Missing required columns: {missing_cols}")
             return pd.DataFrame()
 
-        # Clean and validate data
+        # Clean and validate
         data = data.dropna(how='all')
         for col in required_cols:
             data[col] = pd.to_numeric(data[col], errors='coerce')
@@ -1148,7 +1147,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         if len(data) < CONFIG['MIN_DATA_POINTS']:
             return pd.DataFrame()
 
-        # Handle timezone
+        # Timezone handling
         eastern = pytz.timezone('US/Eastern')
         datetime_series = data['Datetime']
         if hasattr(datetime_series, 'dt') and datetime_series.dt.tz is None:
@@ -1156,13 +1155,13 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         datetime_series = datetime_series.dt.tz_convert(eastern)
         data['Datetime'] = datetime_series
 
-        # Add premarket indicator
+        # Premarket indicator
         data['premarket'] = (
             (data['Datetime'].dt.time >= CONFIG['PREMARKET_START']) &
             (data['Datetime'].dt.time < CONFIG['MARKET_OPEN'])
         )
 
-        # Reindex to fill missing bars
+        # Fill missing bars
         data = data.set_index('Datetime')
         data = data.reindex(
             pd.date_range(
@@ -1174,7 +1173,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         data[['Open', 'High', 'Low', 'Close']] = data[['Open', 'High', 'Low', 'Close']].ffill()
         data['Volume'] = data['Volume'].fillna(0)
 
-        # Recompute premarket after reindex
+        # Recompute premarket
         data['premarket'] = (
             (data.index.time >= CONFIG['PREMARKET_START']) &
             (data.index.time < CONFIG['MARKET_OPEN'])
@@ -1183,121 +1182,19 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
 
         data = data.reset_index().rename(columns={'index': 'Datetime'})
 
-        # Compute all indicators
-        return compute_all_indicators(data)
+        # Compute indicators
+        data = compute_all_indicators(data)
+
+        # ✅ Save last dataset in session state for reuse when market is closed
+        st.session_state[f"{ticker}_last_data"] = data
+
+        return data
 
     except Exception as e:
         st.error(f"Error fetching stock data: {str(e)}")
         import traceback
         st.error(f"Traceback: {traceback.format_exc()}")
         return pd.DataFrame()
-
-
-# -------------------------------
-# Indicators Computation
-# -------------------------------
-def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute all technical indicators efficiently"""
-    if df.empty:
-        return df
-
-    try:
-        df = df.copy()
-
-        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-        for col in required_cols:
-            if col not in df.columns:
-                return pd.DataFrame()
-
-        # Convert to numeric
-        for col in required_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df = df.dropna(subset=required_cols)
-
-        if df.empty:
-            return df
-
-        close = df['Close'].astype(float)
-        high = df['High'].astype(float)
-        low = df['Low'].astype(float)
-        volume = df['Volume'].astype(float)
-
-        # EMAs
-        for period in [9, 20, 50, 200]:
-            if len(close) >= period:
-                ema = EMAIndicator(close=close, window=period)
-                df[f'EMA_{period}'] = ema.ema_indicator()
-            else:
-                df[f'EMA_{period}'] = np.nan
-
-        # RSI
-        if len(close) >= 14:
-            rsi = RSIIndicator(close=close, window=14)
-            df['RSI'] = rsi.rsi()
-        else:
-            df['RSI'] = np.nan
-
-        # VWAP by session
-        df['VWAP'] = np.nan
-        for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
-            if group.empty:
-                continue
-
-            # Regular hours VWAP
-            regular = group[~group['premarket']]
-            if not regular.empty:
-                typical_price = (regular['High'] + regular['Low'] + regular['Close']) / 3
-                vwap_cumsum = (regular['Volume'] * typical_price).cumsum()
-                volume_cumsum = regular['Volume'].cumsum()
-                regular_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
-                df.loc[regular.index, 'VWAP'] = regular_vwap
-
-            # Premarket VWAP
-            premarket = group[group['premarket']]
-            if not premarket.empty:
-                typical_price = (premarket['High'] + premarket['Low'] + premarket['Close']) / 3
-                vwap_cumsum = (premarket['Volume'] * typical_price).cumsum()
-                volume_cumsum = premarket['Volume'].cumsum()
-                premarket_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
-                df.loc[premarket.index, 'VWAP'] = premarket_vwap
-
-        # ATR
-        if len(close) >= 14:
-            atr = AverageTrueRange(high=high, low=low, close=close, window=14)
-            df['ATR'] = atr.average_true_range()
-            current_price = df['Close'].iloc[-1]
-            if current_price > 0:
-                df['ATR_pct'] = df['ATR'] / close
-            else:
-                df['ATR_pct'] = np.nan
-        else:
-            df['ATR'] = np.nan
-            df['ATR_pct'] = np.nan
-
-        # MACD & Keltner Channels
-        if len(close) >= 26:
-            macd = MACD(close=close)
-            df['MACD'] = macd.macd()
-            df['MACD_signal'] = macd.macd_signal()
-            df['MACD_hist'] = macd.macd_diff()
-
-            kc = KeltnerChannel(high=high, low=low, close=close)
-            df['KC_upper'] = kc.keltner_channel_hband()
-            df['KC_middle'] = kc.keltner_channel_mband()
-            df['KC_lower'] = kc.keltner_channel_lband()
-        else:
-            for col in ['MACD', 'MACD_signal', 'MACD_hist', 'KC_upper', 'KC_middle', 'KC_lower']:
-                df[col] = np.nan
-
-        # Volume averages
-        df = calculate_volume_averages(df)
-
-        return df
-
-    except Exception as e:
-        st.error(f"Error in compute_all_indicators: {str(e)}")
-        return pd.DataFrame()
-
 
 # -------------------------------
 # Volume Averages
