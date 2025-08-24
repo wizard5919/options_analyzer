@@ -27,29 +27,6 @@ except ImportError:
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 # =============================
-# AUTO-REFRESH MARKET HOURS FUNCTION (NEW)
-# =============================
-def should_allow_auto_refresh():
-    """Check if auto-refresh should be allowed based on market hours"""
-    try:
-        eastern = pytz.timezone('US/Eastern')
-        now = datetime.datetime.now(eastern)
-        now_time = now.time()
-        
-        # Check if it's a weekend
-        if now.weekday() >= 5: # Saturday (5) or Sunday (6)
-            return False
-        
-        # Check if it's within allowed hours (4 AM to 8 PM ET)
-        market_start = datetime.time(4, 0) # 4 AM ET
-        market_end = datetime.time(20, 0) # 8 PM ET
-        
-        return market_start <= now_time <= market_end
-    except Exception:
-        # In case of any error (e.g., pytz not working, etc.), default to not allowing auto-refresh
-        return False
-
-# =============================
 # STREAMLIT PAGE CONFIGURATION
 # =============================
 st.set_page_config(
@@ -3381,33 +3358,25 @@ with tab6:  # Forum tab
             st.caption(f"Replies: {thread['replies']} | Last post: {thread['last_post']}")
             st.divider()
 
-# --- AUTO-REFRESH EXECUTION ---
-# This section must be at the end of the script to trigger st.rerun()
-ticker = st.session_state.get('ticker_input', ticker) # Get the current ticker value
-
-# Enhanced auto-refresh logic with market hours control (MODIFIED)
+# Enhanced auto-refresh logic with better rate limiting
 if st.session_state.get('auto_refresh_enabled', False) and ticker:
     current_time = time.time()
     elapsed = current_time - st.session_state.last_refresh
-    
-    # Check if we should allow auto-refresh based on market hours
-    if not should_allow_auto_refresh():
-        st.info("⏸️ Auto-refresh paused - outside market hours (4 AM - 8 PM ET, weekdays)")
-    else:
-        # Enforce minimum refresh interval
-        min_interval = max(st.session_state.refresh_interval, CONFIG['MIN_REFRESH_INTERVAL'])
-        
-        if elapsed > min_interval:
-            st.session_state.last_refresh = current_time
-            st.session_state.refresh_counter += 1
-            
-            # Clear only specific cache keys to avoid clearing user inputs
-            st.cache_data.clear()
-            
-            # Show refresh notification
-            st.success(f"🔄 Auto-refreshed at {datetime.datetime.now().strftime('%H:%M:%S')}")
-            time.sleep(0.5) # Brief pause to show notification
-            st.rerun()
+   
+    # Enforce minimum refresh interval
+    min_interval = max(st.session_state.refresh_interval, CONFIG['MIN_REFRESH_INTERVAL'])
+   
+    if elapsed > min_interval:
+        st.session_state.last_refresh = current_time
+        st.session_state.refresh_counter += 1
+       
+        # Clear only specific cache keys to avoid clearing user inputs
+        st.cache_data.clear()
+       
+        # Show refresh notification
+        st.success(f"🔄 Auto-refreshed at {datetime.datetime.now().strftime('%H:%M:%S')}")
+        time.sleep(0.5) # Brief pause to show notification
+        st.rerun()
 
 else:
     # Enhanced welcome screen
