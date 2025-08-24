@@ -2049,8 +2049,15 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
 def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str = "5m"):
     """Create TradingView-style chart with indicators using Plotly"""
     if df.empty:
+        st.error("DataFrame is empty - cannot create chart")
         return None
-   
+    
+    # Make sure we have a Datetime column
+    if 'Datetime' not in df.columns:
+        st.error("Datetime column not found in DataFrame")
+        st.write("Available columns:", df.columns.tolist())
+        return None
+    
     try:
         # Create subplots with 3 rows
         fig = make_subplots(
@@ -2060,7 +2067,11 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             row_heights=[0.6, 0.2, 0.2],
             specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
         )
-       
+        
+        # Ensure Datetime is in proper format
+        if not pd.api.types.is_datetime64_any_dtype(df['Datetime']):
+            df['Datetime'] = pd.to_datetime(df['Datetime'])
+        
         # Candlestick chart
         fig.add_trace(
             go.Candlestick(
@@ -2073,20 +2084,33 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             ),
             row=1, col=1
         )
-       
+        
         # EMAs
-        if 'EMA_9' in df.columns and not df['EMA_9'].isna().all():
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_9'], name='EMA 9', line=dict(color='blue')), row=1, col=1)
-        if 'EMA_20' in df.columns and not df['EMA_20'].isna().all():
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['EMA_20'], name='EMA 20', line=dict(color='orange')), row=1, col=1)
-       
+        for period in [9, 20, 50, 200]:
+            col_name = f'EMA_{period}'
+            if col_name in df.columns and not df[col_name].isna().all():
+                fig.add_trace(go.Scatter(
+                    x=df['Datetime'], 
+                    y=df[col_name], 
+                    name=f'EMA {period}', 
+                    line=dict(color=['blue', 'orange', 'green', 'red'][[9, 20, 50, 200].index(period)])
+                ), row=1, col=1)
+        
         # Keltner Channels
-        if 'KC_upper' in df.columns and not df['KC_upper'].isna().all():
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_upper'], name='KC Upper', line=dict(color='red', dash='dash')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_middle'], name='KC Middle', line=dict(color='green')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['KC_lower'], name='KC Lower', line=dict(color='red', dash='dash')), row=1, col=1)
-       
-        # NEW: Add VWAP line
+        for col, color, name in [
+            ('KC_upper', 'red', 'KC Upper'),
+            ('KC_middle', 'green', 'KC Middle'),
+            ('KC_lower', 'red', 'KC Lower')
+        ]:
+            if col in df.columns and not df[col].isna().all():
+                fig.add_trace(go.Scatter(
+                    x=df['Datetime'], 
+                    y=df[col], 
+                    name=name, 
+                    line=dict(color=color, dash='dash' if col != 'KC_middle' else 'solid')
+                ), row=1, col=1)
+        
+        # VWAP line
         if 'VWAP' in df.columns and not df['VWAP'].isna().all():
             fig.add_trace(go.Scatter(
                 x=df['Datetime'],
@@ -2094,42 +2118,46 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 name='VWAP',
                 line=dict(color='cyan', width=2)
             ), row=1, col=1)
-       
+        
         # Volume
         fig.add_trace(
             go.Bar(x=df['Datetime'], y=df['Volume'], name='Volume', marker_color='gray'),
             row=1, col=1, secondary_y=True
         )
-       
+        
         # RSI
         if 'RSI' in df.columns and not df['RSI'].isna().all():
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=2, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-       
+        
         # MACD
         if 'MACD' in df.columns and not df['MACD'].isna().all():
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=3, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_signal'], name='Signal', line=dict(color='orange')), row=3, col=1)
-            fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color='gray'), row=3, col=1)
-       
+            if 'MACD_signal' in df.columns and not df['MACD_signal'].isna().all():
+                fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_signal'], name='Signal', line=dict(color='orange')), row=3, col=1)
+            if 'MACD_hist' in df.columns and not df['MACD_hist'].isna().all():
+                fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color='gray'), row=3, col=1)
+        
         # Add support and resistance levels if available
         if sr_levels:
-            # Add support levels
-            for level in sr_levels.get(timeframe.replace('m', 'min'), {}).get('support', []):
-                if isinstance(level, (int, float)) and not math.isnan(level):
-                    fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
-                                 annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
-           
-            # Add resistance levels
-            for level in sr_levels.get(timeframe.replace('m', 'min'), {}).get('resistance', []):
-                if isinstance(level, (int, float)) and not math.isnan(level):
-                    fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
-                                 annotation_text=f"R: {level:.2f}", annotation_position="top right")
-       
+            tf_key = timeframe.replace('m', 'min').replace('H', 'h').replace('D', 'd').replace('W', 'w').replace('M', 'm')
+            if tf_key in sr_levels:
+                # Add support levels
+                for level in sr_levels[tf_key].get('support', []):
+                    if isinstance(level, (int, float)) and not math.isnan(level):
+                        fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
+                                     annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
+                
+                # Add resistance levels
+                for level in sr_levels[tf_key].get('resistance', []):
+                    if isinstance(level, (int, float)) and not math.isnan(level):
+                        fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
+                                     annotation_text=f"R: {level:.2f}", annotation_position="top right")
+        
         fig.update_layout(
             height=800,
-            title=f'{ticker} Price Chart - {timeframe}',
+            title=f'Price Chart - {timeframe}',
             xaxis_rangeslider_visible=False,
             showlegend=True,
             template='plotly_dark',
@@ -2137,17 +2165,19 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             paper_bgcolor='#131722',
             font=dict(color='#d1d4dc')
         )
-       
+        
         fig.update_yaxes(title_text="Price", row=1, col=1)
         fig.update_yaxes(title_text="Volume", row=1, col=1, secondary_y=True)
         fig.update_yaxes(title_text="RSI", row=2, col=1)
         fig.update_yaxes(title_text="MACD", row=3, col=1)
-       
+        
         return fig
+        
     except Exception as e:
         st.error(f"Error creating chart: {str(e)}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
         return None
-
 # =============================
 # NEW: PERFORMANCE MONITORING FUNCTIONS
 # =============================
