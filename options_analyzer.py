@@ -59,21 +59,21 @@ st.markdown("""
         background-color: #1e222d;
     }
    
-    .stTabs [data-baseweb="tab"] {
-        height: 35px;
-        white-space: pre-wrap;
-        background-color: #1e222d;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        color: #758696;
-        font-weight: 500;
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
     }
-   
+    
+    .stTabs [data-baseweb="tab"] {
+        padding: 10px 20px;
+        font-weight: bold;
+        background-color: #1e222d;
+        border-radius: 4px;
+        color: #2962ff;
+    }
+    
     .stTabs [aria-selected="true"] {
-        background-color: #131722;
-        color: #ebebeb;
+        background-color: #2962ff;
+        color: white;
     }
    
     /* Button styling */
@@ -227,7 +227,7 @@ CONFIG = {
         'scalping': ['1min', '5min'],
         'intraday': ['15min', '30min', '1h']
     },
-    'SR_SENSITIVITY': { # This was missing a closing brace
+    'SR_SENSITIVITY': {
         'SR_WINDOW_SIZES': {
             '5min': 3,
             '15min': 5,
@@ -237,13 +237,12 @@ CONFIG = {
             '4h': 6,
             'daily': 20
         },
-        # NEW: Liquidity thresholds
         'LIQUIDITY_THRESHOLDS': {
             'min_open_interest': 100,
             'min_volume': 100,
-            'max_bid_ask_spread_pct': 0.1 # 10%
+            'max_bid_ask_spread_pct': 0.1
         }
-    } # Added this closing brace
+    }
 }
 
 # Initialize API call log in session state
@@ -492,7 +491,7 @@ def calculate_support_resistance_enhanced(data: pd.DataFrame, timeframe: str, cu
     try:
         # Get configuration for this timeframe
         base_sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
-        window_size = CONFIG['SR_WINDOW_SIZES'].get(timeframe, 5)
+        window_size = CONFIG['SR_SENSITIVITY']['SR_WINDOW_SIZES'].get(timeframe, 5)
       
         # Calculate dynamic sensitivity
         dynamic_sensitivity = calculate_dynamic_sensitivity(data, base_sensitivity)
@@ -2436,24 +2435,25 @@ if 'rate_limited_until' in st.session_state:
 st.title("📈 Options Analyzer Pro")
 st.markdown("**TradingView-Style Layout** • **Professional Analysis** • **Real-time Signals**")
 
+# Add ticker input and welcome message
+ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+
+if not ticker:
+    st.info("👋 Welcome! Enter a stock ticker above to begin enhanced options analysis.")
+
 # Create top navigation tabs with blue color
 st.markdown("""
 <style>
     .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-        background-color: #1e222d;
+        gap: 10px;
     }
     
     .stTabs [data-baseweb="tab"] {
-        height: 35px;
-        white-space: pre-wrap;
+        padding: 10px 20px;
+        font-weight: bold;
         background-color: #1e222d;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        color: #758696;
-        font-weight: 500;
+        border-radius: 4px;
+        color: #2962ff;
     }
     
     .stTabs [aria-selected="true"] {
@@ -2467,9 +2467,6 @@ st.markdown("""
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "General", "Chart", "News & Analysis", "Financials", "Technical", "Forum"
 ])
-
-# Add ticker input and welcome message
-ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
 
 if not ticker:
     st.info("👋 Welcome! Enter a stock ticker above to begin enhanced options analysis.")
