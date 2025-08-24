@@ -3316,7 +3316,3 @@ else:
         - **Conservative Refresh**: Use 120s+ intervals to avoid limits
         - **Focused Analysis**: Analyze one ticker at a time for best performance
         """)
-@st.cache_data(ttl=60*5)  # Cache last 5 minutes
-def fetch_stock_data(ticker: str, period="1d", interval="1m") -> pd.DataFrame:
-    data = yf.download(tickers=ticker, period=period, interval=interval)
-    return data
