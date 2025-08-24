@@ -3069,7 +3069,7 @@ with tab2:  # Chart tab
    
     if ticker:
         # Timeframe selector
-        timeframes = ["5m", "15m", "30m", "1H", "4H", "1D", "1W", "1M"]
+        timeframes = ["5m", "15m", "30m", "1H", "1D", "1W", "1M"]
         selected_timeframe = st.selectbox("Select Timeframe:", timeframes, index=0)
         st.session_state.current_timeframe = selected_timeframe
        
@@ -3079,7 +3079,7 @@ with tab2:  # Chart tab
                 # Convert timeframe to yfinance format
                 tf_mapping = {
                     "5m": "5m", "15m": "15m", "30m": "30m", 
-                    "1H": "60m", "4H": "240m", "1D": "1d", 
+                   "1H": "60m", "1D": "1d", 
                     "1W": "1wk", "1M": "1mo"
                 }
                
