@@ -514,8 +514,6 @@ def calculate_support_resistance_enhanced(data: pd.DataFrame, timeframe: str, cu
         if 'VWAP' in data.columns:
             vwap = data['VWAP'].iloc[-1]
             if not pd.isna(vwap):
-                # VWAP is a significant level - add it to both support and resistance
-                # since it can act as both depending on price position
                 support_levels.append(vwap)
                 resistance_levels.append(vwap)
     
@@ -2457,7 +2455,7 @@ with st.sidebar:
             )
             SIGNAL_THRESHOLDS['put']['condition_weights']['trend'] = st.slider(
                 "Trend Weight", 0.1, 0.3, 0.20, 0.05,
-                help="Bearish EMA alignment",
+                help="Bearish EMA alignment strength",
                 key="put_trend_weight"
             )
     
@@ -2606,16 +2604,15 @@ with tab1: # General tab
             with st.spinner("🔄 Loading enhanced analysis..."):
                 # Load last data regardless of market status
                 data = fetch_stock_data(ticker)
+                df = compute_all_indicators(data)
 
-                # Auto-refresh during market hours
-                if is_market_open():
-                    st.success("🟢 Market is open. Live updates enabled.")
-                    # Auto-refresh every 10 seconds (adjust as needed)
-                    time.sleep(10)
-                    st.rerun()
-                else:
-                    st.warning("⏸ Market is closed. Live updates paused until 9:30 AM ET.")
-            
+                if df.empty:
+                    st.error("❌ Unable to fetch stock data. Please check ticker or wait for rate limits.")
+                    st.stop()
+
+                current_price = df.iloc[-1]['Close']
+                st.success(f"✅ **{ticker}** - ${current_price:.2f}")
+
                 # Volatility assessment
                 atr_pct = df.iloc[-1].get('ATR_pct', 0)
                 if not pd.isna(atr_pct):
@@ -2632,7 +2629,7 @@ with tab1: # General tab
                         vol_color = "🟠"
                 
                     st.info(f"{vol_color} **Volatility**: {atr_pct*100:.2f}% ({vol_status}) - Thresholds auto-adjust")
-            
+
                 # Get full options chain with real data priority and proper UI handling
                 with st.spinner("📥 Fetching REAL options data..."):
                     expiries, all_calls, all_puts = get_full_options_chain(ticker)
@@ -2699,8 +2696,8 @@ with tab1: # General tab
                         st.warning("⚠️ Using demo data for interface testing only")
                     else:
                         st.success(f"✅ **REAL OPTIONS DATA** loaded: {len(all_calls)} calls, {len(all_puts)} puts")
-                    else:
-                        st.stop()
+                else:
+                    st.stop()
             
                 # Expiry selection
                 col1, col2 = st.columns(2)
@@ -2965,6 +2962,15 @@ with tab1: # General tab
                     st.metric("🎯 Directional Bias", directional_bias)
                     st.caption(f"Strength: {bias_strength:.1f}% difference")
             
+                # Auto-refresh during market hours
+                if is_market_open():
+                    st.success("🟢 Market is open. Live updates enabled.")
+                    # Auto-refresh every 10 seconds (adjust as needed)
+                    time.sleep(10)
+                    st.rerun()
+                else:
+                    st.warning("⏸ Market is closed. Live updates paused until 9:30 AM ET.")
+            
         except Exception as e:
             st.error(f"❌ Error in signal analysis: {str(e)}")
             st.error("Please try refreshing or check your ticker symbol.")
@@ -3129,14 +3135,14 @@ with tab4: # Financials tab
                 
                     if 'currentRatio' in info:
                         st.metric("Current Ratio", f"{info['currentRatio']:.2f}")
-                
+            
                 with col4:
                     if 'dividendYield' in info:
                         st.metric("Dividend Yield", f"{info['dividendYield']*100:.2f}%")
                 
                     if 'beta' in info:
                         st.metric("Beta", f"{info['beta']:.2f}")
-                
+            
                 # Financial statements
                 st.subheader("Financial Statements")
                 statement_type = st.selectbox("Select Statement", ["Income Statement", "Balance Sheet", "Cash Flow"])
@@ -3247,7 +3253,7 @@ with tab6: # Forum tab
     
         for thread in threads:
             st.write(f"**{thread['title']}**")
-            st.write(f"Replies: {thread['replies']} | Last post: {thread['last_post']}")
+            st.caption(f"Replies: {thread['replies']} | Last post: {thread['last_post']}")
             st.divider()
 # Enhanced auto-refresh logic with better rate limiting
 if st.session_state.get('auto_refresh_enabled', False) and ticker and is_extended_hours():
