@@ -2106,6 +2106,15 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             st.error("Failed to create 'Datetime' column")
             return None
    
+        # Get latest values for annotations
+        latest = df.iloc[-1]
+        current_price = latest['Close']
+        current_volume = latest.get('Volume', 0)
+        macd_val = latest.get('MACD', 0)
+        macd_signal = latest.get('MACD_signal', 0)
+        macd_hist = latest.get('MACD_hist', 0)
+        rsi_val = latest.get('RSI', 0)
+   
         # Proceed with chart creation
         # Create subplots with 4 rows: Price, Volume, MACD, RSI
         fig = make_subplots(
@@ -2173,6 +2182,16 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 go.Bar(x=df['Datetime'], y=df['Volume'], name='Volume', marker_color=colors),
                 row=2, col=1
             )
+            # Add Volume annotation
+            fig.add_annotation(
+                text=f"VOL {current_volume:.0f}",
+                xref="paper", yref="paper",
+                x=0.01, y=0.95,  # Position near top-left of volume pane
+                showarrow=False,
+                font=dict(color="white", size=12),
+                align="left",
+                row=2, col=1
+            )
        
         # MACD
         if 'MACD' in df.columns and not df['MACD'].isna().all():
@@ -2182,12 +2201,32 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             if 'MACD_hist' in df.columns and not df['MACD_hist'].isna().all():
                 hist_colors = ['green' if val >= 0 else 'red' for val in df['MACD_hist']]
                 fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color=hist_colors), row=3, col=1)
+            # Add MACD annotation
+            fig.add_annotation(
+                text=f"MACD (12,26,9) {macd_val:.3f} {macd_signal:.3f} {macd_hist:.3f}",
+                xref="paper", yref="paper",
+                x=0.01, y=0.95,
+                showarrow=False,
+                font=dict(color="white", size=12),
+                align="left",
+                row=3, col=1
+            )
        
         # RSI
         if 'RSI' in df.columns and not df['RSI'].isna().all():
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=4, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
+            # Add RSI annotation
+            fig.add_annotation(
+                text=f"RSI (14) {rsi_val:.2f}",
+                xref="paper", yref="paper",
+                x=0.01, y=0.95,
+                showarrow=False,
+                font=dict(color="white", size=12),
+                align="left",
+                row=4, col=1
+            )
        
         # Add support and resistance levels if available
         if sr_levels:
@@ -2218,10 +2257,11 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             yaxis=dict(showgrid=False)   # Hide y-grid
         )
        
-        fig.update_yaxes(title_text="Price", row=1, col=1)
-        fig.update_yaxes(title_text="Volume", row=2, col=1)
-        fig.update_yaxes(title_text="MACD", row=3, col=1)
-        fig.update_yaxes(title_text="RSI", row=4, col=1)
+        # Move all Y-axes to right and hide left
+        for row in [1,2,3,4]:
+            fig.update_yaxes(title_text="Price" if row==1 else "Volume" if row==2 else "MACD" if row==3 else "RSI",
+                             row=row, col=1, side='right', showticklabels=True)
+            fig.update_yaxes(showticklabels=False, side='left', row=row, col=1)  # Hide left ticks
        
         return fig
        
