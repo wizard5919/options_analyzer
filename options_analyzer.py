@@ -3065,7 +3065,7 @@ with tab1:  # General tab
             st.error("Please try refreshing or check your ticker symbol.")
 
 with tab2:  # Chart tab
-   st.header("📊 Professional Chart")
+  st.header("📊 Professional Chart")
   
     if ticker:
         # Timeframe selector
