@@ -226,19 +226,21 @@ CONFIG = {
         'scalping': ['1min', '5min'],
         'intraday': ['15min', '30min', '1h']
     },
-    'SR_WINDOW_SIZES': {
-        '1min': 3,
-        '5min': 3,
-        '15min': 5,
-        '30min': 7,
-        '1h': 10
-    },
-    # NEW: Liquidity thresholds
-    'LIQUIDITY_THRESHOLDS': {
-        'min_open_interest': 100,
-        'min_volume': 100,
-        'max_bid_ask_spread_pct': 0.1 # 10%
-    }
+    'SR_SENSITIVITY': {  # This was missing a closing brace
+        'SR_WINDOW_SIZES': {
+            '1min': 3,
+            '5min': 3,
+            '15min': 5,
+            '30min': 7,
+            '1h': 10
+        },
+        # NEW: Liquidity thresholds
+        'LIQUIDITY_THRESHOLDS': {
+            'min_open_interest': 100,
+            'min_volume': 100,
+            'max_bid_ask_spread_pct': 0.1 # 10%
+        }
+    }  # Added this closing brace
 }
 
 # Initialize API call log in session state
