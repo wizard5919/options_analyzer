@@ -2078,14 +2078,31 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
     if df.empty:
         st.error("DataFrame is empty - cannot create chart")
         return None
-    
-    # Make sure we have a Datetime column
-    if 'Datetime' not in df.columns:
-        st.error("Datetime column not found in DataFrame")
-        st.write("Available columns:", df.columns.tolist())
-        return None
-    
+   
     try:
+        # NEW: Flatten MultiIndex columns if present (handles recent yfinance changes)
+        if isinstance(df.columns, pd.MultiIndex):
+            # Take the first level (e.g., 'Close' from ('Close', 'IWM'))
+            df.columns = df.columns.get_level_values(0)
+            # Drop duplicate columns if any (e.g., if 'Adj Close' exists)
+            df = df.loc[:, ~df.columns.duplicated(keep='first')]
+   
+        # NEW: Reset index to add 'Datetime' column if not present
+        if 'Datetime' not in df.columns:
+            if isinstance(df.index, pd.DatetimeIndex):
+                df = df.reset_index().rename(columns={'index': 'Datetime'})
+            else:
+                df = df.reset_index().rename(columns={'Date': 'Datetime'} if 'Date' in df.columns else {'index': 'Datetime'})
+            df['Datetime'] = pd.to_datetime(df['Datetime'])  # Ensure datetime type
+   
+        # Required columns check
+        required_cols = ['Datetime', 'Open', 'High', 'Low', 'Close']
+        missing = [col for col in required_cols if col not in df.columns]
+        if missing:
+            st.error(f"Missing required columns: {missing}")
+            return None
+   
+        # Proceed with chart creation (rest of the function remains the same)
         # Create subplots with 3 rows
         fig = make_subplots(
             rows=3, cols=1,
@@ -2094,11 +2111,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             row_heights=[0.6, 0.2, 0.2],
             specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
         )
-        
-        # Ensure Datetime is in proper format
-        if not pd.api.types.is_datetime64_any_dtype(df['Datetime']):
-            df['Datetime'] = pd.to_datetime(df['Datetime'])
-        
+       
         # Candlestick chart
         fig.add_trace(
             go.Candlestick(
@@ -2111,18 +2124,18 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             ),
             row=1, col=1
         )
-        
+       
         # EMAs
         for period in [9, 20, 50, 200]:
             col_name = f'EMA_{period}'
             if col_name in df.columns and not df[col_name].isna().all():
                 fig.add_trace(go.Scatter(
-                    x=df['Datetime'], 
-                    y=df[col_name], 
-                    name=f'EMA {period}', 
+                    x=df['Datetime'],
+                    y=df[col_name],
+                    name=f'EMA {period}',
                     line=dict(color=['blue', 'orange', 'green', 'red'][[9, 20, 50, 200].index(period)])
                 ), row=1, col=1)
-        
+       
         # Keltner Channels
         for col, color, name in [
             ('KC_upper', 'red', 'KC Upper'),
@@ -2131,12 +2144,12 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
         ]:
             if col in df.columns and not df[col].isna().all():
                 fig.add_trace(go.Scatter(
-                    x=df['Datetime'], 
-                    y=df[col], 
-                    name=name, 
+                    x=df['Datetime'],
+                    y=df[col],
+                    name=name,
                     line=dict(color=color, dash='dash' if col != 'KC_middle' else 'solid')
                 ), row=1, col=1)
-        
+       
         # VWAP line
         if 'VWAP' in df.columns and not df['VWAP'].isna().all():
             fig.add_trace(go.Scatter(
@@ -2145,19 +2158,19 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 name='VWAP',
                 line=dict(color='cyan', width=2)
             ), row=1, col=1)
-        
+       
         # Volume
         fig.add_trace(
             go.Bar(x=df['Datetime'], y=df['Volume'], name='Volume', marker_color='gray'),
             row=1, col=1, secondary_y=True
         )
-        
+       
         # RSI
         if 'RSI' in df.columns and not df['RSI'].isna().all():
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=2, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-        
+       
         # MACD
         if 'MACD' in df.columns and not df['MACD'].isna().all():
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=3, col=1)
@@ -2165,7 +2178,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_signal'], name='Signal', line=dict(color='orange')), row=3, col=1)
             if 'MACD_hist' in df.columns and not df['MACD_hist'].isna().all():
                 fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color='gray'), row=3, col=1)
-        
+       
         # Add support and resistance levels if available
         if sr_levels:
             tf_key = timeframe.replace('m', 'min').replace('H', 'h').replace('D', 'd').replace('W', 'w').replace('M', 'm')
@@ -2175,13 +2188,13 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                     if isinstance(level, (int, float)) and not math.isnan(level):
                         fig.add_hline(y=level, line_dash="dash", line_color="green", row=1, col=1,
                                      annotation_text=f"S: {level:.2f}", annotation_position="bottom right")
-                
+                      
                 # Add resistance levels
                 for level in sr_levels[tf_key].get('resistance', []):
                     if isinstance(level, (int, float)) and not math.isnan(level):
                         fig.add_hline(y=level, line_dash="dash", line_color="red", row=1, col=1,
                                      annotation_text=f"R: {level:.2f}", annotation_position="top right")
-        
+       
         fig.update_layout(
             height=800,
             title=f'Price Chart - {timeframe}',
@@ -2192,14 +2205,14 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             paper_bgcolor='#131722',
             font=dict(color='#d1d4dc')
         )
-        
+       
         fig.update_yaxes(title_text="Price", row=1, col=1)
         fig.update_yaxes(title_text="Volume", row=1, col=1, secondary_y=True)
         fig.update_yaxes(title_text="RSI", row=2, col=1)
         fig.update_yaxes(title_text="MACD", row=3, col=1)
-        
+       
         return fig
-        
+       
     except Exception as e:
         st.error(f"Error creating chart: {str(e)}")
         import traceback
