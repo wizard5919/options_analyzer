@@ -1077,7 +1077,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         # Determine time range
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=10)
-     
+
         data = yf.download(
             ticker,
             start=start,
@@ -1087,111 +1087,118 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
             progress=False,
             prepost=True
         )
-      
+
         if data.empty:
             return pd.DataFrame()
-      
+
         # Handle multi-level columns - flatten them
         if isinstance(data.columns, pd.MultiIndex):
-            # Keep only the first level of column names
             data.columns = data.columns.get_level_values(0)
-      
+
         # Reset index to make Datetime a column
         data = data.reset_index()
-      
+
         # Check if we have a datetime column and rename it properly
         datetime_col = None
         for col in data.columns:
             if col.lower() in ['date', 'datetime', 'time', 'index']:
                 datetime_col = col
                 break
-              
+
         if datetime_col and datetime_col != 'Datetime':
             data = data.rename(columns={datetime_col: 'Datetime'})
         elif 'Datetime' not in data.columns:
-            # If no datetime column found, create one from the index
             data = data.reset_index()
             if 'index' in data.columns:
                 data = data.rename(columns={'index': 'Datetime'})
-      
-        # Ensure we have required columns
+
+        # Ensure required columns exist
         required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         missing_cols = [col for col in required_cols if col not in data.columns]
         if missing_cols:
             st.error(f"Missing required columns: {missing_cols}")
             return pd.DataFrame()
-      
+
         # Clean and validate data
         data = data.dropna(how='all')
-     
         for col in required_cols:
             data[col] = pd.to_numeric(data[col], errors='coerce')
-      
         data = data.dropna(subset=required_cols)
-     
+
         if len(data) < CONFIG['MIN_DATA_POINTS']:
             return pd.DataFrame()
-     
-        # Handle timezone - ensure we're working with a Series, not DataFrame
+
+        # Handle timezone
         eastern = pytz.timezone('US/Eastern')
-     
-        # Make sure we're working with a Series, not DataFrame
         datetime_series = data['Datetime']
         if hasattr(datetime_series, 'dt') and datetime_series.dt.tz is None:
             datetime_series = datetime_series.dt.tz_localize(pytz.utc)
-     
         datetime_series = datetime_series.dt.tz_convert(eastern)
         data['Datetime'] = datetime_series
-     
+
         # Add premarket indicator
-        data['premarket'] = (data['Datetime'].dt.time >= CONFIG['PREMARKET_START']) & (data['Datetime'].dt.time < CONFIG['MARKET_OPEN'])
-     
-        # Set Datetime as index for reindexing
+        data['premarket'] = (
+            (data['Datetime'].dt.time >= CONFIG['PREMARKET_START']) &
+            (data['Datetime'].dt.time < CONFIG['MARKET_OPEN'])
+        )
+
+        # Reindex to fill missing bars
         data = data.set_index('Datetime')
-        data = data.reindex(pd.date_range(start=data.index.min(), end=data.index.max(), freq='5T')) # Fill missing bars
-        data[['Open', 'High', 'Low', 'Close']] = data[['Open', 'High', 'Low', 'Close']].ffill() # Forward-fill prices
-        data['Volume'] = data['Volume'].fillna(0) # Zero volume for gaps
-      
+        data = data.reindex(
+            pd.date_range(
+                start=data.index.min(),
+                end=data.index.max(),
+                freq='5T'
+            )
+        )
+        data[['Open', 'High', 'Low', 'Close']] = data[['Open', 'High', 'Low', 'Close']].ffill()
+        data['Volume'] = data['Volume'].fillna(0)
+
         # Recompute premarket after reindex
-        data['premarket'] = (data.index.time >= CONFIG['PREMARKET_START']) & (data.index.time < CONFIG['MARKET_OPEN'])
+        data['premarket'] = (
+            (data.index.time >= CONFIG['PREMARKET_START']) &
+            (data.index.time < CONFIG['MARKET_OPEN'])
+        )
         data['premarket'] = data['premarket'].fillna(False)
-      
+
         data = data.reset_index().rename(columns={'index': 'Datetime'})
-     
-        # Compute all indicators in one go
+
+        # Compute all indicators
         return compute_all_indicators(data)
-     
+
     except Exception as e:
         st.error(f"Error fetching stock data: {str(e)}")
         import traceback
         st.error(f"Traceback: {traceback.format_exc()}")
         return pd.DataFrame()
+
+
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Compute all technical indicators efficiently"""
     if df.empty:
         return df
- 
+
     try:
         df = df.copy()
-     
+
         required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         for col in required_cols:
             if col not in df.columns:
                 return pd.DataFrame()
-     
+
         # Convert to numeric
         for col in required_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-     
         df = df.dropna(subset=required_cols)
-     
+
         if df.empty:
             return df
-     
+
         close = df['Close'].astype(float)
         high = df['High'].astype(float)
         low = df['Low'].astype(float)
         volume = df['Volume'].astype(float)
+
         # EMAs
         for period in [9, 20, 50, 200]:
             if len(close) >= period:
@@ -1199,20 +1206,21 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 df[f'EMA_{period}'] = ema.ema_indicator()
             else:
                 df[f'EMA_{period}'] = np.nan
-         
+
         # RSI
         if len(close) >= 14:
             rsi = RSIIndicator(close=close, window=14)
             df['RSI'] = rsi.rsi()
         else:
             df['RSI'] = np.nan
-        # VWAP calculation by session
+
+        # VWAP by session
         df['VWAP'] = np.nan
         for session, group in df.groupby(pd.Grouper(key='Datetime', freq='D')):
             if group.empty:
                 continue
-         
-            # Calculate VWAP for regular hours
+
+            # Regular hours VWAP
             regular = group[~group['premarket']]
             if not regular.empty:
                 typical_price = (regular['High'] + regular['Low'] + regular['Close']) / 3
@@ -1220,8 +1228,8 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 volume_cumsum = regular['Volume'].cumsum()
                 regular_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
                 df.loc[regular.index, 'VWAP'] = regular_vwap
-         
-            # Calculate VWAP for premarket
+
+            # Premarket VWAP
             premarket = group[group['premarket']]
             if not premarket.empty:
                 typical_price = (premarket['High'] + premarket['Low'] + premarket['Close']) / 3
@@ -1229,12 +1237,11 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 volume_cumsum = premarket['Volume'].cumsum()
                 premarket_vwap = np.where(volume_cumsum != 0, vwap_cumsum / volume_cumsum, np.nan)
                 df.loc[premarket.index, 'VWAP'] = premarket_vwap
-     
+
         # ATR
         if len(close) >= 14:
             atr = AverageTrueRange(high=high, low=low, close=close, window=14)
             df['ATR'] = atr.average_true_range()
-            # Fix: Add check for zero/negative current price
             current_price = df['Close'].iloc[-1]
             if current_price > 0:
                 df['ATR_pct'] = df['ATR'] / close
@@ -1243,14 +1250,14 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df['ATR'] = np.nan
             df['ATR_pct'] = np.nan
-     
-        # MACD and Keltner Channels
+
+        # MACD & Keltner Channels
         if len(close) >= 26:
             macd = MACD(close=close)
             df['MACD'] = macd.macd()
             df['MACD_signal'] = macd.macd_signal()
             df['MACD_hist'] = macd.macd_diff()
-         
+
             kc = KeltnerChannel(high=high, low=low, close=close)
             df['KC_upper'] = kc.keltner_channel_hband()
             df['KC_middle'] = kc.keltner_channel_mband()
@@ -1258,23 +1265,25 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         else:
             for col in ['MACD', 'MACD_signal', 'MACD_hist', 'KC_upper', 'KC_middle', 'KC_lower']:
                 df[col] = np.nan
-     
-        # Calculate volume averages
+
+        # Volume averages
         df = calculate_volume_averages(df)
-     
+
         return df
-     
+
     except Exception as e:
         st.error(f"Error in compute_all_indicators: {str(e)}")
         return pd.DataFrame()
+
+
 def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate volume averages with separate premarket handling"""
     if df.empty:
         return df
-  
+
     df = df.copy()
     df['avg_vol'] = np.nan
-  
+
     try:
         # Group by date and calculate averages
         for date, group in df.groupby(df['Datetime'].dt.date):
@@ -1282,21 +1291,22 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
             if not regular.empty:
                 regular_avg_vol = regular['Volume'].expanding(min_periods=1).mean()
                 df.loc[regular.index, 'avg_vol'] = regular_avg_vol
-          
+
             premarket = group[group['premarket']]
             if not premarket.empty:
                 premarket_avg_vol = premarket['Volume'].expanding(min_periods=1).mean()
                 df.loc[premarket.index, 'avg_vol'] = premarket_avg_vol
-      
-        # Fill any remaining NaN values with overall average
+
+        # Fill remaining NaNs with overall average
         overall_avg = df['Volume'].mean()
         df['avg_vol'] = df['avg_vol'].fillna(overall_avg)
-      
+
     except Exception as e:
         st.warning(f"Error calculating volume averages: {str(e)}")
         df['avg_vol'] = df['Volume'].mean()
-  
+
     return df
+
 # NEW: Real data fetching with fixed session handling
 @st.cache_data(ttl=1800, show_spinner=False) # 30-minute cache for real data
 def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
