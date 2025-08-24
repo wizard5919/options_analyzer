@@ -2163,7 +2163,6 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             go.Candlestick(
                 x=df['Datetime'],
                 open=df['Open'],
-                open=df['Open'],
                 high=df['High'],
                 low=df['Low'],
                 close=df['Close'],
