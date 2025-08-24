@@ -2158,16 +2158,17 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}]]
         )
      
-         # Candlestick chart - FIXED: Removed duplicate 'open' parameter
+        # Candlestick chart
         fig.add_trace(
             go.Candlestick(
                 x=df['Datetime'],
-                open=df['Open'],  # Only one 'open' parameter
+                open=df['Open'],
                 high=df['High'],
                 low=df['Low'],
                 close=df['Close'],
                 name='Price',
-                increasing_line_color='green', decreasing_line_color='red'
+                increasing_line_color='green', decreasing_line_color='red',
+                increasing_fillcolor='green', decreasing_fillcolor='red'
             ),
             row=1, col=1
         )
