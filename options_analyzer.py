@@ -2106,14 +2106,14 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             st.error("Failed to create 'Datetime' column")
             return None
    
-        # Proceed with chart creation (rest of the function remains the same)
-        # Create subplots with 3 rows
+        # Proceed with chart creation
+        # Create subplots with 4 rows: Price, Volume, MACD, RSI
         fig = make_subplots(
-            rows=3, cols=1,
+            rows=4, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.02,
-            row_heights=[0.6, 0.2, 0.2],
-            specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
+            row_heights=[0.6, 0.15, 0.15, 0.15],
+            specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}]]
         )
        
         # Candlestick chart with TradingView-like colors
@@ -2131,7 +2131,7 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             row=1, col=1
         )
        
-        # EMAs with colors matching example (adjust to green, blue, purple, etc.)
+        # EMAs with colors matching example
         ema_colors = ['lime', 'cyan', 'magenta', 'yellow']  # Adjusted to better match TradingView/example
         for i, period in enumerate([9, 20, 50, 200]):
             col_name = f'EMA_{period}'
@@ -2166,19 +2166,13 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
                 line=dict(color='cyan', width=2)
             ), row=1, col=1)
        
-        # Volume with colors matching candles
+        # Volume as separate pane with colored bars
         if 'Volume' in df.columns and not df['Volume'].isna().all():
             colors = ['green' if o < c else 'red' for o, c in zip(df['Open'], df['Close'])]
             fig.add_trace(
                 go.Bar(x=df['Datetime'], y=df['Volume'], name='Volume', marker_color=colors),
-                row=1, col=1, secondary_y=True
+                row=2, col=1
             )
-       
-        # RSI
-        if 'RSI' in df.columns and not df['RSI'].isna().all():
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=2, col=1)
-            fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-            fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
        
         # MACD
         if 'MACD' in df.columns and not df['MACD'].isna().all():
@@ -2188,6 +2182,12 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             if 'MACD_hist' in df.columns and not df['MACD_hist'].isna().all():
                 hist_colors = ['green' if val >= 0 else 'red' for val in df['MACD_hist']]
                 fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_hist'], name='Histogram', marker_color=hist_colors), row=3, col=1)
+       
+        # RSI
+        if 'RSI' in df.columns and not df['RSI'].isna().all():
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=4, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
        
         # Add support and resistance levels if available
         if sr_levels:
@@ -2219,9 +2219,9 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
         )
        
         fig.update_yaxes(title_text="Price", row=1, col=1)
-        fig.update_yaxes(title_text="Volume", row=1, col=1, secondary_y=True)
-        fig.update_yaxes(title_text="RSI", row=2, col=1)
+        fig.update_yaxes(title_text="Volume", row=2, col=1)
         fig.update_yaxes(title_text="MACD", row=3, col=1)
+        fig.update_yaxes(title_text="RSI", row=4, col=1)
        
         return fig
        
