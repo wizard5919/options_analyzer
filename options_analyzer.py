@@ -3065,34 +3065,34 @@ with tab1:  # General tab
             st.error("Please try refreshing or check your ticker symbol.")
 
 with tab2:  # Chart tab
-    st.header("📊 Professional Chart")
-   
+   st.header("📊 Professional Chart")
+  
     if ticker:
         # Timeframe selector
-        timeframes = ["5m", "15m", "30m", "1H", "4H", "1D", "1W", "1M"]
+        timeframes = ["5m", "15m", "30m", "1H", "1D", "1W", "1M"]
         selected_timeframe = st.selectbox("Select Timeframe:", timeframes, index=0)
         st.session_state.current_timeframe = selected_timeframe
-       
+      
         # Get chart data
         with st.spinner(f"Loading {selected_timeframe} chart data..."):
             try:
                 # Convert timeframe to yfinance format
                 tf_mapping = {
-                    "5m": "5m", "15m": "15m", "30m": "30m", 
-                    "1H": "60m", "4H": "240m", "1D": "1d", 
+                    "5m": "5m", "15m": "15m", "30m": "30m",
+                    "1H": "60m", "1D": "1d",
                     "1W": "1wk", "1M": "1mo"
                 }
-               
+              
                 yf_tf = tf_mapping.get(selected_timeframe, "5m")
                 period = "1mo" if selected_timeframe in ["1D", "1W", "1M"] else "5d"
-               
+              
                 chart_data = yf.download(
-                    ticker, 
-                    period=period, 
+                    ticker,
+                    period=period,
                     interval=yf_tf,
                     prepost=True
                 )
-               
+              
                 if not chart_data.empty:
                     # Create TradingView-style chart
                     chart_fig = create_stock_chart(chart_data, st.session_state.sr_data, selected_timeframe)
@@ -3104,11 +3104,11 @@ with tab2:  # Chart tab
                     st.error("No chart data available")
             except Exception as e:
                 st.error(f"Error loading chart data: {str(e)}")
-       
+      
         # Technical indicators selection
         with st.expander("Technical Indicators"):
             col1, col2, col3 = st.columns(3)
-           
+          
             with col1:
                 ema_selected = st.checkbox("EMA", value=True)
                 if ema_selected:
@@ -3117,13 +3117,13 @@ with tab2:  # Chart tab
                         options=[9, 20, 50, 100, 200],
                         default=[9, 20, 50]
                     )
-               
+              
             with col2:
                 bb_selected = st.checkbox("Bollinger Bands", value=False)
                 if bb_selected:
                     bb_period = st.slider("BB Period", 10, 50, 20)
                     bb_std = st.slider("BB Std Dev", 1.0, 3.0, 2.0)
-               
+              
             with col3:
                 other_indicators = st.multiselect(
                     "Other Indicators",
