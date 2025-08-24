@@ -25,6 +25,18 @@ except ImportError:
     warnings.warn("scipy not available. Support/Resistance analysis will use simplified method.")
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
+# -------------------------------
+# Helper: Market Hours Restriction
+# -------------------------------
+def is_market_open() -> bool:
+    """Check if current Eastern time is within trading window (4am–8pm ET)."""
+    eastern = pytz.timezone("US/Eastern")
+    now_et = datetime.datetime.now(eastern).time()
+
+    start = datetime.time(4, 0)   # 4:00 AM
+    end = datetime.time(20, 0)    # 8:00 PM
+
+    return start <= now_et <= end
 # =============================
 # STREAMLIT PAGE CONFIGURATION
 # =============================
@@ -1070,10 +1082,18 @@ def get_current_price(ticker: str) -> float:
   
     return 0.0
 # NEW: Combined stock data and indicators function for better caching
+# -------------------------------
+# Main: Fetch Stock Data
+# -------------------------------
 @st.cache_data(ttl=CONFIG['STOCK_CACHE_TTL'], show_spinner=False)
 def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
     """Fetch stock data and compute all indicators in one cached function"""
     try:
+        # ⏸ Stop if market is closed
+        if not is_market_open():
+            st.warning("⏸ Market is closed. The app will resume at 4:00 AM ET.")
+            st.stop()
+
         # Determine time range
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=10)
@@ -1098,7 +1118,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         # Reset index to make Datetime a column
         data = data.reset_index()
 
-        # Check if we have a datetime column and rename it properly
+        # Ensure datetime column exists
         datetime_col = None
         for col in data.columns:
             if col.lower() in ['date', 'datetime', 'time', 'index']:
@@ -1173,6 +1193,9 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# -------------------------------
+# Indicators Computation
+# -------------------------------
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Compute all technical indicators efficiently"""
     if df.empty:
@@ -1276,6 +1299,9 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# -------------------------------
+# Volume Averages
+# -------------------------------
 def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate volume averages with separate premarket handling"""
     if df.empty:
@@ -1306,7 +1332,6 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
         df['avg_vol'] = df['Volume'].mean()
 
     return df
-
 # NEW: Real data fetching with fixed session handling
 @st.cache_data(ttl=1800, show_spinner=False) # 30-minute cache for real data
 def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
