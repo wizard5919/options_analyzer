@@ -3236,15 +3236,17 @@ with tab5: # Technical tab
                 for timeframe, data in st.session_state.sr_data.items():
                     if 'support' in data and 'resistance' in data:
                         col1, col2 = st.columns(2)
-                     
+            
                         with col1:
                             st.write(f"**{timeframe} Support**")
-                            for level in data['support']:
+                            # Show only the 2 strongest support levels
+                            for level in data['support'][:2]:
                                 st.write(f"- ${level:.2f}")
-                     
+            
                         with col2:
                             st.write(f"**{timeframe} Resistance**")
-                            for level in data['resistance']:
+                            # Show only the 2 strongest resistance levels
+                            for level in data['resistance'][:2]:
                                 st.write(f"- ${level:.2f}")
         else:
             st.info("Run analysis to see support/resistance levels")
