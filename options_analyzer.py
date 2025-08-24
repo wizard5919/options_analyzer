@@ -2087,20 +2087,26 @@ def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None, timeframe: str 
             # Drop duplicate columns if any (e.g., if 'Adj Close' exists)
             df = df.loc[:, ~df.columns.duplicated(keep='first')]
    
-        # NEW: Reset index to add 'Datetime' column if not present
-        if 'Datetime' not in df.columns:
-            if isinstance(df.index, pd.DatetimeIndex):
-                df = df.reset_index().rename(columns={'index': 'Datetime'})
-            else:
-                df = df.reset_index().rename(columns={'Date': 'Datetime'} if 'Date' in df.columns else {'index': 'Datetime'})
-            df['Datetime'] = pd.to_datetime(df['Datetime'])  # Ensure datetime type
-   
-        # Required columns check
-        required_cols = ['Datetime', 'Open', 'High', 'Low', 'Close']
-        missing = [col for col in required_cols if col not in df.columns]
-        if missing:
-            st.error(f"Missing required columns: {missing}")
-            return None
+        # Reset index to add datetime column
+df = df.reset_index()
+
+# Find and standardize the datetime column name
+date_col = next((col for col in ['Datetime', 'Date', 'index'] if col in df.columns), None)
+if date_col:
+    if date_col != 'Datetime':
+        df = df.rename(columns={date_col: 'Datetime'})
+else:
+    st.warning("No datetime column found after reset - using first column as fallback")
+    if len(df.columns) > 0:
+        df = df.rename(columns={df.columns[0]: 'Datetime'})
+
+# Convert to datetime if the column exists
+if 'Datetime' in df.columns:
+    df['Datetime'] = pd.to_datetime(df['Datetime'], errors='coerce')
+    df = df.dropna(subset=['Datetime'])  # Drop any invalid dates
+else:
+    st.error("Failed to create 'Datetime' column")
+    return None
    
         # Proceed with chart creation (rest of the function remains the same)
         # Create subplots with 3 rows
