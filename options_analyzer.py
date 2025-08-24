@@ -16,8 +16,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from polygon import RESTClient
 from streamlit_autorefresh import st_autorefresh
-try:
 from scipy import signal
+try:
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
