@@ -1099,10 +1099,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
         
         if data.empty:
             return pd.DataFrame()
-        
-        # Debug: Show the structure of the DataFrame
-        st.write("DataFrame structure:", data.columns)
-        
+            
         # Handle multi-level columns - flatten them
         if isinstance(data.columns, pd.MultiIndex):
             # Keep only the first level of column names
@@ -1116,7 +1113,7 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
             data = data.rename(columns={'index': 'Datetime'})
         elif 'Date' in data.columns:
             data = data.rename(columns={'Date': 'Datetime'})
-        else:
+        elif 'Datetime' not in data.columns:
             # If no datetime column found, create one from the index
             data = data.reset_index()
             if 'index' in data.columns:
@@ -1168,8 +1165,6 @@ def get_stock_data_with_indicators(ticker: str) -> pd.DataFrame:
        
     except Exception as e:
         st.error(f"Error fetching stock data: {str(e)}")
-        import traceback
-        st.error(f"Traceback: {traceback.format_exc()}")
         return pd.DataFrame()
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Compute all technical indicators efficiently"""
