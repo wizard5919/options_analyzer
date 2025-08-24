@@ -777,7 +777,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
     """
     try:
         fig = go.Figure()
-       
+      
         # Add current price line
         fig.add_hline(
             y=current_price,
@@ -793,7 +793,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                 borderwidth=1
             )
         )
-       
+      
         # NEW: Add VWAP line if available
         vwap_found = False
         vwap_value = None
@@ -815,7 +815,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                 )
                 vwap_found = True
                 break
-       
+      
         # Color scheme for timeframes
         timeframe_colors = {
             '1min': 'rgba(255,0,0,0.8)', # Red
@@ -824,36 +824,36 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             '30min': 'rgba(0,255,0,0.8)', # Green
             '1h': 'rgba(0,0,255,0.8)' # Blue
         }
+      
+        # Prepare data for plotting - only take the strongest level for each timeframe
+        support_data = []
+        resistance_data = []
+   
+        for tf, sr in data.items():
+            color = timeframe_colors.get(tf, 'gray')
        
-         # Prepare data for plotting - only take the strongest level for each timeframe
-    support_data = []
-    resistance_data = []
-    
-    for tf, sr in data.items():
-        color = timeframe_colors.get(tf, 'gray')
-        
-        # Add only the STRONGEST support level for this timeframe
-        if sr.get('support'):
-            strongest_support = min(sr['support'], key=lambda x: abs(x - current_price))
-            support_data.append({
-                'timeframe': tf,
-                'price': float(strongest_support),
-                'type': 'Support',
-                'color': color,
-                'distance_pct': abs(strongest_support - current_price) / current_price * 100
-            })
-        
-        # Add only the STRONGEST resistance level for this timeframe
-        if sr.get('resistance'):
-            strongest_resistance = min(sr['resistance'], key=lambda x: abs(x - current_price))
-            resistance_data.append({
-                'timeframe': tf,
-                'price': float(strongest_resistance),
-                'type': 'Resistance',
-                'color': color,
-                'distance_pct': abs(strongest_resistance - current_price) / current_price * 100
-            })
+            # Add only the STRONGEST support level for this timeframe
+            if sr.get('support'):
+                strongest_support = min(sr['support'], key=lambda x: abs(x - current_price))
+                support_data.append({
+                    'timeframe': tf,
+                    'price': float(strongest_support),
+                    'type': 'Support',
+                    'color': color,
+                    'distance_pct': abs(strongest_support - current_price) / current_price * 100
+                })
        
+            # Add only the STRONGEST resistance level for this timeframe
+            if sr.get('resistance'):
+                strongest_resistance = min(sr['resistance'], key=lambda x: abs(x - current_price))
+                resistance_data.append({
+                    'timeframe': tf,
+                    'price': float(strongest_resistance),
+                    'type': 'Resistance',
+                    'color': color,
+                    'distance_pct': abs(strongest_resistance - current_price) / current_price * 100
+                })
+      
         # Plot support levels
         if support_data:
             support_df = pd.DataFrame(support_data)
@@ -875,7 +875,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                                  'Distance: %{customdata:.2f}%<extra></extra>',
                     customdata=tf_data['distance_pct']
                 ))
-       
+      
         # Plot resistance levels
         if resistance_data:
             resistance_df = pd.DataFrame(resistance_data)
@@ -897,7 +897,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                                  'Distance: %{customdata:.2f}%<extra></extra>',
                     customdata=tf_data['distance_pct']
                 ))
-       
+      
         # Update layout
         fig.update_layout(
             title=dict(
@@ -922,7 +922,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             ),
             margin=dict(r=150) # Make room for legend
         )
-       
+      
         # Add range selector
         fig.update_layout(
             yaxis=dict(
@@ -932,7 +932,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                 ]
             )
         )
-       
+      
         # NEW: Add VWAP explanation if found
         if vwap_found:
             fig.add_annotation(
@@ -943,9 +943,9 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                 font=dict(size=12, color="cyan"),
                 bgcolor="rgba(0,0,0,0.5)"
             )
-       
+      
         return fig
-       
+      
     except Exception as e:
         st.error(f"Error creating enhanced S/R plot: {str(e)}")
         return go.Figure()
