@@ -229,11 +229,13 @@ CONFIG = {
     },
     'SR_SENSITIVITY': { # This was missing a closing brace
         'SR_WINDOW_SIZES': {
-            '1min': 3,
             '5min': 3,
             '15min': 5,
             '30min': 7,
-            '1h': 10
+            '1h': 10,
+            '2h': 12,
+            '4h': 6,
+            'daily': 20
         },
         # NEW: Liquidity thresholds
         'LIQUIDITY_THRESHOLDS': {
@@ -467,8 +469,8 @@ def cluster_levels_improved(levels: List[float], current_price: float, sensitivi
         # Sort by strength first, then by distance to current price
         clustered.sort(key=lambda x: (-x['strength'], x['distance']))
   
-        # Return top 3 strongest levels (increased from 1 for "strong" S/R)
-        return clustered[:3] 
+        # Return top 3 strongest levels for stronger S/R
+        return clustered[:3]
      
     except Exception as e:
         st.warning(f"Error clustering levels: {str(e)}")
@@ -489,7 +491,7 @@ def calculate_support_resistance_enhanced(data: pd.DataFrame, timeframe: str, cu
   
     try:
         # Get configuration for this timeframe
-        base_sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.01)  # Increased base to 0.01 for better clustering
+        base_sensitivity = CONFIG['SR_SENSITIVITY'].get(timeframe, 0.005)
         window_size = CONFIG['SR_WINDOW_SIZES'].get(timeframe, 5)
       
         # Calculate dynamic sensitivity
@@ -588,11 +590,13 @@ def get_multi_timeframe_data_enhanced(ticker: str) -> Tuple[dict, float]:
     Enhanced multi-timeframe data fetching with better error handling and data validation
     """
     timeframes = {
-        '1min': {'interval': '1m', 'period': '1d'},
         '5min': {'interval': '5m', 'period': '5d'},
         '15min': {'interval': '15m', 'period': '15d'},
         '30min': {'interval': '30m', 'period': '30d'},
-        '1h': {'interval': '60m', 'period': '60d'}
+        '1h': {'interval': '60m', 'period': '60d'},
+        '2h': {'interval': '60m', 'period': '90d', 'resample': '2H'},
+        '4h': {'interval': '60m', 'period': '180d', 'resample': '4H'},
+        'daily': {'interval': '1d', 'period': '1y'}
     }
   
     data = {}
@@ -627,6 +631,12 @@ def get_multi_timeframe_data_enhanced(ticker: str) -> Tuple[dict, float]:
                             df = df[df['High'] >= df['Low']] # Remove invalid bars
                             df = df[df['Volume'] >= 0] # Remove negative volume
                           
+                            # Resample if needed
+                            if 'resample' in params:
+                                df.index = pd.to_datetime(df.index)
+                                agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
+                                df = df.resample(params['resample']).agg(agg_dict).dropna()
+                          
                             if len(df) >= 20: # Minimum data points for reliable S/R
                                 df = df[required_cols]
                               
@@ -656,7 +666,7 @@ def get_multi_timeframe_data_enhanced(ticker: str) -> Tuple[dict, float]:
   
     # If we couldn't get current price from 5min, try other timeframes
     if current_price is None:
-        for tf in ['1min', '15min', '30min', '1h']:
+        for tf in ['15min', '30min', '1h', '2h', '4h', 'daily']:
             if tf in data:
                 current_price = float(data[tf]['Close'].iloc[-1])
                 break
@@ -819,11 +829,13 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
      
         # Color scheme for timeframes
         timeframe_colors = {
-            '1min': 'rgba(255,0,0,0.8)', # Red
             '5min': 'rgba(255,165,0,0.8)', # Orange
             '15min': 'rgba(255,255,0,0.8)', # Yellow
             '30min': 'rgba(0,255,0,0.8)', # Green
-            '1h': 'rgba(0,0,255,0.8)' # Blue
+            '1h': 'rgba(0,0,255,0.8)', # Blue
+            '2h': 'rgba(128,0,128,0.8)', # Purple
+            '4h': 'rgba(165,42,42,0.8)', # Brown
+            'daily': 'rgba(0,0,0,0.8)' # Black
         }
      
         # Prepare data for plotting - take all returned levels (now top 3)
@@ -912,7 +924,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             xaxis=dict(
                 title='Timeframe',
                 categoryorder='array',
-                categoryarray=['1min', '5min', '15min', '30min', '1h']
+                categoryarray=['5min', '15min', '30min', '1h', '2h', '4h', 'daily']
             ),
             yaxis_title='Price ($)',
             hovermode='closest',
