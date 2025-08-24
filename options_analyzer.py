@@ -1176,10 +1176,10 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         # EMAs
         for period in [9, 20, 50, 200]:
             if len(close) >= period:
-            ema = EMAIndicator(close=close, window=period)
-            df[f'EMA_{period}'] = ema.ema_indicator()  # Fixed: Added closing brace
+                ema = EMAIndicator(close=close, window=period)
+                df[f'EMA_{period}'] = ema.ema_indicator()
             else:
-            df[f'EMA_{period}'] = np.nan  # Fixed: Added closing brace
+                df[f'EMA_{period}'] = np.nan
            
         # RSI
         if len(close) >= 14:
