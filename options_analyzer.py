@@ -2425,6 +2425,7 @@ with st.sidebar:
         st.info("💡 **Tip**: Polygon Premium provides higher rate limits and real-time Greeks")
     else:
         st.warning("⚠️ Using free data sources (limited rate)")
+    
     # NEW: Free API Key Inputs
     st.subheader("🔑 Free API Keys")
     st.info("Use these free alternatives to reduce rate limits")
@@ -2443,6 +2444,7 @@ with st.sidebar:
         type="password",
         value=CONFIG['IEX_API_KEY']
     )
+    
     with st.expander("💡 How to get free keys"):
         st.markdown("""
         **1. Alpha Vantage:**
@@ -2459,6 +2461,7 @@ with st.sidebar:
    
         **Pro Tip:** Use all three for maximum free requests!
         """)
+    
     # Enhanced auto-refresh with minimum interval enforcement
     with st.container():
         st.subheader("🔄 Smart Auto-Refresh")
@@ -2485,6 +2488,7 @@ with st.sidebar:
                 st.info(f"⚖️ Balanced: {refresh_interval}s interval")
             else:
                 st.warning(f"⚠️ Aggressive: {refresh_interval}s interval (may hit limits)")
+    
     # Enhanced thresholds with tooltips
     with st.expander("📊 Signal Thresholds & Weights", expanded=False):
         st.markdown("**🏋️ Condition Weights** (How much each factor matters)")
@@ -2540,6 +2544,7 @@ with st.sidebar:
             SIGNAL_THRESHOLDS['put']['delta_base'] = st.slider("Put Delta", -1.0, -0.1, -0.5, 0.1, key="put_delta_base")
             SIGNAL_THRESHOLDS['put']['gamma_base'] = st.slider("Put Gamma", 0.01, 0.2, 0.05, 0.01, key="put_gamma_base")
             SIGNAL_THRESHOLDS['put']['volume_min'] = st.slider("Put Min Volume", 100, 5000, 1000, 100, key="put_vol_min")
+    
     # Enhanced profit targets
     with st.expander("🎯 Risk Management", expanded=False):
         CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit")
@@ -2547,6 +2552,7 @@ with st.sidebar:
         CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, key="stop_loss")
    
         st.info("💡 **Tip**: Higher volatility may require wider targets")
+    
     # Enhanced market status
     with st.container():
         st.subheader("🕐 Market Status")
@@ -2569,6 +2575,7 @@ with st.sidebar:
             last_update = datetime.datetime.fromtimestamp(st.session_state.last_refresh)
             time_since = int(time.time() - st.session_state.last_refresh)
             st.caption(f"**Cache**: {time_since}s ago")
+    
     # Performance tips
     with st.expander("⚡ Performance Tips"):
         st.markdown("""
@@ -2587,12 +2594,12 @@ with st.sidebar:
         - Dynamic thresholds adapt to volatility
         - Detailed explanations show why signals pass/fail
         """)
-        # NEW: Clear Cache button
-     with st.sidebar:
-        st.markdown("---")
-        st.subheader("🗑️ Cache Management")
     
-        if st.button("🧹 Clear All Cache", help="Clear all cached data and refresh the application"):
+    # NEW: Clear Cache button
+    st.markdown("---")
+    st.subheader("🗑️ Cache Management")
+    
+    if st.button("🧹 Clear All Cache", help="Clear all cached data and refresh the application"):
         # Clear all caches
         st.cache_data.clear()
         # Clear session state variables related to data
@@ -2603,10 +2610,11 @@ with st.sidebar:
         if 'yf_rate_limited_until' in st.session_state:
             del st.session_state['yf_rate_limited_until']
         
-                st.success("✅ All cache cleared successfully!")
-                st.rerun()
+        st.success("✅ All cache cleared successfully!")
+        st.rerun()
     
     st.info("💡 **Tip**: Clear cache if you're experiencing data issues or want fresh data")
+    
     # NEW: Performance monitoring section
     measure_performance()
     # Add Clear Cache button
