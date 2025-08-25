@@ -27,171 +27,174 @@ except ImportError:
 # Suppress future warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# =============================
-# STREAMLIT PAGE CONFIGURATION
-# =============================
-st.set_page_config(
-    page_title="Options Analyzer Pro - TradingView Style",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# =============================
-# CUSTOM CSS FOR TRADINGVIEW STYLE
-# =============================
-st.markdown("""
-<style>
-    /* Main dark theme */
-    .main {
-        background-color: #131722;
-        color: #d1d4dc;
-    }
-   
-    /* Sidebar styling */
-    .css-1d391kg, .css-1d391kg p {
-        background-color: #1e222d;
-        color: #d1d4dc;
-    }
-   
-    /* Tabs styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-        background-color: #1e222d;
-    }
-   
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
+def main():
+    # =============================
+    # STREAMLIT PAGE CONFIGURATION
+    # =============================
+    st.set_page_config(
+        page_title="Options Analyzer Pro - TradingView Style",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
     
-    .stTabs [data-baseweb="tab"] {
-        padding: 10px 20px;
-        font-weight: bold;
-        background-color: #1e222d;
-        border-radius: 4px;
-        color: #2962ff;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: #2962ff;
-        color: white;
-    }
-   
-    /* Button styling */
-    .stButton button {
-        background-color: #2962ff;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        padding: 8px 16px;
-        font-weight: 500;
-    }
-   
-    .stButton button:hover {
-        background-color: #1e53e5;
-        color: white;
-    }
-   
-    /* Input fields */
-    .stTextInput input {
-        background-color: #1e222d;
-        color: #d1d4dc;
-        border: 1px solid #2a2e39;
-    }
-   
-    /* Select boxes */
-    .stSelectbox select {
-        background-color: #1e222d;
-        color: #d1d4dc;
-    }
-   
-    /* Sliders */
-    .stSlider [data-testid="stThumb"] {
-        background-color: #2962ff;
-    }
-   
-    /* Metrics */
-    [data-testid="stMetricValue"] {
-        color: #d1d4dc;
-        font-weight: bold;
-    }
-   
-    [data-testid="stMetricLabel"] {
-        color: #758696;
-    }
-   
-    /* Dataframes */
-    .dataframe {
-        background-color: #1e222d;
-        color: #d1d4dc;
-    }
-   
-    /* Expanders */
-    .streamlit-expanderHeader {
-        background-color: #1e222d;
-        color: #d1d4dc;
-        font-weight: 600;
-    }
-   
-    /* Chart containers */
-    .element-container {
-        background-color: #131722;
-        border-radius: 4px;
-        padding: 10px;
-        margin-bottom: 10px;
-    }
-   
-    /* Custom TradingView-like chart header */
-    .chart-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        background-color: #1e222d;
-        padding: 8px 16px;
-        border-radius: 4px 4px 0 0;
-        border-bottom: 1px solid #2a2e39;
-    }
-   
-    .timeframe-selector {
-        display: flex;
-        gap: 4px;
-    }
-   
-    .timeframe-btn {
-        background-color: #2a2e39;
-        color: #758696;
-        border: none;
-        border-radius: 4px;
-        padding: 4px 8px;
-        font-size: 12px;
-        cursor: pointer;
-    }
-   
-    .timeframe-btn.active {
-        background-color: #2962ff;
-        color: white;
-    }
-   
-    /* Signal cards */
-    .signal-card {
-        background-color: #1e222d;
-        border-radius: 4px;
-        padding: 12px;
-        margin-bottom: 8px;
-        border-left: 4px solid #2962ff;
-    }
-   
-    .signal-card.bullish {
-        border-left-color: #26a69a;
-    }
-   
-    .signal-card.bearish {
-        border-left-color: #ef5350;
-    }
-</style>
-""", unsafe_allow_html=True)
+    # =============================
+    # CUSTOM CSS FOR TRADINGVIEW STYLE
+    # =============================
+    st.markdown("""
+    <style>
+        /* Main dark theme */
+        .main {
+            background-color: #131722;
+            color: #d1d4dc;
+        }
+       
+        /* Sidebar styling */
+        .css-1d391kg, .css-1d391kg p {
+            background-color: #1e222d;
+            color: #d1d4dc;
+        }
+       
+        /* Tabs styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 2px;
+            background-color: #1e222d;
+        }
+       
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 10px;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            padding: 10px 20px;
+            font-weight: bold;
+            background-color: #1e222d;
+            border-radius: 4px;
+            color: #2962ff;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            background-color: #2962ff;
+            color: white;
+        }
+       
+        /* Button styling */
+        .stButton button {
+            background-color: #2962ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 16px;
+            font-weight: 500;
+        }
+       
+        .stButton button:hover {
+            background-color: #1e53e5;
+            color: white;
+        }
+       
+        /* Input fields */
+        .stTextInput input {
+            background-color: #1e222d;
+            color: #d1d4dc;
+            border: 1px solid #2a2e39;
+        }
+       
+        /* Select boxes */
+        .stSelectbox select {
+            background-color: #1e222d;
+            color: #d1d4dc;
+        }
+       
+        /* Sliders */
+        .stSlider [data-testid="stThumb"] {
+            background-color: #2962ff;
+        }
+       
+        /* Metrics */
+        [data-testid="stMetricValue"] {
+            color: #d1d4dc;
+            font-weight: bold;
+        }
+       
+        [data-testid="stMetricLabel"] {
+            color: #758696;
+        }
+       
+        /* Dataframes */
+        .dataframe {
+            background-color: #1e222d;
+            color: #d1d4dc;
+        }
+       
+        /* Expanders */
+        .streamlit-expanderHeader {
+            background-color: #1e222d;
+            color: #d1d4dc;
+            font-weight: 600;
+        }
+       
+        /* Chart containers */
+        .element-container {
+            background-color: #131722;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+       
+        /* Custom TradingView-like chart header */
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #1e222d;
+            padding: 8px 16px;
+            border-radius: 4px 4px 0 0;
+            border-bottom: 1px solid #2a2e39;
+        }
+       
+        .timeframe-selector {
+            display: flex;
+            gap: 4px;
+        }
+       
+        .timeframe-btn {
+            background-color: #2a2e39;
+            color: #758696;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+       
+        .timeframe-btn.active {
+            background-color: #2962ff;
+            color: white;
+        }
+       
+        /* Signal cards */
+        .signal-card {
+            background-color: #1e222d;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-left: 4px solid #2962ff;
+        }
+       
+        .signal-card.bullish {
+            border-left-color: #26a69a;
+        }
+       
+        .signal-card.bearish {
+            border-left-color: #ef5350;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
 # Auto-refresh for real-time updates
 refresh_interval = st_autorefresh(interval=1000, limit=None, key="price_refresh")
+if __name__ == "__main__":
+    main()
 
 # =============================
 # ENHANCED CONFIGURATION & CONSTANTS
