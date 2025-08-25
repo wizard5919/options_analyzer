@@ -2576,7 +2576,7 @@ with st.sidebar:
             time_since = int(time.time() - st.session_state.last_refresh)
             st.caption(f"**Cache**: {time_since}s ago")
     
-    # Performance tips
+# Performance tips
     with st.expander("⚡ Performance Tips"):
         st.markdown("""
         **🚀 Speed Optimizations:**
@@ -2595,7 +2595,7 @@ with st.sidebar:
         - Detailed explanations show why signals pass/fail
         """)
     
-    # NEW: Clear Cache button
+    # NEW: Clear Cache button - MOVE THIS SECTION HERE
     st.markdown("---")
     st.subheader("🗑️ Cache Management")
     
