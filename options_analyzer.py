@@ -2587,6 +2587,26 @@ with st.sidebar:
         - Dynamic thresholds adapt to volatility
         - Detailed explanations show why signals pass/fail
         """)
+        # NEW: Clear Cache button
+     with st.sidebar:
+        st.markdown("---")
+        st.subheader("🗑️ Cache Management")
+    
+        if st.button("🧹 Clear All Cache", help="Clear all cached data and refresh the application"):
+        # Clear all caches
+        st.cache_data.clear()
+        # Clear session state variables related to data
+        if 'sr_data' in st.session_state:
+            del st.session_state.sr_data
+        if 'last_ticker' in st.session_state:
+            del st.session_state.last_ticker
+        if 'yf_rate_limited_until' in st.session_state:
+            del st.session_state['yf_rate_limited_until']
+        
+                st.success("✅ All cache cleared successfully!")
+                st.rerun()
+    
+    st.info("💡 **Tip**: Clear cache if you're experiencing data issues or want fresh data")
     # NEW: Performance monitoring section
     measure_performance()
     # Add Clear Cache button
