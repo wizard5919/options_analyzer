@@ -1362,7 +1362,7 @@ def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Dat
     return expiries, calls, puts
 def get_fallback_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
     """Enhanced fallback method with realistic options data"""
-    # Get current price for realistic strikes
+    # Get current price for realistic realistic strikes
     try:
         current_price = get_current_price(ticker)
         if current_price <= 0:
@@ -2551,7 +2551,7 @@ with st.sidebar:
         CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit")
         CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="put_profit")
         CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, key="stop_loss")
-
+  
         st.info("💡 **Tip**: Higher volatility may require wider targets")
    
     # Enhanced market status
