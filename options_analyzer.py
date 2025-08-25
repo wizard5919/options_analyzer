@@ -2440,6 +2440,47 @@ if not ticker:
     col1, col2, col3 = st.columns(3)
     with col2:
         st.info("👋 Welcome! Enter a stock ticker above to begin enhanced options analysis.")
+    with st.expander("🚀 What's New in Enhanced Version", expanded=True):
+        st.markdown("""
+        **⚡ Performance Improvements:**
+        - **2x Faster**: Smart caching reduces API calls by 60%
+        - **Rate Limit Protection**: Exponential backoff with 5 retries
+        - **Batch Processing**: Vectorized operations eliminate slow loops
+        - **Combined Functions**: Stock data + indicators computed together
+     
+        **📊 Enhanced Signals:**
+        - **Weighted Scoring**: Most important factors weighted highest (0-100%)
+        - **Dynamic Thresholds**: Auto-adjust based on volatility and market conditions
+        - **Detailed Explanations**: See exactly why each signal passes or fails
+        - **Better Filtering**: Moneyness, expiry, and strike range controls
+     
+        **🎯 New Features:**
+        - **Multi-Timeframe Support/Resistance**: 1min/5min for scalping, 15min/30min/1h for intraday
+        - **VWAP Integration**: Volume Weighted Average Price analysis for institutional levels
+        - **Free Tier API Integration**: Alpha Vantage, FMP, IEX Cloud
+        - **Usage Dashboard**: Track API consumption across services
+        - **Professional UX**: Color-coded metrics, tooltips, and guidance
+        """)
+    with st.expander("📚 Quick Start Guide", expanded=False):
+        st.markdown("""
+        **🏁 Getting Started:**
+        1. **Enter Ticker**: Try SPY, QQQ, IWM, or AAPL
+        2. **Configure Settings**: Adjust refresh interval and thresholds in sidebar
+        3. **Select Filters**: Choose expiry mode and strike range
+        4. **Review Signals**: Check enhanced signals with weighted scores
+        5. **Understand Context**: Read explanations and market context
+     
+        **⚙️ Pro Tips:**
+        - **For Scalping**: Use 0DTE mode with tight strike ranges
+        - **For Swing Trading**: Use "This Week" with wider ranges
+        - **For High Volume**: Increase minimum volume thresholds
+        - **For Volatile Markets**: Increase profit targets and stop losses
+     
+        **🔧 Optimization:**
+        - **Polygon API**: Get premium data with higher rate limits
+        - **Conservative Refresh**: Use 120s+ intervals to avoid limits
+        - **Focused Analysis**: Analyze one ticker at a time for best performance
+        """)
     st.stop()
 # Create top navigation tabs with blue color
 st.markdown("""
@@ -3407,46 +3448,3 @@ if st.session_state.get('auto_refresh_enabled', False) and ticker:
         st.success(f"🔄 Auto-refreshed at {datetime.datetime.now().strftime('%H:%M:%S')}")
         time.sleep(0.5) # Brief pause to show notification
         st.rerun()
-
-with st.expander("🚀 What's New in Enhanced Version", expanded=True):
-    st.markdown("""
-    **⚡ Performance Improvements:**
-    - **2x Faster**: Smart caching reduces API calls by 60%
-    - **Rate Limit Protection**: Exponential backoff with 5 retries
-    - **Batch Processing**: Vectorized operations eliminate slow loops
-    - **Combined Functions**: Stock data + indicators computed together
- 
-    **📊 Enhanced Signals:**
-    - **Weighted Scoring**: Most important factors weighted highest (0-100%)
-    - **Dynamic Thresholds**: Auto-adjust based on volatility and market conditions
-    - **Detailed Explanations**: See exactly why each signal passes or fails
-    - **Better Filtering**: Moneyness, expiry, and strike range controls
- 
-    **🎯 New Features:**
-    - **Multi-Timeframe Support/Resistance**: 1min/5min for scalping, 15min/30min/1h for intraday
-    - **VWAP Integration**: Volume Weighted Average Price analysis for institutional levels
-    - **Free Tier API Integration**: Alpha Vantage, FMP, IEX Cloud
-    - **Usage Dashboard**: Track API consumption across services
-    - **Professional UX**: Color-coded metrics, tooltips, and guidance
-    """)
-
-with st.expander("📚 Quick Start Guide", expanded=False):
-    st.markdown("""
-    **🏁 Getting Started:**
-    1. **Enter Ticker**: Try SPY, QQQ, IWM, or AAPL
-    2. **Configure Settings**: Adjust refresh interval and thresholds in sidebar
-    3. **Select Filters**: Choose expiry mode and strike range
-    4. **Review Signals**: Check enhanced signals with weighted scores
-    5. **Understand Context**: Read explanations and market context
- 
-    **⚙️ Pro Tips:**
-    - **For Scalping**: Use 0DTE mode with tight strike ranges
-    - **For Swing Trading**: Use "This Week" with wider ranges
-    - **For High Volume**: Increase minimum volume thresholds
-    - **For Volatile Markets**: Increase profit targets and stop losses
- 
-    **🔧 Optimization:**
-    - **Polygon API**: Get premium data with higher rate limits
-    - **Conservative Refresh**: Use 120s+ intervals to avoid limits
-    - **Focused Analysis**: Analyze one ticker at a time for best performance
-    """)
