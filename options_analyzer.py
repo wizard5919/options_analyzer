@@ -2468,9 +2468,6 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "General", "Chart", "News & Analysis", "Financials", "Technical", "Forum"
 ])
 
-if not ticker:
-    st.info("👋 Welcome! Enter a stock ticker above to begin enhanced options analysis.")
-
 # Enhanced sidebar
 with st.sidebar:
     st.header("⚙️ Configuration")
