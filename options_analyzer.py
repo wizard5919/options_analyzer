@@ -2425,6 +2425,9 @@ with st.sidebar:
         st.info("💡 **Tip**: Polygon Premium provides higher rate limits and real-time Greeks")
     else:
         st.warning("⚠️ Using free data sources (limited rate)")
+    # Test button
+    if st.button("Test Button"):
+        st.write("Sidebar is working!")
     
     # NEW: Free API Key Inputs
     st.subheader("🔑 Free API Keys")
