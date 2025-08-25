@@ -2435,7 +2435,7 @@ if 'rate_limited_until' in st.session_state:
 st.title("📈 Options Analyzer Pro")
 st.markdown("**TradingView-Style Layout** • **Professional Analysis** • **Real-time Signals**")
 # Add ticker input and welcome message
-ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="IWM").upper()
+ticker = st.text_input("Enter Stock Ticker (e.g., IWM, SPY, AAPL):", value="").upper()
 if not ticker:
     col1, col2, col3 = st.columns(3)
     with col2:
