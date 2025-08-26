@@ -46,8 +46,8 @@ def main():
         password = st.text_input("Password", type="password", value="")
         
         if st.button("Login"):
-            # Hardcoded credentials - CHANGE THESE TO YOUR OWN SECURE VALUES!
-            if username == "admin" and password == "password":
+            # Custom credentials as specified
+            if username == "youssef123" and password == "josePH12345!":
                 st.session_state.authenticated = True
                 st.success("✅ Logged in successfully!")
                 st.rerun()  # Rerun to load the main app
