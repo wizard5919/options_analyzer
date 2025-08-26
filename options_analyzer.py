@@ -38,6 +38,9 @@ def main():
     # =============================
     st.markdown("""
     <style>
+        div[data-stale="true"] {
+            opacity: 1.0 !important;
+        }
         /* Main dark theme */
         .main {
             background-color: #131722;
