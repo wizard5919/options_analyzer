@@ -33,6 +33,28 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"
     )
+
+    # Add authentication here
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        st.title("🔒 Login to Options Analyzer Pro")
+        st.markdown("Enter your credentials to access the application.")
+        
+        username = st.text_input("Username", value="")
+        password = st.text_input("Password", type="password", value="")
+        
+        if st.button("Login"):
+            # Hardcoded credentials - CHANGE THESE TO YOUR OWN SECURE VALUES!
+            if username == "admin" and password == "password":
+                st.session_state.authenticated = True
+                st.success("✅ Logged in successfully!")
+                st.rerun()  # Rerun to load the main app
+            else:
+                st.error("❌ Invalid username or password. Please try again.")
+        
+        st.stop()  # Prevent the rest of the app from loading
     # =============================
     # CUSTOM CSS FOR TRADINGVIEW STYLE
     # =============================
