@@ -759,7 +759,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
     """
     try:
         fig = go.Figure()
- 
+
         # Add current price line
         fig.add_hline(
             y=current_price,
@@ -775,7 +775,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                 borderwidth=1
             )
         )
- 
+
         # NEW: Add VWAP line if available
         vwap_found = False
         vwap_value = None
@@ -797,7 +797,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                 )
                 vwap_found = True
                 break
- 
+
         # Color scheme for timeframes
         timeframe_colors = {
             '5min': 'rgba(255,165,0,0.8)', # Orange
@@ -808,13 +808,13 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             '4h': 'rgba(165,42,42,0.8)', # Brown
             'daily': 'rgba(0,0,0,0.8)' # Black
         }
- 
+
         # Prepare data for plotting - take all returned levels (now top 3)
         support_data = []
         resistance_data = []
         for tf, sr in data.items():
             color = timeframe_colors.get(tf, 'gray')
-  
+
             # Add all support levels for this timeframe
             if sr.get('support_details'):
                 for level in sr['support_details']:
@@ -826,7 +826,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                         'color': color,
                         'distance_pct': level['distance'] * 100
                     })
-  
+
             # Add all resistance levels for this timeframe
             if sr.get('resistance_details'):
                 for level in sr['resistance_details']:
@@ -838,7 +838,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                         'color': color,
                         'distance_pct': level['distance'] * 100
                     })
- 
+
         # Plot support levels
         if support_data:
             support_df = pd.DataFrame(support_data)
@@ -850,7 +850,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                     mode='markers',
                     marker=dict(
                         color=tf_data['color'].iloc[0],
-                        size=12 * tf_data['strength'], # Size based on strength
+                        size=np.clip(tf_data['strength'] * 8, a_min=5, a_max=20),  # Adjusted size with clip for better fit
                         symbol='triangle-up',
                         line=dict(width=2, color='darkgreen')
                     ),
@@ -861,7 +861,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                                  'Distance: %{customdata[1]:.2f}%<extra></extra>',
                     customdata=np.stack((tf_data['strength'], tf_data['distance_pct'])).T
                 ))
- 
+
         # Plot resistance levels
         if resistance_data:
             resistance_df = pd.DataFrame(resistance_data)
@@ -873,7 +873,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                     mode='markers',
                     marker=dict(
                         color=tf_data['color'].iloc[0],
-                        size=12 * tf_data['strength'], # Size based on strength
+                        size=np.clip(tf_data['strength'] * 8, a_min=5, a_max=20),  # Adjusted size with clip for better fit
                         symbol='triangle-down',
                         line=dict(width=2, color='darkred')
                     ),
@@ -884,7 +884,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                                  'Distance: %{customdata[1]:.2f}%<extra></extra>',
                     customdata=np.stack((tf_data['strength'], tf_data['distance_pct'])).T
                 ))
- 
+
         # Update layout
         fig.update_layout(
             title=dict(
@@ -899,7 +899,7 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             yaxis_title='Price ($)',
             hovermode='closest',
             template='plotly_dark',
-            height=600,
+            height=700,  # Increased height for better fit
             legend=dict(
                 orientation="v",
                 yanchor="top",
@@ -909,17 +909,17 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
             ),
             margin=dict(r=150) # Make room for legend
         )
- 
+
         # Add range selector
         fig.update_layout(
             yaxis=dict(
                 range=[
-                    current_price * 0.95, # Show 5% below current price
-                    current_price * 1.05 # Show 5% above current price
+                    current_price * 0.92, # Expanded to 8% below current price
+                    current_price * 1.08 # Expanded to 8% above current price
                 ]
             )
         )
- 
+
         # NEW: Add VWAP explanation if found
         if vwap_found:
             fig.add_annotation(
@@ -930,9 +930,9 @@ def plot_sr_levels_enhanced(data: dict, current_price: float) -> go.Figure:
                 font=dict(size=12, color="cyan"),
                 bgcolor="rgba(0,0,0,0.5)"
             )
- 
+
         return fig
- 
+
     except Exception as e:
         st.error(f"Error creating enhanced S/R plot: {str(e)}")
         return go.Figure()
