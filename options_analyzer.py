@@ -1397,22 +1397,38 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     """Validate that option has required data for analysis with liquidity filters"""
     try:
-        # Existing validation code...
-        
-        # NEW: Price validation - filter out penny options
-        if option['lastPrice'] < CONFIG['MIN_OPTION_PRICE']:
+        required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility', 'bid', 'ask']
+       
+        for field in required_fields:
+            if field not in option or pd.isna(option[field]):
+                return False
+       
+        if option['lastPrice'] <= 0:
             return False
-            
-        # NEW: More realistic spread calculation
-        if option['bid'] <= 0 or option['ask'] <= 0:
+       
+        # Apply liquidity filters
+        min_open_interest = CONFIG['LIQUIDITY_THRESHOLDS']['min_open_interest']
+        min_volume = CONFIG['LIQUIDITY_THRESHOLDS']['min_volume']
+       
+        if option['openInterest'] < min_open_interest:
             return False
-            
+       
+        if option['volume'] < min_volume:
+            return False
+
+        # Bid-Ask Spread Filter
         bid_ask_spread = abs(option['ask'] - option['bid'])
-        spread_pct = bid_ask_spread / option['ask'] if option['ask'] > 0 else float('inf')
-        
+        spread_pct = bid_ask_spread / option['lastPrice'] if option['lastPrice'] > 0 else float('inf')
         if spread_pct > CONFIG['LIQUIDITY_THRESHOLDS']['max_bid_ask_spread_pct']:
             return False
-            
+       
+        # Fill in Greeks if missing
+        if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
+            delta, gamma, theta = calculate_approximate_greeks(option.to_dict(), spot_price)
+            option['delta'] = delta
+            option['gamma'] = gamma
+            option['theta'] = theta
+       
         return True
     except Exception:
         return False
@@ -1460,52 +1476,295 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
         return SIGNAL_THRESHOLDS[side].copy()
 # NEW: Enhanced signal generation with weighted scoring, explanations, and transaction costs
 def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFrame, is_0dte: bool) -> Dict:
-    # ... existing code ...
-    
-    if signal:
-        # Use ask price for calls, bid price for puts for more realistic entry
-        if side == 'call':
-            entry_price = option['ask']  # Use ask price for calls
+    """Generate trading signal with weighted scoring and detailed explanations"""
+    if stock_df.empty:
+        return {'signal': False, 'reason': 'No stock data available', 'score': 0.0, 'explanations': []}
+   
+    current_price = stock_df.iloc[-1]['Close']
+   
+    if not validate_option_data(option, current_price):
+        return {'signal': False, 'reason': 'Insufficient option data', 'score': 0.0, 'explanations': []}
+   
+    latest = stock_df.iloc[-1]
+   
+    try:
+        thresholds = calculate_dynamic_thresholds(latest, side, is_0dte)
+        weights = thresholds['condition_weights']
+       
+        delta = float(option['delta'])
+        gamma = float(option['gamma'])
+        theta = float(option['theta'])
+        option_volume = float(option['volume'])
+       
+        close = float(latest['Close'])
+        ema_9 = float(latest['EMA_9']) if not pd.isna(latest['EMA_9']) else None
+        ema_20 = float(latest['EMA_20']) if not pd.isna(latest['EMA_20']) else None
+        ema_50 = float(latest['EMA_50']) if not pd.isna(latest['EMA_50']) else None
+        ema_200 = float(latest['EMA_200']) if not pd.isna(latest['EMA_200']) else None
+        rsi = float(latest['RSI']) if not pd.isna(latest['RSI']) else None
+        macd = float(latest['MACD']) if not pd.isna(latest['MACD']) else None
+        macd_signal = float(latest['MACD_signal']) if not pd.isna(latest['MACD_signal']) else None
+        keltner_upper = float(latest['KC_upper']) if not pd.isna(latest['KC_upper']) else None
+        keltner_lower = float(latest['KC_lower']) if not pd.isna(latest['KC_lower']) else None
+        vwap = float(latest['VWAP']) if not pd.isna(latest['VWAP']) else None
+        volume = float(latest['Volume'])
+        avg_vol = float(latest['avg_vol']) if not pd.isna(latest['avg_vol']) else volume
+       
+        conditions = []
+        explanations = []
+        weighted_score = 0.0
+       
+        if side == "call":
+            # Delta condition
+            delta_pass = delta >= thresholds.get('delta_min', 0.5)
+            delta_score = weights['delta'] if delta_pass else 0
+            weighted_score += delta_score
+            conditions.append((delta_pass, f"Delta >= {thresholds.get('delta_min', 0.5):.2f}", delta))
+            explanations.append({
+                'condition': 'Delta',
+                'passed': delta_pass,
+                'value': delta,
+                'threshold': thresholds.get('delta_min', 0.5),
+                'weight': weights['delta'],
+                'score': delta_score,
+                'explanation': f"Delta {delta:.3f} {'✓' if delta_pass else '✗'} threshold {thresholds.get('delta_min', 0.5):.2f}. Higher delta = more price sensitivity."
+            })
+           
+            # Gamma condition
+            gamma_pass = gamma >= thresholds.get('gamma_min', 0.05)
+            gamma_score = weights['gamma'] if gamma_pass else 0
+            weighted_score += gamma_score
+            conditions.append((gamma_pass, f"Gamma >= {thresholds.get('gamma_min', 0.05):.3f}", gamma))
+            explanations.append({
+                'condition': 'Gamma',
+                'passed': gamma_pass,
+                'value': gamma,
+                'threshold': thresholds.get('gamma_min', 0.05),
+                'weight': weights['gamma'],
+                'score': gamma_score,
+                'explanation': f"Gamma {gamma:.3f} {'✓' if gamma_pass else '✗'} threshold {thresholds.get('gamma_min', 0.05):.3f}. Higher gamma = faster delta changes."
+            })
+           
+            # Theta condition
+            theta_pass = theta <= thresholds['theta_base']
+            theta_score = weights['theta'] if theta_pass else 0
+            weighted_score += theta_score
+            conditions.append((theta_pass, f"Theta <= {thresholds['theta_base']:.3f}", theta))
+            explanations.append({
+                'condition': 'Theta',
+                'passed': theta_pass,
+                'value': theta,
+                'threshold': thresholds['theta_base'],
+                'weight': weights['theta'],
+                'score': theta_score,
+                'explanation': f"Theta {theta:.3f} {'✓' if theta_pass else '✗'} threshold {thresholds['theta_base']:.3f}. Lower theta = less time decay."
+            })
+           
+            # Trend condition
+            trend_pass = ema_9 is not None and ema_20 is not None and close > ema_9 > ema_20
+            trend_score = weights['trend'] if trend_pass else 0
+            weighted_score += trend_score
+            conditions.append((trend_pass, "Price > EMA9 > EMA20", f"{close:.2f} > {ema_9:.2f} > {ema_20:.2f}" if ema_9 and ema_20 else "N/A"))
+            explanations.append({
+                'condition': 'Trend',
+                'passed': trend_pass,
+                'value': f"Price: {close:.2f}, EMA9: {ema_9:.2f}, EMA20: {ema_20:.2f}" if ema_9 and ema_20 else "N/A",
+                'threshold': "Price > EMA9 > EMA20",
+                'weight': weights['trend'],
+                'score': trend_score,
+                'explanation': f"Price above short-term EMAs {'✓' if trend_pass else '✗'}. Bullish trend alignment needed for calls."
+            })
+           
+        else: # put side
+            # Delta condition
+            delta_pass = delta <= thresholds.get('delta_max', -0.5)
+            delta_score = weights['delta'] if delta_pass else 0
+            weighted_score += delta_score
+            conditions.append((delta_pass, f"Delta <= {thresholds.get('delta_max', -0.5):.2f}", delta))
+            explanations.append({
+                'condition': 'Delta',
+                'passed': delta_pass,
+                'value': delta,
+                'threshold': thresholds.get('delta_max', -0.5),
+                'weight': weights['delta'],
+                'score': delta_score,
+                'explanation': f"Delta {delta:.3f} {'✓' if delta_pass else '✗'} threshold {thresholds.get('delta_max', -0.5):.2f}. More negative delta = higher put sensitivity."
+            })
+           
+            # Gamma condition (same as calls)
+            gamma_pass = gamma >= thresholds.get('gamma_min', 0.05)
+            gamma_score = weights['gamma'] if gamma_pass else 0
+            weighted_score += gamma_score
+            conditions.append((gamma_pass, f"Gamma >= {thresholds.get('gamma_min', 0.05):.3f}", gamma))
+            explanations.append({
+                'condition': 'Gamma',
+                'passed': gamma_pass,
+                'value': gamma,
+                'threshold': thresholds.get('gamma_min', 0.05),
+                'weight': weights['gamma'],
+                'score': gamma_score,
+                'explanation': f"Gamma {gamma:.3f} {'✓' if gamma_pass else '✗'} threshold {thresholds.get('gamma_min', 0.05):.3f}. Higher gamma = faster delta changes."
+            })
+           
+            # Theta condition (same as calls)
+            theta_pass = theta <= thresholds['theta_base']
+            theta_score = weights['theta'] if theta_pass else 0
+            weighted_score += theta_score
+            conditions.append((theta_pass, f"Theta <= {thresholds['theta_base']:.3f}", theta))
+            explanations.append({
+                'condition': 'Theta',
+                'passed': theta_pass,
+                'value': theta,
+                'threshold': thresholds['theta_base'],
+                'weight': weights['theta'],
+                'score': theta_score,
+                'explanation': f"Theta {theta:.3f} {'✓' if theta_pass else '✗'} threshold {thresholds['theta_base']:.3f}. Lower theta = less time decay."
+            })
+           
+            # Trend condition (inverted for puts)
+            trend_pass = ema_9 is not None and ema_20 is not None and close < ema_9 < ema_20
+            trend_score = weights['trend'] if trend_pass else 0
+            weighted_score += trend_score
+            conditions.append((trend_pass, "Price < EMA9 < EMA20", f"{close:.2f} < {ema_9:.2f} < {ema_20:.2f}" if ema_9 and ema_20 else "N/A"))
+            explanations.append({
+                'condition': 'Trend',
+                'passed': trend_pass,
+                'value': f"Price: {close:.2f}, EMA9: {ema_9:.2f}, EMA20: {ema_20:.2f}" if ema_9 and ema_20 else "N/A",
+                'threshold': "Price < EMA9 < EMA20",
+                'weight': weights['trend'],
+                'score': trend_score,
+                'explanation': f"Price below short-term EMAs {'✓' if trend_pass else '✗'}. Bearish trend alignment needed for puts."
+            })
+       
+        # Momentum condition (RSI)
+        if side == "call":
+            momentum_pass = rsi is not None and rsi > thresholds['rsi_min']
         else:
-            entry_price = option['bid']  # Use bid price for puts
-            
-        # More realistic slippage and commissions
-        slippage_pct = 0.02 if entry_price > 1 else 0.05  # Adaptive slippage
-        commission_per_contract = 0.65
-        
-        # Adjust entry price for slippage
-        if side == 'call':
+            momentum_pass = rsi is not None and rsi < thresholds['rsi_max']
+       
+        momentum_score = weights['momentum'] if momentum_pass else 0
+        weighted_score += momentum_score
+        explanations.append({
+            'condition': 'Momentum (RSI)',
+            'passed': momentum_pass,
+            'value': rsi,
+            'threshold': thresholds['rsi_min'] if side == "call" else thresholds['rsi_max'],
+            'weight': weights['momentum'],
+            'score': momentum_score,
+            'explanation': f"RSI {rsi:.1f} {'✓' if momentum_pass else '✗'} indicates {'bullish' if side == 'call' else 'bearish'} momentum." if rsi else "RSI N/A"
+        })
+       
+        # Volume condition
+        volume_pass = option_volume > thresholds['volume_min']
+        volume_score = weights['volume'] if volume_pass else 0
+        weighted_score += volume_score
+        explanations.append({
+            'condition': 'Volume',
+            'passed': volume_pass,
+            'value': option_volume,
+            'threshold': thresholds['volume_min'],
+            'weight': weights['volume'],
+            'score': volume_score,
+            'explanation': f"Option volume {option_volume:.0f} {'✓' if volume_pass else '✗'} minimum {thresholds['volume_min']:.0f}. Higher volume = better liquidity."
+        })
+       
+        # NEW: VWAP condition (special weight)
+        vwap_pass = False
+        vwap_score = 0
+        if vwap is not None:
+            if side == "call":
+                vwap_pass = close > vwap
+                vwap_score = 0.15 if vwap_pass else 0 # Extra weight for VWAP
+                explanations.append({
+                    'condition': 'VWAP',
+                    'passed': vwap_pass,
+                    'value': vwap,
+                    'threshold': "Price > VWAP",
+                    'weight': 0.15,
+                    'score': vwap_score,
+                    'explanation': f"Price ${close:.2f} {'above' if close > vwap else 'below'} VWAP ${vwap:.2f} - key institutional level"
+                })
+            else:
+                vwap_pass = close < vwap
+                vwap_score = 0.15 if vwap_pass else 0
+                explanations.append({
+                    'condition': 'VWAP',
+                    'passed': vwap_pass,
+                    'value': vwap,
+                    'threshold': "Price < VWAP",
+                    'weight': 0.15,
+                    'score': vwap_score,
+                    'explanation': f"Price ${close:.2f} {'below' if close < vwap else 'above'} VWAP ${vwap:.2f} - key institutional level"
+                })
+           
+            weighted_score += vwap_score
+       
+        signal = all(passed for passed, desc, val in conditions)
+       
+        # Calculate profit targets and other metrics
+        profit_target = None
+        stop_loss = None
+        holding_period = None
+        est_hourly_decay = 0.0
+        est_remaining_decay = 0.0
+       
+        if signal:
+            entry_price = option['lastPrice']
+            option_type = 'call' if side == 'call' else 'put'
+           
+            # NEW: Incorporate transaction costs (slippage and commissions)
+            slippage_pct = 0.005 # 0.5% slippage
+            commission_per_contract = 0.65 # $0.65 per contract
+            num_contracts = 1 # Assuming 1 contract for calculation
+           
+            # Adjust entry price for slippage
             entry_price_adjusted = entry_price * (1 + slippage_pct)
-        else:
-            entry_price_adjusted = entry_price * (1 - slippage_pct)
-            
-        total_commission = commission_per_contract
-        
-        # More realistic profit targets based on option price
-        option_type = 'call' if side == 'call' else 'put'
-        base_profit_pct = CONFIG['PROFIT_TARGETS'][option_type]
-        
-        # Scale profit target based on option price
-        # Cheaper options need higher % returns to be worthwhile
-        if entry_price_adjusted < 0.50:
-            profit_multiplier = 2.0  # 2x target for cheap options
-        elif entry_price_adjusted < 1.00:
-            profit_multiplier = 1.5  # 1.5x for moderately priced
-        else:
-            profit_multiplier = 1.0  # Standard for expensive options
-            
-        # Calculate profit target with realistic expectations
-        profit_target = (entry_price_adjusted + total_commission) * (1 + base_profit_pct * profit_multiplier)
-        
-        # Ensure minimum profit of $0.10
-        min_profit = 0.10
-        if profit_target - entry_price_adjusted < min_profit:
-            profit_target = entry_price_adjusted + min_profit
-            
-        # Calculate stop loss with similar logic
-        stop_loss = (entry_price_adjusted + total_commission) * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
-        
-        # ... rest of the function ...
+            total_commission = commission_per_contract * num_contracts
+           
+            # Calculate profit targets with costs
+            profit_target = (entry_price_adjusted + total_commission) * (1 + CONFIG['PROFIT_TARGETS'][option_type])
+           
+            # Calculate stop loss with costs
+            stop_loss = (entry_price_adjusted + total_commission) * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
+           
+            # Calculate holding period
+            expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
+            days_to_expiry = (expiry_date - datetime.date.today()).days
+           
+            if days_to_expiry == 0:
+                holding_period = "Intraday (Exit before 3:30 PM)"
+            elif days_to_expiry <= 3:
+                holding_period = "1-2 days (Quick scalp)"
+            else:
+                holding_period = "3-7 days (Swing trade)"
+           
+            if is_0dte and theta:
+                est_hourly_decay = -theta / CONFIG['TRADING_HOURS_PER_DAY']
+                remaining_hours = calculate_remaining_trading_hours()
+                est_remaining_decay = est_hourly_decay * remaining_hours
+       
+        return {
+            'signal': signal,
+            'score': weighted_score,
+            'max_score': 1.0,
+            'score_percentage': weighted_score * 100,
+            'explanations': explanations,
+            'thresholds': thresholds,
+            'profit_target': profit_target,
+            'stop_loss': stop_loss,
+            'holding_period': holding_period,
+            'est_hourly_decay': est_hourly_decay,
+            'est_remaining_decay': est_remaining_decay,
+            'passed_conditions': [exp['condition'] for exp in explanations if exp['passed']],
+            'failed_conditions': [exp['condition'] for exp in explanations if not exp['passed']],
+            # NEW: Add liquidity metrics
+            'open_interest': option['openInterest'],
+            'volume': option['volume'],
+            'implied_volatility': option['impliedVolatility']
+        }
+       
+    except Exception as e:
+        return {'signal': False, 'reason': f'Error in signal generation: {str(e)}', 'score': 0.0, 'explanations': []}
 # NEW: Vectorized signal processing to avoid iterrows()
 def process_options_batch(options_df: pd.DataFrame, side: str, stock_df: pd.DataFrame, current_price: float) -> pd.DataFrame:
     """Process options in batches for better performance"""
