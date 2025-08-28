@@ -86,10 +86,10 @@ CONFIG = {
         'min_volume': 100,
         'max_bid_ask_spread_pct': 0.1 # 10%
     },
-    'MIN_OPTION_PRICE': 0.20,  # Minimum option price to consider
-    'MIN_OPEN_INTEREST': 1000,  # Increased from 100
+    'MIN_OPTION_PRICE': 1.00,  # Minimum option price to consider
+    'MIN_OPEN_INTEREST': 2000,  # Increased from 100
     'MIN_VOLUME': 500,  # Increased from 100
-    'MAX_BID_ASK_SPREAD_PCT': 0.25,  # Reduced from 0.1 to 0.25 (25%)
+    'MAX_BID_ASK_SPREAD_PCT': 0.05,  # Reduced from 0.1 to 0.05 (5%)
 }
 
 # Update the LIQUIDITY_THRESHOLDS to use the new values
