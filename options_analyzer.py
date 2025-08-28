@@ -83,13 +83,13 @@ CONFIG = {
     # NEW: Liquidity thresholds
     'LIQUIDITY_THRESHOLDS': {
         'min_open_interest': 2000,  # Increased from 1000 to 2000
-        'min_volume': 500,  # Kept at 500
-        'max_bid_ask_spread_pct': 0.05  # Reduced from 0.25 to 0.05
+        'min_volume': 500,  # Increased from 100
+        'max_bid_ask_spread_pct': 0.05  # Reduced from 0.1 to 0.05 (5%)
     },
     'MIN_OPTION_PRICE': 1.00,  # Minimum option price to consider
-    'MIN_OPEN_INTEREST': 2000,  # Increased from 100
+    'MIN_OPEN_INTEREST': 2000,  # Increased from 1000
     'MIN_VOLUME': 500,  # Increased from 100
-    'MAX_BID_ASK_SPREAD_PCT': 0.05  # Reduced from 0.25 to 0.05
+    'MAX_BID_ASK_SPREAD_PCT': 0.05,  # Reduced from 0.1 to 0.05 (5%)
 }
 
 # Update the LIQUIDITY_THRESHOLDS to use the new values
@@ -2239,8 +2239,8 @@ with st.sidebar:
    
     # Enhanced profit targets
     with st.expander("🎯 Risk Management", expanded=False):
-        CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit")
-        CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="put_profit")
+        CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.10, 0.01, key="call_profit")
+        CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.10, 0.01, key="put_profit")
         CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, key="stop_loss")
        
         st.info("💡 **Tip**: Higher volatility may require wider targets")
@@ -2248,12 +2248,12 @@ with st.sidebar:
     with st.expander("💰 Liquidity Filters", expanded=False):
         CONFIG['MIN_OPTION_PRICE'] = st.slider(
             "Minimum Option Price", 
-            0.05, 5.0, 0.20, 0.05,
+            0.05, 5.0, 1.00, 0.05,
             help="Filter out cheap, illiquid options"
         )
         CONFIG['MIN_OPEN_INTEREST'] = st.slider(
             "Minimum Open Interest", 
-            100, 5000, 1000, 100,
+            100, 5000, 2000, 100,
             help="Higher values filter out less liquid options"
         )
         CONFIG['MIN_VOLUME'] = st.slider(
@@ -2263,7 +2263,7 @@ with st.sidebar:
         )
         CONFIG['MAX_BID_ASK_SPREAD_PCT'] = st.slider(
             "Max Bid/Ask Spread %", 
-            0.05, 1.0, 0.25, 0.05,
+            0.05, 1.0, 0.05, 0.05,
             help="Lower values filter out options with wide spreads"
         )
         
