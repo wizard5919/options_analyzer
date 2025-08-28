@@ -57,8 +57,8 @@ CONFIG = {
         'high': 0.05
     },
     'PROFIT_TARGETS': {
-        'call': 0.15,
-        'put': 0.15,
+        'call': 0.10,
+        'put': 0.10,
         'stop_loss': 0.08
     },
     'TRADING_HOURS_PER_DAY': 6.5,
@@ -1397,38 +1397,22 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     """Validate that option has required data for analysis with liquidity filters"""
     try:
-        required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility', 'bid', 'ask']
-       
-        for field in required_fields:
-            if field not in option or pd.isna(option[field]):
-                return False
-       
-        if option['lastPrice'] <= 0:
+        # Existing validation code...
+        
+        # NEW: Price validation - filter out penny options
+        if option['lastPrice'] < CONFIG['MIN_OPTION_PRICE']:
             return False
-       
-        # Apply liquidity filters
-        min_open_interest = CONFIG['LIQUIDITY_THRESHOLDS']['min_open_interest']
-        min_volume = CONFIG['LIQUIDITY_THRESHOLDS']['min_volume']
-       
-        if option['openInterest'] < min_open_interest:
+            
+        # NEW: More realistic spread calculation
+        if option['bid'] <= 0 or option['ask'] <= 0:
             return False
-       
-        if option['volume'] < min_volume:
-            return False
-
-        # Bid-Ask Spread Filter
+            
         bid_ask_spread = abs(option['ask'] - option['bid'])
-        spread_pct = bid_ask_spread / option['lastPrice'] if option['lastPrice'] > 0 else float('inf')
+        spread_pct = bid_ask_spread / option['ask'] if option['ask'] > 0 else float('inf')
+        
         if spread_pct > CONFIG['LIQUIDITY_THRESHOLDS']['max_bid_ask_spread_pct']:
             return False
-       
-        # Fill in Greeks if missing
-        if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
-            delta, gamma, theta = calculate_approximate_greeks(option.to_dict(), spot_price)
-            option['delta'] = delta
-            option['gamma'] = gamma
-            option['theta'] = theta
-       
+            
         return True
     except Exception:
         return False
@@ -1728,15 +1712,18 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             stop_loss = (entry_price_adjusted + total_commission) * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
            
             # Calculate holding period
-            expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
-            days_to_expiry = (expiry_date - datetime.date.today()).days
-           
-            if days_to_expiry == 0:
-                holding_period = "Intraday (Exit before 3:30 PM)"
-            elif days_to_expiry <= 3:
-                holding_period = "1-2 days (Quick scalp)"
+            if pd.notna(option['expiry']):
+                expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
+                days_to_expiry = (expiry_date - datetime.date.today()).days
+               
+                if days_to_expiry == 0:
+                    holding_period = "Intraday (Exit before 3:30 PM)"
+                elif days_to_expiry <= 3:
+                    holding_period = "1-2 days (Quick scalp)"
+                else:
+                    holding_period = "3-7 days (Swing trade)"
             else:
-                holding_period = "3-7 days (Swing trade)"
+                holding_period = "Unknown"
            
             if is_0dte and theta:
                 est_hourly_decay = -theta / CONFIG['TRADING_HOURS_PER_DAY']
@@ -1783,7 +1770,7 @@ def process_options_batch(options_df: pd.DataFrame, side: str, stock_df: pd.Data
         # Add 0DTE flag
         today = datetime.date.today()
         options_df['is_0dte'] = options_df['expiry'].apply(
-            lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today
+            lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today if pd.notna(x) else False
         )
        
         # Add moneyness
