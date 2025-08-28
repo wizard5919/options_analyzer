@@ -82,14 +82,14 @@ CONFIG = {
     },
     # NEW: Liquidity thresholds
     'LIQUIDITY_THRESHOLDS': {
-        'min_open_interest': 100,
-        'min_volume': 100,
-        'max_bid_ask_spread_pct': 0.1 # 10%
+        'min_open_interest': 2000,  # Increased from 1000 to 2000
+        'min_volume': 500,  # Kept at 500
+        'max_bid_ask_spread_pct': 0.05  # Reduced from 0.25 to 0.05
     },
     'MIN_OPTION_PRICE': 1.00,  # Minimum option price to consider
     'MIN_OPEN_INTEREST': 2000,  # Increased from 100
     'MIN_VOLUME': 500,  # Increased from 100
-    'MAX_BID_ASK_SPREAD_PCT': 0.05,  # Reduced from 0.1 to 0.05 (5%)
+    'MAX_BID_ASK_SPREAD_PCT': 0.05  # Reduced from 0.25 to 0.05
 }
 
 # Update the LIQUIDITY_THRESHOLDS to use the new values
