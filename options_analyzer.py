@@ -1853,6 +1853,104 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
     except Exception as e:
         st.error(f"Error in scanner score calculation: {str(e)}")
         return 0.0
+    def scan_best_options():
+    """Scan popular tickers to find the best options opportunities"""
+    popular_tickers = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMD', 'GOOGL', 'AMZN']
+    
+    st.subheader("🔍 Scanning Top Tickers for Best Options")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    results = []
+    
+    for i, ticker in enumerate(popular_tickers):
+        status_text.text(f"Analyzing {ticker} ({i+1}/{len(popular_tickers)})...")
+        progress_bar.progress((i + 1) / len(popular_tickers))
+        
+        try:
+            # Get stock data
+            df = get_stock_data_with_indicators(ticker)
+            if df.empty:
+                continue
+                
+            current_price = df.iloc[-1]['Close']
+            
+            # Get options data
+            expiries, calls, puts = get_real_options_data(ticker)
+            if not expiries:
+                continue
+                
+            # Filter for near-term options
+            today = datetime.date.today()
+            week_end = today + datetime.timedelta(days=7)
+            expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
+            
+            if not expiries_to_use:
+                continue
+                
+            calls_filtered = calls[calls['expiry'].isin(expiries_to_use)].copy()
+            puts_filtered = puts[puts['expiry'].isin(expiries_to_use)].copy()
+            
+            # Filter for strikes near current price
+            strike_range = 0.1  # 10% range
+            min_strike = current_price * (1 - strike_range)
+            max_strike = current_price * (1 + strike_range)
+            
+            calls_filtered = calls_filtered[
+                (calls_filtered['strike'] >= min_strike) &
+                (calls_filtered['strike'] <= max_strike)
+            ].copy()
+            
+            puts_filtered = puts_filtered[
+                (puts_filtered['strike'] >= min_strike) &
+                (puts_filtered['strike'] <= max_strike)
+            ].copy()
+            
+            # Process signals
+            call_signals = process_options_batch(calls_filtered, "call", df, current_price)
+            put_signals = process_options_batch(puts_filtered, "put", df, current_price)
+            
+            # Add best signals to results
+            if not call_signals.empty:
+                best_call = call_signals.iloc[0]
+                results.append({
+                    'ticker': ticker,
+                    'type': 'CALL',
+                    'contract': best_call['contractSymbol'],
+                    'strike': best_call['strike'],
+                    'price': best_call['lastPrice'],
+                    'score': best_call['score_percentage'],
+                    'delta': best_call['delta'],
+                    'gamma': best_call['gamma']
+                })
+                
+            if not put_signals.empty:
+                best_put = put_signals.iloc[0]
+                results.append({
+                    'ticker': ticker,
+                    'type': 'PUT',
+                    'contract': best_put['contractSymbol'],
+                    'strike': best_put['strike'],
+                    'price': best_put['lastPrice'],
+                    'score': best_put['score_percentage'],
+                    'delta': best_put['delta'],
+                    'gamma': best_put['gamma']
+                })
+                
+            # Add small delay to avoid rate limiting
+            time.sleep(1)
+            
+        except Exception as e:
+            st.error(f"Error analyzing {ticker}: {str(e)}")
+            continue
+    
+    # Sort results by score
+    results.sort(key=lambda x: x['score'], reverse=True)
+    
+    status_text.empty()
+    progress_bar.empty()
+    
+    return results
 def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
     """Create TradingView-style chart with indicators using Plotly"""
     if df.empty:
@@ -2318,6 +2416,31 @@ with st.sidebar:
    
     # NEW: Performance monitoring section
     measure_performance()
+    # NEW: Add scan button in sidebar
+st.markdown("---")
+if st.button("🚀 Scan for Best Options", help="Automatically scan popular tickers for the best options opportunities"):
+    with st.spinner("Scanning for best options..."):
+        best_options = scan_best_options()
+        
+        if best_options:
+            st.success("✅ Scan Complete!")
+            
+            # Display top 3 results
+            for i, option in enumerate(best_options[:3]):
+                with st.expander(f"🏆 #{i+1}: {option['ticker']} {option['type']} ({option['score']:.1f}%)", expanded=i==0):
+                    st.write(f"**Contract:** {option['contract']}")
+                    st.write(f"**Strike:** ${option['strike']:.2f}")
+                    st.write(f"**Price:** ${option['price']:.2f}")
+                    st.write(f"**Score:** {option['score']:.1f}%")
+                    st.write(f"**Delta:** {option['delta']:.3f}")
+                    st.write(f"**Gamma:** {option['gamma']:.3f}")
+                    
+                    # Add button to analyze this ticker
+                    if st.button(f"Analyze {option['ticker']}", key=f"analyze_{option['ticker']}_{i}"):
+                        st.session_state.selected_ticker = option['ticker']
+                        st.rerun()
+        else:
+            st.warning("No strong options signals found in scanned tickers.")
 # NEW: Create placeholders for real-time metrics
 if 'price_placeholder' not in st.session_state:
     st.session_state.price_placeholder = st.empty()
