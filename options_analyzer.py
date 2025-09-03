@@ -1853,104 +1853,248 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
     except Exception as e:
         st.error(f"Error in scanner score calculation: {str(e)}")
         return 0.0
-    def scan_best_options():
-      """Scan popular tickers to find the best options opportunities"""
+   # NEW: Enhanced scanner interface
+def display_scanner_interface():
+    st.header("🔍 Multi-Ticker Options Scanner")
+    
+    # Popular tickers to scan
     popular_tickers = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMD', 'GOOGL', 'AMZN']
     
-    st.subheader("🔍 Scanning Top Tickers for Best Options")
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    # Let user select which tickers to scan
+    selected_tickers = st.multiselect(
+        "Select tickers to scan:",
+        options=popular_tickers,
+        default=['SPY', 'QQQ', 'IWM', 'AAPL'],
+        help="Choose which tickers to include in the scan"
+    )
     
-    results = []
+    # Scanner configuration
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        scan_mode = st.selectbox(
+            "Scan Mode:",
+            ["Quick Scan", "Full Analysis"],
+            help="Quick scan checks basic signals, Full analysis does deep options analysis"
+        )
+    with col2:
+        signal_threshold = st.slider(
+            "Min Signal Score:",
+            0, 100, 70,
+            help="Only show tickers with signals above this score"
+        )
+    with col3:
+        max_results = st.slider(
+            "Max Results:",
+            1, 20, 10,
+            help="Maximum number of results to display"
+        )
     
-    for i, ticker in enumerate(popular_tickers):
-        status_text.text(f"Analyzing {ticker} ({i+1}/{len(popular_tickers)})...")
-        progress_bar.progress((i + 1) / len(popular_tickers))
+    if st.button("🚀 Start Scanning", type="primary", use_container_width=True):
+        # Initialize session state for scanning
+        st.session_state.scanning = True
+        st.session_state.scan_results = []
+        st.session_state.scan_progress = 0
+        st.session_state.currently_scanning = ""
         
-        try:
-            # Get stock data
-            df = get_stock_data_with_indicators(ticker)
-            if df.empty:
-                continue
+        # Store selected tickers
+        st.session_state.tickers_to_scan = selected_tickers
+        
+        # Rerun to start the scan
+        st.rerun()
+    
+    # Display scanning progress and results
+    if st.session_state.get('scanning', False):
+        # Initialize results if not exists
+        if 'scan_results' not in st.session_state:
+            st.session_state.scan_results = []
+        
+        # Get the tickers to scan
+        tickers_to_scan = st.session_state.get('tickers_to_scan', [])
+        
+        # Create progress bar and status
+        progress_bar = st.progress(st.session_state.get('scan_progress', 0))
+        status_text = st.empty()
+        
+        # Scan each ticker
+        for i, ticker in enumerate(tickers_to_scan):
+            if ticker not in [r.get('ticker') for r in st.session_state.scan_results]:
+                st.session_state.currently_scanning = ticker
+                status_text.text(f"Scanning {ticker} ({i+1}/{len(tickers_to_scan)})...")
                 
-            current_price = df.iloc[-1]['Close']
-            
-            # Get options data
-            expiries, calls, puts = get_real_options_data(ticker)
-            if not expiries:
-                continue
+                try:
+                    # Get stock data
+                    df = get_stock_data_with_indicators(ticker)
+                    
+                    if df.empty:
+                        continue
+                    
+                    current_price = df.iloc[-1]['Close']
+                    
+                    # Get options data
+                    expiries, calls, puts = get_real_options_data(ticker)
+                    
+                    if not expiries:
+                        continue
+                    
+                    # Filter for near-term options
+                    today = datetime.date.today()
+                    week_end = today + datetime.timedelta(days=7)
+                    expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
+                    
+                    if not expiries_to_use:
+                        continue
+                    
+                    calls_filtered = calls[calls['expiry'].isin(expiries_to_use)].copy()
+                    puts_filtered = puts[puts['expiry'].isin(expiries_to_use)].copy()
+                    
+                    # Filter for strikes near current price
+                    strike_range = 0.1  # 10% range
+                    min_strike = current_price * (1 - strike_range)
+                    max_strike = current_price * (1 + strike_range)
+                    
+                    calls_filtered = calls_filtered[
+                        (calls_filtered['strike'] >= min_strike) &
+                        (calls_filtered['strike'] <= max_strike)
+                    ].copy()
+                    
+                    puts_filtered = puts_filtered[
+                        (puts_filtered['strike'] >= min_strike) &
+                        (puts_filtered['strike'] <= max_strike)
+                    ].copy()
+                    
+                    # Process signals
+                    call_signals = process_options_batch(calls_filtered, "call", df, current_price)
+                    put_signals = process_options_batch(puts_filtered, "put", df, current_price)
+                    
+                    # Calculate scanner scores
+                    call_score = calculate_scanner_score(df, 'call')
+                    put_score = calculate_scanner_score(df, 'put')
+                    
+                    # Determine overall score
+                    overall_score = max(call_score, put_score)
+                    direction = "CALL" if call_score > put_score else "PUT"
+                    
+                    # Get best signal if available
+                    best_signal = None
+                    if call_signals is not None and not call_signals.empty and call_score >= put_score:
+                        best_signal = call_signals.iloc[0]
+                    elif put_signals is not None and not put_signals.empty:
+                        best_signal = put_signals.iloc[0]
+                    
+                    # Add to results
+                    result = {
+                        'ticker': ticker,
+                        'price': current_price,
+                        'call_score': call_score,
+                        'put_score': put_score,
+                        'overall_score': overall_score,
+                        'direction': direction,
+                        'best_signal': best_signal,
+                        'timestamp': datetime.datetime.now()
+                    }
+                    
+                    st.session_state.scan_results.append(result)
+                    
+                except Exception as e:
+                    st.error(f"Error scanning {ticker}: {str(e)}")
                 
-            # Filter for near-term options
-            today = datetime.date.today()
-            week_end = today + datetime.timedelta(days=7)
-            expiries_to_use = [e for e in expiries if today <= datetime.datetime.strptime(e, "%Y-%m-%d").date() <= week_end]
-            
-            if not expiries_to_use:
-                continue
+                # Update progress
+                st.session_state.scan_progress = (i + 1) / len(tickers_to_scan)
+                progress_bar.progress(st.session_state.scan_progress)
                 
-            calls_filtered = calls[calls['expiry'].isin(expiries_to_use)].copy()
-            puts_filtered = puts[puts['expiry'].isin(expiries_to_use)].copy()
+                # Small delay to avoid rate limiting
+                time.sleep(1)
+        
+        # Scanning complete
+        st.session_state.scanning = False
+        status_text.text("Scan complete!")
+        time.sleep(0.5)
+        status_text.empty()
+        progress_bar.empty()
+    
+    # Display results if available
+    if st.session_state.get('scan_results'):
+        results = st.session_state.scan_results
+        
+        # Sort by overall score
+        results.sort(key=lambda x: x['overall_score'], reverse=True)
+        
+        # Filter by threshold
+        filtered_results = [r for r in results if r['overall_score'] >= signal_threshold]
+        
+        # Limit to max results
+        filtered_results = filtered_results[:max_results]
+        
+        st.subheader(f"📊 Scan Results ({len(filtered_results)} matches)")
+        
+        # Create a grid of results
+        cols = st.columns(2)
+        col_index = 0
+        
+        for i, result in enumerate(filtered_results):
+            with cols[col_index]:
+                # Determine color based on score
+                score_color = "green" if result['overall_score'] >= 70 else "orange" if result['overall_score'] >= 50 else "red"
+                
+                # Create a card for each result
+                with st.container():
+                    st.markdown(f"""
+                    <div style="
+                        padding: 15px;
+                        border-radius: 10px;
+                        border: 1px solid #ddd;
+                        margin-bottom: 15px;
+                        background-color: #f9f9f9;
+                    ">
+                        <h3 style="margin-top: 0; color: {score_color};">
+                            {result['ticker']} - ${result['price']:.2f}
+                        </h3>
+                        <p>
+                            <b>Direction:</b> {result['direction']}<br>
+                            <b>Overall Score:</b> <span style="color: {score_color};">{result['overall_score']:.1f}%</span><br>   
+                            <b>Call Score:</b> {result['call_score']:.1f}%<br>
+                            <b>Put Score:</b> {result['put_score']:.1f}%<br>
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Add analyze button
+                    if st.button(f"Analyze {result['ticker']}", key=f"analyze_{result['ticker']}"):
+                        st.session_state.selected_ticker = result['ticker']
+                        st.rerun()
             
-            # Filter for strikes near current price
-            strike_range = 0.1  # 10% range
-            min_strike = current_price * (1 - strike_range)
-            max_strike = current_price * (1 + strike_range)
-            
-            calls_filtered = calls_filtered[
-                (calls_filtered['strike'] >= min_strike) &
-                (calls_filtered['strike'] <= max_strike)
-            ].copy()
-            
-            puts_filtered = puts_filtered[
-                (puts_filtered['strike'] >= min_strike) &
-                (puts_filtered['strike'] <= max_strike)
-            ].copy()
-            
-            # Process signals
-            call_signals = process_options_batch(calls_filtered, "call", df, current_price)
-            put_signals = process_options_batch(puts_filtered, "put", df, current_price)
-            
-            # Add best signals to results
-            if not call_signals.empty:
-                best_call = call_signals.iloc[0]
-                results.append({
-                    'ticker': ticker,
-                    'type': 'CALL',
-                    'contract': best_call['contractSymbol'],
-                    'strike': best_call['strike'],
-                    'price': best_call['lastPrice'],
-                    'score': best_call['score_percentage'],
-                    'delta': best_call['delta'],
-                    'gamma': best_call['gamma']
+            # Alternate between columns
+            col_index = (col_index + 1) % 2
+        
+        # Show detailed view if requested
+        if st.checkbox("Show detailed results table"):
+            # Create a DataFrame for the table
+            table_data = []
+            for result in filtered_results:
+                table_data.append({
+                    'Ticker': result['ticker'],
+                    'Price': f"${result['price']:.2f}",
+                    'Direction': result['direction'],
+                    'Overall Score': f"{result['overall_score']:.1f}%",
+                    'Call Score': f"{result['call_score']:.1f}%",
+                    'Put Score': f"{result['put_score']:.1f}%",
                 })
-                
-            if not put_signals.empty:
-                best_put = put_signals.iloc[0]
-                results.append({
-                    'ticker': ticker,
-                    'type': 'PUT',
-                    'contract': best_put['contractSymbol'],
-                    'strike': best_put['strike'],
-                    'price': best_put['lastPrice'],
-                    'score': best_put['score_percentage'],
-                    'delta': best_put['delta'],
-                    'gamma': best_put['gamma']
-                })
-                
-            # Add small delay to avoid rate limiting
-            time.sleep(1)
             
-        except Exception as e:
-            st.error(f"Error analyzing {ticker}: {str(e)}")
-            continue
+            df = pd.DataFrame(table_data)
+            st.dataframe(df, use_container_width=True)
     
-    # Sort results by score
-    results.sort(key=lambda x: x['score'], reverse=True)
-    
-    status_text.empty()
-    progress_bar.empty()
-    
-    return results
+    elif st.session_state.get('scanning', False):
+        # Show scanning status
+        st.info(f"🔍 Scanning {st.session_state.get('currently_scanning', 'tickers')}...")
+    else:
+        st.info("👆 Select tickers and click 'Start Scanning' to begin")
+
+# Add the scanner to the main interface
+# Place this after the existing tab definitions
+tab7 = st.tabs(["🔍 Multi-Ticker Scanner"])[0]
+
+with tab7:
+    display_scanner_interface()
 def create_stock_chart(df: pd.DataFrame, sr_levels: dict = None):
     """Create TradingView-style chart with indicators using Plotly"""
     if df.empty:
