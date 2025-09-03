@@ -1854,7 +1854,7 @@ def calculate_scanner_score(stock_df: pd.DataFrame, side: str) -> float:
         st.error(f"Error in scanner score calculation: {str(e)}")
         return 0.0
     def scan_best_options():
-    """Scan popular tickers to find the best options opportunities"""
+      """Scan popular tickers to find the best options opportunities"""
     popular_tickers = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMD', 'GOOGL', 'AMZN']
     
     st.subheader("🔍 Scanning Top Tickers for Best Options")
@@ -2065,7 +2065,7 @@ def measure_performance():
    
     # Update memory usage
     try:
-        import psutil
+        import psutil # type: ignore
         process = psutil.Process()
         st.session_state.performance_metrics['memory_usage'] = process.memory_info().rss / (1024 * 1024) # in MB
     except ImportError:
@@ -2420,7 +2420,7 @@ with st.sidebar:
 st.markdown("---")
 if st.button("🚀 Scan for Best Options", help="Automatically scan popular tickers for the best options opportunities"):
     with st.spinner("Scanning for best options..."):
-        best_options = scan_best_options()
+        best_options = scan_best_options() # type: ignore
         
         if best_options:
             st.success("✅ Scan Complete!")
