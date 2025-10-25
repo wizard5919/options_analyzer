@@ -260,9 +260,9 @@ CONFIG = {
             'daily': 20
         },
         'LIQUIDITY_THRESHOLDS': {
-            'min_open_interest': 100,
-            'min_volume': 100,
-            'max_bid_ask_spread_pct': 0.1
+            'min_open_interest': 50,
+            'min_volume': 50,
+            'max_bid_ask_spread_pct': 0.15
         }
     }
 }
@@ -272,9 +272,9 @@ if 'API_CALL_LOG' not in st.session_state:
 # Enhanced signal thresholds with weighted conditions
 SIGNAL_THRESHOLDS = {
     'call': {
-        'delta_base': 0.5,
-        'delta_vol_multiplier': 0.1,
-        'gamma_base': 0.05,
+        'delta_base': 0.3,  # Lowered from 0.5
+        'delta_vol_multiplier': 0.15,
+        'gamma_base': 0.03,  # Lowered from 0.05
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
@@ -293,9 +293,9 @@ SIGNAL_THRESHOLDS = {
         }
     },
     'put': {
-        'delta_base': -0.5,
-        'delta_vol_multiplier': 0.1,
-        'gamma_base': 0.05,
+        'delta_base': -0.3,  # Raised from -0.5
+        'delta_vol_multiplier': 0.15,
+        'gamma_base': 0.03,  # Lowered from 0.05
         'gamma_vol_multiplier': 0.02,
         'theta_base': 0.05,
         'rsi_base': 50,
@@ -1561,11 +1561,67 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
         return delta, gamma, theta
     except Exception:
         return 0.5, 0.05, 0.02
+def calculate_missing_greeks(option: pd.Series, spot_price: float, option_type: str) -> pd.Series:
+    """Calculate missing Greeks when not provided by data source"""
+    try:
+        strike = option['strike']
+        days_to_expiry = (datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date() - datetime.date.today()).days
+        iv = option.get('impliedVolatility', 0.3)  # Default IV if missing
+        
+        # Simple Black-Scholes approximation for delta
+        if pd.isna(option.get('delta')):
+            if option_type == 'call':
+                # Simplified call delta calculation
+                moneyness = spot_price / strike
+                if moneyness > 1.05:  # Deep ITM
+                    delta = 0.85
+                elif moneyness > 1.0:  # Slightly ITM
+                    delta = 0.65
+                elif moneyness > 0.95:  # ATM
+                    delta = 0.50
+                else:  # OTM
+                    delta = 0.35
+            else:  # put
+                moneyness = spot_price / strike
+                if moneyness < 0.95:  # Deep ITM
+                    delta = -0.85
+                elif moneyness < 1.0:  # Slightly ITM
+                    delta = -0.65
+                elif moneyness < 1.05:  # ATM
+                    delta = -0.50
+                else:  # OTM
+                    delta = -0.35
+            option['delta'] = delta
+        
+        # Fill other Greeks if missing
+        if pd.isna(option.get('gamma')):
+            option['gamma'] = 0.05  # Reasonable default
+        
+        if pd.isna(option.get('theta')):
+            # Theta increases as expiration approaches
+            if days_to_expiry == 0:
+                option['theta'] = -0.15
+            elif days_to_expiry <= 3:
+                option['theta'] = -0.08
+            else:
+                option['theta'] = -0.03
+        
+        return option
+        
+    except Exception as e:
+        # Fallback values
+        if pd.isna(option.get('delta')):
+            option['delta'] = 0.5 if option_type == 'call' else -0.5
+        if pd.isna(option.get('gamma')):
+            option['gamma'] = 0.05
+        if pd.isna(option.get('theta')):
+            option['theta'] = -0.05
+        return option
 # NEW: Enhanced validation with liquidity filters
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     """Validate that option has required data for analysis with liquidity filters"""
     try:
-        required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility', 'bid', 'ask']
+        required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'bid', 'ask']
   
         for field in required_fields:
             if field not in option or pd.isna(option[field]):
@@ -1575,26 +1631,28 @@ def validate_option_data(option: pd.Series, spot_price: float) -> bool:
             return False
   
         # Apply liquidity filters
-        min_open_interest = CONFIG['LIQUIDITY_THRESHOLDS']['min_open_interest']
-        min_volume = CONFIG['LIQUIDITY_THRESHOLDS']['min_volume']
-  
+        if is_market_open():
+            min_open_interest = 0
+            min_volume = 0
+        else:
+            min_open_interest = CONFIG['LIQUIDITY_THRESHOLDS']['min_open_interest']
+            min_volume = CONFIG['LIQUIDITY_THRESHOLDS']['min_volume']
+
         if option['openInterest'] < min_open_interest:
             return False
   
         if option['volume'] < min_volume:
             return False
+        
         # Bid-Ask Spread Filter
         bid_ask_spread = abs(option['ask'] - option['bid'])
         spread_pct = bid_ask_spread / option['lastPrice'] if option['lastPrice'] > 0 else float('inf')
         if spread_pct > CONFIG['LIQUIDITY_THRESHOLDS']['max_bid_ask_spread_pct']:
             return False
   
-        # Fill in Greeks if missing
-        if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
-            delta, gamma, theta = calculate_approximate_greeks(option.to_dict(), spot_price)
-            option['delta'] = delta
-            option['gamma'] = gamma
-            option['theta'] = theta
+        # FIX: Calculate missing Greeks instead of rejecting
+        option_type = 'call' if 'C' in option.get('contractSymbol', '') else 'put'
+        option = calculate_missing_greeks(option, spot_price, option_type)
   
         return True
     except Exception:
@@ -1610,12 +1668,14 @@ def calculate_dynamic_thresholds(stock_data: pd.Series, side: str, is_0dte: bool
         if pd.isna(volatility):
             volatility = 0.02
   
-        vol_multiplier = 1 + (volatility * 100)
+        vol_multiplier = 1 + (volatility * 50)  # Reduced from 100 to 50
   
         if side == 'call':
             thresholds['delta_min'] = max(0.3, min(0.8, thresholds['delta_base'] * vol_multiplier))
+            thresholds['delta_min'] = min(thresholds['delta_min'], 0.6)  # Cap at 0.6
         else:
             thresholds['delta_max'] = min(-0.3, max(-0.8, thresholds['delta_base'] * vol_multiplier))
+            thresholds['delta_max'] = max(thresholds['delta_max'], -0.6)  # Cap at -0.6
   
         thresholds['gamma_min'] = thresholds['gamma_base'] * (1 + thresholds['gamma_vol_multiplier'] * (volatility * 200))
   
@@ -1647,8 +1707,7 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
     if stock_df.empty:
         return {'signal': False, 'reason': 'No stock data available', 'score': 0.0, 'explanations': []}
     current_price = stock_df.iloc[-1]['Close']
-    if not validate_option_data(option, current_price):
-        return {'signal': False, 'reason': 'Insufficient option data', 'score': 0.0, 'explanations': []}
+    # REMOVED: validation check because we already validated in batch processing
     latest = stock_df.iloc[-1]
     try:
         thresholds = calculate_dynamic_thresholds(latest, side, is_0dte)
@@ -1938,21 +1997,21 @@ def process_options_batch(options_df: pd.DataFrame, side: str, stock_df: pd.Data
         options_df = options_df.copy()
         options_df = options_df[options_df['lastPrice'] > 0]
         options_df = options_df.dropna(subset=['strike', 'lastPrice', 'volume', 'openInterest'])
-  
+
         if options_df.empty:
             return pd.DataFrame()
-  
+
         # Add 0DTE flag
         today = datetime.date.today()
         options_df['is_0dte'] = options_df['expiry'].apply(
             lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today
         )
-  
+
         # Add moneyness
         options_df['moneyness'] = options_df['strike'].apply(
             lambda x: classify_moneyness(x, current_price)
         )
-  
+
         # Fill missing Greeks
         for idx, row in options_df.iterrows():
             if pd.isna(row.get('delta')) or pd.isna(row.get('gamma')) or pd.isna(row.get('theta')):
@@ -1960,20 +2019,26 @@ def process_options_batch(options_df: pd.DataFrame, side: str, stock_df: pd.Data
                 options_df.loc[idx, 'delta'] = delta
                 options_df.loc[idx, 'gamma'] = gamma
                 options_df.loc[idx, 'theta'] = theta
-  
+
         # Process signals
         signals = []
+        valid_options = 0
         for idx, row in options_df.iterrows():
-            signal_result = generate_enhanced_signal(row, side, stock_df, row['is_0dte'])
-            if signal_result['signal']:
-                row_dict = row.to_dict()
-                row_dict.update(signal_result)
-                signals.append(row_dict)
-  
+            if validate_option_data(row, current_price):
+                valid_options += 1
+                signal_result = generate_enhanced_signal(row, side, stock_df, row['is_0dte'])
+                if signal_result['signal']:
+                    row_dict = row.to_dict()
+                    row_dict.update(signal_result)
+                    signals.append(row_dict)
+
+        if st.session_state.get('debug_mode', False):
+            st.write(f"Debug: {valid_options} options passed validation for {side}")
+
         if signals:
             signals_df = pd.DataFrame(signals)
             return signals_df.sort_values('score_percentage', ascending=False)
-  
+
         return pd.DataFrame()
     except Exception as e:
         st.error(f"Error processing options batch: {str(e)}")
@@ -2529,7 +2594,7 @@ with st.sidebar:
             )
             SIGNAL_THRESHOLDS['call']['condition_weights']['gamma'] = st.slider(
                 "Gamma Weight", 0.1, 0.3, 0.20, 0.05,
-                help="Higher gamma = faster delta acceleration",
+                help="Higher gamma = higher acceleration",
                 key="call_gamma_weight"
             )
             SIGNAL_THRESHOLDS['call']['condition_weights']['trend'] = st.slider(
@@ -2642,6 +2707,9 @@ with st.sidebar:
   
     # NEW: Performance monitoring section
     measure_performance()
+    # Add debug mode
+    debug_mode = st.checkbox("Debug Mode")
+    st.session_state.debug_mode = debug_mode
 # NEW: Create placeholders for real-time metrics
 if 'price_placeholder' not in st.session_state:
     st.session_state.price_placeholder = st.empty()
@@ -2739,7 +2807,7 @@ with tab1: # General tab
                     expiries, all_calls, all_puts = get_full_options_chain(ticker)
          
                 # Handle the results and show UI controls outside of cached functions
-                if not expiries:
+                if not expiries or (all_calls.empty and all_puts.empty):
                     st.error("❌ Unable to fetch real options data")
              
                     # Check rate limit status
@@ -2870,6 +2938,14 @@ with tab1: # General tab
                     puts_filtered = puts_filtered[puts_filtered['moneyness'].isin(m_filter)]
          
                 st.write(f"🔍 **Filtered Options**: {len(calls_filtered)} calls, {len(puts_filtered)} puts")
+         
+                # Quick Test Fix
+                st.write(f"📊 Options Data Debug:")
+                st.write(f"Calls: {len(calls_filtered)}, Puts: {len(puts_filtered)}")
+                if not calls_filtered.empty:
+                    st.write("Sample Call:", calls_filtered.iloc[0][['strike', 'lastPrice', 'delta', 'gamma', 'volume']].to_dict())
+                if not puts_filtered.empty:
+                    st.write("Sample Put:", puts_filtered.iloc[0][['strike', 'lastPrice', 'delta', 'gamma', 'volume']].to_dict())
          
                 # Process signals using enhanced batch processing
                 col1, col2 = st.columns(2)
@@ -3101,7 +3177,7 @@ with tab2: # Chart tab
                     # Create TradingView-style chart
                     chart_fig = create_stock_chart(chart_data, st.session_state.sr_data, selected_timeframe)
                     if chart_fig:
-                        st.plotly_chart(chart_fig, use_container_width=True, height=800)
+                        st.plotly_chart(chart_fig, use_container_width=True, config={'displayModeBar': True})
                     else:
                         st.error("Failed to create chart")
                 else:
@@ -3368,7 +3444,7 @@ with st.expander("Technical Analysis Summary"):
             st.info("News data is temporarily unavailable. Please try again later or check your API keys.")
 
         # ─────────────────────────────────────────────────────────
-# 📅 US Economic Calendar (with Daily Summary)
+# 📅 US Economic Calendar (Upcoming)
 # ─────────────────────────────────────────────────────────
 st.subheader("📅 US Economic Calendar (Upcoming)")
 if CONFIG.get('FMP_API_KEY'):
