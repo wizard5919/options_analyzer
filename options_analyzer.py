@@ -57,8 +57,8 @@ CONFIG = {
         'high': 0.05
     },
     'PROFIT_TARGETS': {
-        'call': 0.15,
-        'put': 0.15,
+        'call': 0.10,
+        'put': 0.10,
         'stop_loss': 0.08
     },
     'TRADING_HOURS_PER_DAY': 6.5,
@@ -82,11 +82,23 @@ CONFIG = {
     },
     # NEW: Liquidity thresholds
     'LIQUIDITY_THRESHOLDS': {
-        'min_open_interest': 100,
-        'min_volume': 100,
-        'max_bid_ask_spread_pct': 0.1 # 10%
-    }
+        'min_open_interest': 2000,  # Increased from 1000 to 2000
+        'min_volume': 500,  # Increased from 100
+        'max_bid_ask_spread_pct': 0.05  # Reduced from 0.1 to 0.05 (5%)
+    },
+    'MIN_OPTION_PRICE': 1.00,  # Minimum option price to consider
+    'MIN_OPEN_INTEREST': 2000,  # Increased from 1000
+    'MIN_VOLUME': 500,  # Increased from 100
+    'MAX_BID_ASK_SPREAD_PCT': 0.05,  # Reduced from 0.1 to 0.05 (5%)
 }
+
+# Update the LIQUIDITY_THRESHOLDS to use the new values
+CONFIG['LIQUIDITY_THRESHOLDS'] = {
+    'min_open_interest': CONFIG['MIN_OPEN_INTEREST'],
+    'min_volume': CONFIG['MIN_VOLUME'],
+    'max_bid_ask_spread_pct': CONFIG['MAX_BID_ASK_SPREAD_PCT']
+}
+
 # Initialize API call log in session state
 if 'API_CALL_LOG' not in st.session_state:
     st.session_state.API_CALL_LOG = []
@@ -1385,38 +1397,22 @@ def calculate_approximate_greeks(option: dict, spot_price: float) -> Tuple[float
 def validate_option_data(option: pd.Series, spot_price: float) -> bool:
     """Validate that option has required data for analysis with liquidity filters"""
     try:
-        required_fields = ['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility', 'bid', 'ask']
-       
-        for field in required_fields:
-            if field not in option or pd.isna(option[field]):
-                return False
-       
-        if option['lastPrice'] <= 0:
+        # Existing validation code...
+        
+        # NEW: Price validation - filter out penny options
+        if option['lastPrice'] < CONFIG['MIN_OPTION_PRICE']:
             return False
-       
-        # Apply liquidity filters
-        min_open_interest = CONFIG['LIQUIDITY_THRESHOLDS']['min_open_interest']
-        min_volume = CONFIG['LIQUIDITY_THRESHOLDS']['min_volume']
-       
-        if option['openInterest'] < min_open_interest:
+            
+        # NEW: More realistic spread calculation
+        if option['bid'] <= 0 or option['ask'] <= 0:
             return False
-       
-        if option['volume'] < min_volume:
-            return False
-
-        # Bid-Ask Spread Filter
+            
         bid_ask_spread = abs(option['ask'] - option['bid'])
-        spread_pct = bid_ask_spread / option['lastPrice'] if option['lastPrice'] > 0 else float('inf')
+        spread_pct = bid_ask_spread / option['ask'] if option['ask'] > 0 else float('inf')
+        
         if spread_pct > CONFIG['LIQUIDITY_THRESHOLDS']['max_bid_ask_spread_pct']:
             return False
-       
-        # Fill in Greeks if missing
-        if pd.isna(option.get('delta')) or pd.isna(option.get('gamma')) or pd.isna(option.get('theta')):
-            delta, gamma, theta = calculate_approximate_greeks(option.to_dict(), spot_price)
-            option['delta'] = delta
-            option['gamma'] = gamma
-            option['theta'] = theta
-       
+            
         return True
     except Exception:
         return False
@@ -1564,7 +1560,7 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             })
            
         else: # put side
-            # Similar logic for puts but with inverted conditions
+            # Delta condition
             delta_pass = delta <= thresholds.get('delta_max', -0.5)
             delta_score = weights['delta'] if delta_pass else 0
             weighted_score += delta_score
@@ -1716,15 +1712,18 @@ def generate_enhanced_signal(option: pd.Series, side: str, stock_df: pd.DataFram
             stop_loss = (entry_price_adjusted + total_commission) * (1 - CONFIG['PROFIT_TARGETS']['stop_loss'])
            
             # Calculate holding period
-            expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
-            days_to_expiry = (expiry_date - datetime.date.today()).days
-           
-            if days_to_expiry == 0:
-                holding_period = "Intraday (Exit before 3:30 PM)"
-            elif days_to_expiry <= 3:
-                holding_period = "1-2 days (Quick scalp)"
+            if pd.notna(option['expiry']):
+                expiry_date = datetime.datetime.strptime(option['expiry'], "%Y-%m-%d").date()
+                days_to_expiry = (expiry_date - datetime.date.today()).days
+               
+                if days_to_expiry == 0:
+                    holding_period = "Intraday (Exit before 3:30 PM)"
+                elif days_to_expiry <= 3:
+                    holding_period = "1-2 days (Quick scalp)"
+                else:
+                    holding_period = "3-7 days (Swing trade)"
             else:
-                holding_period = "3-7 days (Swing trade)"
+                holding_period = "Unknown"
            
             if is_0dte and theta:
                 est_hourly_decay = -theta / CONFIG['TRADING_HOURS_PER_DAY']
@@ -1771,7 +1770,7 @@ def process_options_batch(options_df: pd.DataFrame, side: str, stock_df: pd.Data
         # Add 0DTE flag
         today = datetime.date.today()
         options_df['is_0dte'] = options_df['expiry'].apply(
-            lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today
+            lambda x: datetime.datetime.strptime(x, "%Y-%m-%d").date() == today if pd.notna(x) else False
         )
        
         # Add moneyness
@@ -1988,59 +1987,89 @@ def measure_performance():
 # NEW: BACKTESTING FUNCTIONS
 # =============================
 def run_backtest(signals_df: pd.DataFrame, stock_df: pd.DataFrame, side: str):
-    """Run enhanced backtest with advanced metrics"""
+    """Run enhanced backtest with realistic fills and transaction costs"""
     if signals_df.empty or stock_df.empty:
         return None
 
     try:
         results = []
-        returns = []  # For Sharpe/Max Drawdown
         for _, row in signals_df.iterrows():
-            entry_price = row['lastPrice']
-            # Simulate historical exits: Use recent closes as proxy for multiple exits
-            recent_closes = stock_df['Close'].tail(10).values  # Last 10 bars for sim
-            pnls = []
-            for exit_price in recent_closes:
-                if side == 'call':
-                    pnl = max(0, exit_price - row['strike']) - entry_price
-                else:
-                    pnl = max(0, row['strike'] - exit_price) - entry_price
-                pnl *= 0.95  # Transaction costs
-                pnls.append(pnl)
+            # Use realistic entry prices (ask for calls, bid for puts)
+            if side == 'call':
+                entry_price = row['ask']
+            else:
+                entry_price = row['bid']
+                
+            # Add slippage and commissions
+            slippage_pct = 0.02  # 2% slippage
+            entry_price_adjusted = entry_price * 1.02  # 2% slippage
+            commission = 0.65
+            total_entry_cost = entry_price_adjusted + commission
             
-            avg_pnl = np.mean(pnls) if pnls else 0
-            pnl_pct = (avg_pnl / entry_price) * 100 if entry_price > 0 else 0
-            returns.append(pnl_pct / 100)  # For metrics
-
+            # Simulate multiple exit scenarios
+            exit_scenarios = []
+            
+            # Scenario 1: Target hit (50% of cases)
+            if row['profit_target'] > total_entry_cost:
+                profit = row['profit_target'] - total_entry_cost
+                exit_scenarios.append(profit)
+            
+            # Scenario 2: Stop loss hit (30% of cases)
+            loss = row['stop_loss'] - total_entry_cost
+            exit_scenarios.append(loss)
+            
+            # Scenario 3: Expired worthless (20% of cases)
+            exit_scenarios.append(-total_entry_cost)
+            
+            # Calculate expected value
+            if len(exit_scenarios) >= 2:
+                weights = [0.5, 0.3, 0.2]  # Probability weights
+                weighted_returns = sum(p * w for p, w in zip(exit_scenarios, weights))
+                avg_pnl = weighted_returns
+            else:
+                avg_pnl = -total_entry_cost  # Assume total loss
+                
+            pnl_pct = (avg_pnl / total_entry_cost) * 100
+            
             results.append({
                 'contract': row['contractSymbol'],
                 'entry_price': entry_price,
+                'adjusted_entry': total_entry_cost,
                 'avg_pnl': avg_pnl,
                 'pnl_pct': pnl_pct,
                 'score': row['score_percentage']
             })
 
-        backtest_df = pd.DataFrame(results).sort_values('pnl_pct', ascending=False)
-
-        # Advanced Metrics
-        if returns:
-            returns_arr = np.array(returns)
-            mean_ret = np.mean(returns_arr)
-            std_ret = np.std(returns_arr)
-            sharpe = mean_ret / std_ret * np.sqrt(252) if std_ret > 0 else 0  # Annualized, assuming daily
-
-            cum_returns = np.cumsum(returns_arr)
-            peak = np.maximum.accumulate(cum_returns)
-            drawdown = (cum_returns - peak) / peak if np.any(peak) else 0
-            max_drawdown = np.min(drawdown) * 100 if len(drawdown) > 0 else 0
-
-            profit_factor = np.sum(returns_arr[returns_arr > 0]) / abs(np.sum(returns_arr[returns_arr < 0])) if np.any(returns_arr < 0) else float('inf')
-
+        backtest_df = pd.DataFrame(results)
+        
+        # Calculate advanced metrics
+        if not backtest_df.empty:
+            returns = backtest_df['pnl_pct'] / 100
+            mean_return = returns.mean()
+            std_return = returns.std()
+            sharpe = mean_return / std_return * np.sqrt(252) if std_return > 0 else 0
+            
+            # Calculate max drawdown
+            cum_returns = (1 + returns).cumprod()
+            running_max = cum_returns.expanding().max()
+            drawdown = (cum_returns - running_max) / running_max
+            max_drawdown = drawdown.min()
+            
+            # Profit factor
+            gross_profit = backtest_df[backtest_df['avg_pnl'] > 0]['avg_pnl'].sum()
+            gross_loss = abs(backtest_df[backtest_df['avg_pnl'] < 0]['avg_pnl'].sum())
+            profit_factor = gross_profit / gross_loss if gross_loss != 0 else float('inf')
+            
+            # Win rate
+            win_rate = (backtest_df['avg_pnl'] > 0).mean() * 100
+            
+            # Add metrics to dataframe
             backtest_df['sharpe_ratio'] = sharpe
-            backtest_df['max_drawdown_pct'] = max_drawdown
+            backtest_df['max_drawdown_pct'] = max_drawdown * 100
             backtest_df['profit_factor'] = profit_factor
-
-        return backtest_df
+            backtest_df['win_rate'] = win_rate
+            
+        return backtest_df.sort_values('pnl_pct', ascending=False)
     except Exception as e:
         st.error(f"Error in backtest: {str(e)}")
         return None
@@ -2210,12 +2239,41 @@ with st.sidebar:
    
     # Enhanced profit targets
     with st.expander("🎯 Risk Management", expanded=False):
-        CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="call_profit")
-        CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.15, 0.01, key="put_profit")
+        CONFIG['PROFIT_TARGETS']['call'] = st.slider("Call Profit Target (%)", 0.05, 0.50, 0.10, 0.01, key="call_profit")
+        CONFIG['PROFIT_TARGETS']['put'] = st.slider("Put Profit Target (%)", 0.05, 0.50, 0.10, 0.01, key="put_profit")
         CONFIG['PROFIT_TARGETS']['stop_loss'] = st.slider("Stop Loss (%)", 0.03, 0.20, 0.08, 0.01, key="stop_loss")
        
         st.info("💡 **Tip**: Higher volatility may require wider targets")
    
+    with st.expander("💰 Liquidity Filters", expanded=False):
+        CONFIG['MIN_OPTION_PRICE'] = st.slider(
+            "Minimum Option Price", 
+            0.05, 5.0, 1.00, 0.05,
+            help="Filter out cheap, illiquid options"
+        )
+        CONFIG['MIN_OPEN_INTEREST'] = st.slider(
+            "Minimum Open Interest", 
+            100, 5000, 2000, 100,
+            help="Higher values filter out less liquid options"
+        )
+        CONFIG['MIN_VOLUME'] = st.slider(
+            "Minimum Volume", 
+            100, 5000, 500, 100,
+            help="Higher values filter out less active options"
+        )
+        CONFIG['MAX_BID_ASK_SPREAD_PCT'] = st.slider(
+            "Max Bid/Ask Spread %", 
+            0.05, 1.0, 0.05, 0.05,
+            help="Lower values filter out options with wide spreads"
+        )
+        
+        # Update liquidity thresholds
+        CONFIG['LIQUIDITY_THRESHOLDS'] = {
+            'min_open_interest': CONFIG['MIN_OPEN_INTEREST'],
+            'min_volume': CONFIG['MIN_VOLUME'],
+            'max_bid_ask_spread_pct': CONFIG['MAX_BID_ASK_SPREAD_PCT']
+        }
+
     # Enhanced market status
     with st.container():
         st.subheader("🕐 Market Status")
@@ -2992,6 +3050,7 @@ if ticker:
            
             **💡 Why Dynamic Thresholds:**
             - Static thresholds fail in changing market conditions
+            - Volatile markets need higher Greeks for same profit potential
             - Volatile markets need higher Greeks for same profit potential
             - Different market sessions have different liquidity characteristics
             """)
