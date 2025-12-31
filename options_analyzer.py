@@ -34,26 +34,23 @@ except Exception:
     st_autorefresh = None  # type: ignore
     AUTOREFRESH_AVAILABLE = False
 
+# Refresh controls (defaults tuned to avoid free-data throttling)
+DEFAULT_PRICE_REFRESH_MS = 15000   # price + UI refresh (15s)
+DEFAULT_OPTIONS_REFRESH_SEC = 120  # options-chain refresh (2m)
 
-def _safe_autorefresh(interval: int = 0, limit=None, key: str = "autorefresh"):
-    """
-    Safe wrapper around streamlit_autorefresh.st_autorefresh.
-    Compatible with versions that don't accept limit=None.
-    """
+def _safe_autorefresh(interval: int = DEFAULT_PRICE_REFRESH_MS, limit=None, key: str = "autorefresh") -> int:
+    """Best-effort auto-refresh across streamlit-autorefresh versions (returns run count or 0)."""
+    if not AUTOREFRESH_AVAILABLE or st_autorefresh is None:
+        return 0
     try:
-        from streamlit_autorefresh import st_autorefresh
-    except Exception:
-        return 0  # no-op if dependency missing
-
-    kwargs = {"interval": int(interval), "key": str(key)}
-
-    # Only pass limit if it's a real integer
-    if limit is not None:
-        kwargs["limit"] = int(limit)
-
-    return st_autorefresh(**kwargs)
-
-
+        # Newer versions support limit
+        return st_autorefresh(interval=interval, limit=limit, key=key)
+    except TypeError:
+        # Older versions may not accept limit
+        try:
+            return st_autorefresh(interval=interval, key=key)
+        except Exception:
+            return 0
 try:
     from scipy import signal
     SCIPY_AVAILABLE = True
@@ -70,9 +67,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-# Auto-refresh for real-time updates
-refresh_interval = _safe_autorefresh(interval=1000, limit=1000000, key="price_refresh")
 
+# Auto-refresh for real-time updates
+refresh_interval = _safe_autorefresh(interval=DEFAULT_PRICE_REFRESH_MS, limit=None, key="price_refresh")
+
+# Session defaults
+st.session_state.setdefault("options_refresh_sec", DEFAULT_OPTIONS_REFRESH_SEC)
 
 # =============================
 # ENHANCED CONFIGURATION & CONSTANTS
@@ -1265,6 +1265,20 @@ def calculate_volume_averages(df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(ttl=1800, show_spinner=False) # 30-minute cache for real data
 def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.DataFrame]:
     """Get real options data with proper yfinance handling"""
+
+    # Throttle options-chain fetches to avoid free-data rate limits.
+    # Streamlit reruns the script frequently; without throttling, yfinance will block.
+    now = datetime.datetime.now(pytz.UTC)
+    min_interval = int(st.session_state.get("options_refresh_sec", DEFAULT_OPTIONS_REFRESH_SEC))
+    last_t = st.session_state.get("last_options_fetch_ts")
+    last_payload = st.session_state.get("last_options_payload")  # (expirations, calls, puts)
+    if last_t and last_payload:
+        try:
+            elapsed = (now - last_t).total_seconds()
+            if elapsed < min_interval:
+                return last_payload
+        except Exception:
+            pass
   
     # Check if we can clear the rate limit status
     if 'yf_rate_limited_until' in st.session_state:
@@ -1324,6 +1338,15 @@ def get_real_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Data
                 if 'theta' not in df.columns:
                     df['theta'] = np.nan
           
+            # Cache payload for throttling
+
+          
+            st.session_state['last_options_fetch_ts'] = datetime.datetime.now(pytz.UTC)
+
+          
+            st.session_state['last_options_payload'] = ([nearest_expiry], calls, puts)
+
+          
             return [nearest_expiry], calls, puts
           
         except Exception as e:
@@ -1351,6 +1374,15 @@ def get_full_options_chain(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.Dat
   
     # Try to get real data
     expiries, calls, puts = get_real_options_data(ticker)
+  
+    # Cache payload for throttling
+
+  
+    st.session_state['last_options_fetch_ts'] = datetime.datetime.now(pytz.UTC)
+
+  
+    st.session_state['last_options_payload'] = (expiries, calls, puts)
+
   
     return expiries, calls, puts
 
@@ -1487,6 +1519,15 @@ def get_fallback_options_data(ticker: str) -> Tuple[List[str], pd.DataFrame, pd.
   
     st.success(f"✅ Generated realistic demo data: {len(calls_df)} calls, {len(puts_df)} puts")
     st.warning("⚠️ **DEMO DATA**: Realistic structure but not real market data. Do not use for actual trading!")
+  
+    # Cache payload for throttling
+
+  
+    st.session_state['last_options_fetch_ts'] = datetime.datetime.now(pytz.UTC)
+
+  
+    st.session_state['last_options_payload'] = (expiries, calls_df, puts_df)
+
   
     return expiries, calls_df, puts_df
 
