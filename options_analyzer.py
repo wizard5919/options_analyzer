@@ -35,10 +35,24 @@ except Exception:
     AUTOREFRESH_AVAILABLE = False
 
 
-def _safe_autorefresh(interval_ms: int, key: str = "autorefresh") -> None:
-    """Best-effort auto-refresh (no-op if streamlit_autorefresh isn't installed)."""
-    if AUTOREFRESH_AVAILABLE and st_autorefresh is not None:
-        _safe_autorefresh(interval=interval_ms, key=key)
+def _safe_autorefresh(interval: int = 0, limit=None, key: str = "autorefresh"):
+    """
+    Safe wrapper around streamlit_autorefresh.st_autorefresh.
+    Compatible with versions that don't accept limit=None.
+    """
+    try:
+        from streamlit_autorefresh import st_autorefresh
+    except Exception:
+        return 0  # no-op if dependency missing
+
+    kwargs = {"interval": int(interval), "key": str(key)}
+
+    # Only pass limit if it's a real integer
+    if limit is not None:
+        kwargs["limit"] = int(limit)
+
+    return st_autorefresh(**kwargs)
+
 
 try:
     from scipy import signal
@@ -56,9 +70,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 # Auto-refresh for real-time updates
-refresh_interval = _safe_autorefresh(interval=1000, limit=None, key="price_refresh")
+refresh_interval = _safe_autorefresh(interval=1000, limit=1000000, key="price_refresh")
+
 
 # =============================
 # ENHANCED CONFIGURATION & CONSTANTS
