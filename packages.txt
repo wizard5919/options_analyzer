@@ -4,5 +4,6 @@ gcc
 g++
 cmake
 libopenblas-dev
-libatlas-base-dev
 liblapack-dev
+gfortran
+pkg-config
