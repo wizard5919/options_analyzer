@@ -2,8 +2,3 @@ build-essential
 python3-dev
 gcc
 g++
-cmake
-libopenblas-dev
-liblapack-dev
-gfortran
-pkg-config
